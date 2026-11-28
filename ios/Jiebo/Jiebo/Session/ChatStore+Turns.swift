@@ -199,6 +199,7 @@ extension ChatStore {
         if imagesByChat[chatId] != nil { imagesByChat[chatId] = nil }
         if mentionQueryByChat[chatId] != nil { mentionQueryByChat.removeValue(forKey: chatId) }
         mentionTasksByChat.removeValue(forKey: chatId)?.cancel()
+        mentionRankTasksByChat.removeValue(forKey: chatId)?.cancel()
         if !(mentionSuggestionsByChat[chatId]?.isEmpty ?? true) {
             mentionSuggestionsByChat[chatId] = []
         }

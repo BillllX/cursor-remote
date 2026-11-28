@@ -87,13 +87,11 @@ struct ComposerView: View {
                 voicePanel
                     .transition(.jieboPanel(from: .bottom, reduceMotion: reduceMotion).combined(with: .opacity))
             }
-            GlassEffectContainer(spacing: 12) {
-                VStack(alignment: .leading, spacing: 16) {
-                    if UIDevice.current.userInterfaceIdiom == .pad {
-                        assistantStatusLine
-                    }
-                    assistantCapsuleRow
+            VStack(alignment: .leading, spacing: 12) {
+                if UIDevice.current.userInterfaceIdiom == .pad {
+                    assistantStatusLine
                 }
+                assistantCapsuleRow
             }
         }
         .padding(.horizontal, 12)
@@ -144,13 +142,13 @@ struct ComposerView: View {
         }
         .onDisappear {
             stopVoice()
-            flushDraft()
+            flushDraft(commitComposition: true)
         }
         .onChange(of: homeActive) { _, active in
             if !active {
                 focused = false
                 stopVoice()
-                flushDraft()
+                flushDraft(commitComposition: true)
             } else {
                 store.applyPhoneChatPreferences(chatId: chatId)
             }
@@ -158,7 +156,7 @@ struct ComposerView: View {
         .animation(JieboMotion.snappy(reduceMotion), value: dictation.active)
         .onChange(of: chatId) { oldId, _ in
             stopVoice()
-            flushDraft(currentChatId: oldId)
+            flushDraft(currentChatId: oldId, commitComposition: true)
             if homeActive { store.applyPhoneChatPreferences(chatId: chatId) }
             replaceDraft(sceneDraft(for: chatId))
             if homeActive { store.refreshCheckpoints(chatId: chatId) }
@@ -197,8 +195,7 @@ struct ComposerView: View {
                 let needsSpace = !base.isEmpty && !base.hasSuffix(" ") && !base.hasSuffix("\n")
                 next = base + (needsSpace ? " " : "") + mention + " "
             }
-            draftBuffer.persistTask?.cancel()
-            draftBuffer.pendingChatId = nil
+            draftBuffer.cancelPersist()
             ignoreDraftEcho = next
             sceneSession?.saveDraft(next, for: chatId)
             store.saveDraft(next, forChat: chatId)
@@ -307,9 +304,8 @@ struct ComposerView: View {
     }
 
     func syncBufferToStore() {
-        draftBuffer.persistTask?.cancel()
-        draftBuffer.pendingChatId = nil
-        let current = draftBuffer.text
+        draftBuffer.cancelPersist()
+        let current = draftBuffer.commitText()
         ignoreDraftEcho = current
         sceneSession?.saveDraft(current, for: chatId)
         store.saveDraft(current, forChat: chatId)
@@ -376,7 +372,7 @@ struct ComposerView: View {
 
     /// 只在空与非空切换时改 hasText。补全和草稿防抖不碰视图状态。
     func noteTyped(_ value: String) {
-        let filled = !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let filled = value.contains { !$0.isWhitespace }
         if filled != hasText { hasText = filled }
         if mentionsMayChange(value) {
             store.updateMentions(for: value, chatId: chatId)
@@ -397,39 +393,69 @@ struct ComposerView: View {
     func replaceDraft(_ value: String) {
         draftBuffer.text = value
         draftRevision += 1
-        let filled = !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let filled = value.contains { !$0.isWhitespace }
         if filled != hasText { hasText = filled }
     }
 
     func schedulePersist() {
         if let pending = draftBuffer.pendingChatId, pending != chatId { flushDraft() }
-        draftBuffer.persistTask?.cancel()
         draftBuffer.pendingChatId = chatId
         draftBuffer.pendingText = draftBuffer.text
+        draftBuffer.persistDeadline = ContinuousClock.now + .milliseconds(350)
+        // 复用单一防抖循环：蓝牙键盘连续盲打数十字符不再每键新建/取消 Task。
+        // 用 persistGeneration 隔离被取消的旧循环，防止旧循环唤醒后把新 persistTask 覆写为 nil。
+        guard draftBuffer.persistTask == nil else { return }
+        draftBuffer.persistGeneration &+= 1
+        let generation = draftBuffer.persistGeneration
         draftBuffer.persistTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(350))
-            guard !Task.isCancelled else { return }
-            flushDraft()
+            while !Task.isCancelled && draftBuffer.persistGeneration == generation {
+                guard let deadline = draftBuffer.persistDeadline else { break }
+                let remaining = ContinuousClock.now.duration(to: deadline)
+                if remaining > .zero {
+                    try? await Task.sleep(for: remaining)
+                    continue
+                }
+                guard !Task.isCancelled && draftBuffer.persistGeneration == generation else { return }
+                draftBuffer.persistDeadline = nil
+                draftBuffer.persistTask = nil
+                flushDraft()
+                return
+            }
+            if draftBuffer.persistGeneration == generation {
+                draftBuffer.persistTask = nil
+            }
         }
     }
 
-    func flushDraft(currentChatId: String? = nil) {
-        draftBuffer.persistTask?.cancel()
-        guard let pendingId = draftBuffer.pendingChatId else { return }
+    func flushDraft(currentChatId: String? = nil, commitComposition: Bool = false) {
+        let pendingId = draftBuffer.pendingChatId
         let pendingText = draftBuffer.pendingText
-        draftBuffer.pendingChatId = nil
-        if pendingId == (currentChatId ?? chatId) { ignoreDraftEcho = pendingText }
-        sceneSession?.saveDraft(pendingText, for: pendingId)
-        store.saveDraft(pendingText, forChat: pendingId)
+        draftBuffer.cancelPersist()
+        if let pendingId {
+            // 仅在切会话/切后台/页面消失等显式离开边界才强制提交 IME 组合态；
+            // 350ms 定时落库绝不调 unmarkText()，防止选拼音超过 350ms 被强行拆候选栏上屏。
+            let committed = (commitComposition && pendingId == (currentChatId ?? chatId))
+                ? draftBuffer.commitText()
+                : pendingText
+            if pendingId == (currentChatId ?? chatId) { ignoreDraftEcho = committed }
+            sceneSession?.saveDraft(committed, for: pendingId)
+            store.saveDraft(committed, forChat: pendingId)
+            return
+        }
+        guard commitComposition, draftBuffer.hasUncommittedComposition else { return }
+        let targetId = currentChatId ?? chatId
+        let committed = draftBuffer.commitText()
+        if targetId == chatId { ignoreDraftEcho = committed }
+        sceneSession?.saveDraft(committed, for: targetId)
+        store.saveDraft(committed, forChat: targetId)
     }
 
     func commitAndSend(keepFocus: Bool = false) {
         guard canFocus, ownsSceneEditing, canSendNow else { return }
         focused = keepFocus
-        draftBuffer.persistTask?.cancel()
-        draftBuffer.pendingChatId = nil
+        let current = draftBuffer.commitText()
+        draftBuffer.cancelPersist()
         ignoreDraftEcho = ""
-        let current = draftBuffer.text
         // 直接进入 submit：成功发送时一次清空草稿与追加回合，不再先 saveDraft 造成二次写 chats 与重复扫描 @ 补全。
         store.submit(chatId: chatId, text: current)
         let next = store.draft(for: chatId)
@@ -443,9 +469,38 @@ struct ComposerView: View {
 }
 
 /// 输入框的字。不是视图状态，改它不会让整条输入栏重绘。
+@MainActor
 final class ComposerDraftBuffer {
     var text = ""
     var pendingChatId: String?
     var pendingText = ""
+    var persistDeadline: ContinuousClock.Instant?
     var persistTask: Task<Void, Never>?
+    var persistGeneration: UInt64 = 0
+    weak var activeTextView: ComposerTextView?
+
+    var hasUncommittedComposition: Bool {
+        activeTextView?.markedTextRange != nil
+    }
+
+    /// 点击发送或切会话落库前，将尚未上屏的 IME 组合文字（如韩文尾音节/中文字词）同步提交到 buffer。
+    @discardableResult
+    func commitText() -> String {
+        if let view = activeTextView {
+            if view.markedTextRange != nil {
+                view.unmarkText()
+            }
+            let latest = view.text ?? ""
+            if text != latest { text = latest }
+        }
+        return text
+    }
+
+    func cancelPersist() {
+        persistGeneration &+= 1
+        persistTask?.cancel()
+        persistTask = nil
+        persistDeadline = nil
+        pendingChatId = nil
+    }
 }

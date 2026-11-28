@@ -54,6 +54,7 @@ extension ChatStore {
         guard let range = Self.trailingMentionRange(in: text) else {
             if mentionQueryByChat[targetId] != nil { mentionQueryByChat.removeValue(forKey: targetId) }
             mentionTasksByChat.removeValue(forKey: targetId)?.cancel()
+            mentionRankTasksByChat.removeValue(forKey: targetId)?.cancel()
             if !(mentionSuggestionsByChat[targetId]?.isEmpty ?? true) {
                 mentionSuggestionsByChat[targetId] = []
             }
@@ -64,10 +65,25 @@ extension ChatStore {
         guard queryString != mentionQueryByChat[targetId] else { return }
         mentionQueryByChat[targetId] = queryString
         mentionTasksByChat.removeValue(forKey: targetId)?.cancel()
-        let localPool = mergedFileTreePaths(for: targetId).filter { !$0.hasSuffix("/") }
-        let next = ChatStore.rankMentions(localPool, query: queryString)
-        if next != (mentionSuggestionsByChat[targetId] ?? []) {
-            mentionSuggestionsByChat[targetId] = next
+        mentionRankTasksByChat.removeValue(forKey: targetId)?.cancel()
+        let localPool = mentionFilePool(for: targetId)
+        if localPool.count > 1000 {
+            // 大工作区（数千文件）把排序移出主线程，避免蓝牙键盘连续击键 @ 查询阻塞渲染帧。
+            mentionRankTasksByChat[targetId] = Task { [weak self] in
+                let next = await Task.detached(priority: .userInitiated) {
+                    ChatStore.rankMentions(localPool, query: queryString)
+                }.value
+                guard let self, !Task.isCancelled, self.mentionQueryByChat[targetId] == queryString else { return }
+                self.mentionRankTasksByChat.removeValue(forKey: targetId)
+                if next != (self.mentionSuggestionsByChat[targetId] ?? []) {
+                    self.mentionSuggestionsByChat[targetId] = next
+                }
+            }
+        } else {
+            let next = ChatStore.rankMentions(localPool, query: queryString)
+            if next != (mentionSuggestionsByChat[targetId] ?? []) {
+                mentionSuggestionsByChat[targetId] = next
+            }
         }
         mentionTasksByChat[targetId] = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(150))
@@ -91,13 +107,14 @@ extension ChatStore {
         }
         mentionQueryByChat.removeValue(forKey: targetId)
         mentionTasksByChat.removeValue(forKey: targetId)?.cancel()
+        mentionRankTasksByChat.removeValue(forKey: targetId)?.cancel()
         mentionSuggestionsByChat[targetId] = []
         deliverExternalDraft(.insertMention(path), forChat: targetId)
     }
 
     /// 候选排序：文件名前缀 > 文件名包含 > 路径包含，同分短路径优先（对齐网页 mentionHits 的意图）。
     /// 使用 Substring 切片 + 大小写不敏感匹配，省去 (path as NSString).lastPathComponent 与 lowercased() 临时字符串分配。
-    static func rankMentions(_ paths: [String], query: String, limit: Int = 8) -> [String] {
+    nonisolated static func rankMentions(_ paths: [String], query: String, limit: Int = 8) -> [String] {
         func score(_ path: String) -> Int {
             if query.isEmpty { return 0 }
             var trimmed = path[...]
@@ -154,27 +171,61 @@ extension ChatStore {
         mergedFileTreePaths(for: nil)
     }
 
+    func invalidateMergedFileTreeCache(for chatId: String? = nil) {
+        if let chatId {
+            mergedPathsCacheByChat.removeValue(forKey: chatId)
+            mentionFilePoolCacheByChat.removeValue(forKey: chatId)
+        } else {
+            mergedPathsCacheByChat.removeAll(keepingCapacity: true)
+            mentionFilePoolCacheByChat.removeAll(keepingCapacity: true)
+        }
+        fileTreeCacheVersion &+= 1
+    }
+
+    func mentionFilePool(for requestedId: String?) -> [String] {
+        let targetId = requestedId?.nilIfEmpty ?? fileIndexRequestChatId ?? activeId
+        // 保持 Observation 订阅路径与 mergedFileTreePaths 一致（含非活跃会话缓存版本）
+        let _ = fileTreeCacheVersion
+        let _ = fileIndex
+        let _ = fileIndexRequestChatId
+        let _ = dirEntriesByChat[targetId]
+        if let cached = mentionFilePoolCacheByChat[targetId] {
+            return cached
+        }
+        let filtered = mergedFileTreePaths(for: targetId).filter { !$0.hasSuffix("/") }
+        mentionFilePoolCacheByChat[targetId] = filtered
+        return filtered
+    }
+
     func mergedFileTreePaths(for requestedId: String?) -> [String] {
         let targetId = requestedId?.nilIfEmpty ?? fileIndexRequestChatId ?? activeId
+        let _ = fileTreeCacheVersion
         let dirMap = dirEntriesByChat[targetId] ?? [:]
-        let baseIndex: [String]
-        if fileIndexRequestChatId == targetId || (fileIndexRequestChatId == nil && targetId == activeId) {
-            baseIndex = fileIndex
-        } else {
-            baseIndex = bootstrapSnapshot?.fileIndexes[targetId]?.paths ?? []
+        let usesLiveIndex = fileIndexRequestChatId == targetId || (fileIndexRequestChatId == nil && targetId == activeId)
+        // 即使命中缓存也要读取一次 fileIndex，确保 SwiftUI 订阅关系稳定。
+        let livePaths = fileIndex
+        if let cached = mergedPathsCacheByChat[targetId] {
+            return cached
         }
-        if dirMap.isEmpty { return baseIndex }
-        var seen = Set<String>()
-        var out: [String] = []
-        for key in dirMap.keys.sorted() {
-            for p in dirMap[key] ?? [] where seen.insert(p).inserted {
+        let baseIndex: [String] = usesLiveIndex ? livePaths : (bootstrapSnapshot?.fileIndexes[targetId]?.paths ?? [])
+        let merged: [String]
+        if dirMap.isEmpty {
+            merged = baseIndex
+        } else {
+            var seen = Set<String>()
+            var out: [String] = []
+            for key in dirMap.keys.sorted() {
+                for p in dirMap[key] ?? [] where seen.insert(p).inserted {
+                    out.append(p)
+                }
+            }
+            for p in baseIndex where seen.insert(p).inserted {
                 out.append(p)
             }
+            merged = out
         }
-        for p in baseIndex where seen.insert(p).inserted {
-            out.append(p)
-        }
-        return out
+        mergedPathsCacheByChat[targetId] = merged
+        return merged
     }
 
     /// 请求单层目录（dir == "" 为工作区根目录），用于文件浏览器逐层按需展开
@@ -197,6 +248,7 @@ extension ChatStore {
         loadedDirsByChat[chatId, default: []].insert(dir)
         loadingDirsByChat[chatId]?.remove(dir)
         dirEntriesByChat[chatId, default: [:]][dir] = paths
+        invalidateMergedFileTreeCache(for: chatId)
         if truncated {
             truncatedDirsByChat[chatId, default: []].insert(dir)
         } else {
@@ -263,6 +315,7 @@ extension ChatStore {
             fileIndexFallbackTasks.removeValue(forKey: chatId)?.cancel()
         }
         updateCachedFileIndex(chatId: chatId, paths: paths, truncated: truncated, status: status)
+        invalidateMergedFileTreeCache(for: chatId)
         if chatId == activeId || chatId == chatHomeThreadChatId {
             fileIndexRequestChatId = chatId
             fileIndex = paths

@@ -854,7 +854,7 @@ struct PreviewContentView: View {
                 // P5d：画布运行时（同域 /canvas-runtime）；本地 dev 无 web 路由 → 自动降级源码
                 if let text = tab.content {
                     if tab.showSource || GatewayConfig.canvasRuntimeURL == nil {
-                        CodeFileView(content: text)
+                        CodeFileView(content: text).equatable()
                     } else {
                         CanvasFileView(
                             source: text,
@@ -880,7 +880,7 @@ struct PreviewContentView: View {
     private var textContent: some View {
         if let text = tab.content {
             if tab.diff {
-                DiffFileView(content: text)
+                DiffFileView(content: text).equatable()
             } else {
                 switch tab.kind {
                 case .markdown:
@@ -888,7 +888,7 @@ struct PreviewContentView: View {
                         .id(tab.path) // 页签级 @State 隔离（对齐 canvas 分支）
                 default:
                     // text / canvas（P5d 前按源码）都走代码视图
-                    CodeFileView(content: text)
+                    CodeFileView(content: text).equatable()
                 }
             }
         } else if tab.mediaURL != nil {
@@ -936,19 +936,94 @@ struct PreviewContentView: View {
     }
 }
 
+private enum PreviewParsedLineCache {
+    private static let lock = NSLock()
+    private static let maxEntries = 4
+    private nonisolated(unsafe) static var codeEntries: [(content: String, lines: [String])] = []
+    private nonisolated(unsafe) static var diffEntries: [(content: String, rows: [DiffFileView.Row])] = []
+
+    nonisolated static func codeLines(for content: String) -> [String] {
+        lock.lock()
+        if let idx = codeEntries.firstIndex(where: { $0.content == content }) {
+            let entry = codeEntries.remove(at: idx)
+            codeEntries.append(entry)
+            lock.unlock()
+            return entry.lines
+        }
+        lock.unlock()
+
+        // 直接按 LF/CRLF 字形簇拆行，避免整篇大文件 replacingOccurrences 整份拷贝
+        let lines = content.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" }).map(String.init)
+        lock.lock()
+        if !codeEntries.contains(where: { $0.content == content }) {
+            if codeEntries.count >= maxEntries { codeEntries.removeFirst() }
+            codeEntries.append((content, lines))
+        }
+        lock.unlock()
+        return lines
+    }
+
+    nonisolated static func diffRows(for content: String) -> [DiffFileView.Row] {
+        lock.lock()
+        if let idx = diffEntries.firstIndex(where: { $0.content == content }) {
+            let entry = diffEntries.remove(at: idx)
+            diffEntries.append(entry)
+            lock.unlock()
+            return entry.rows
+        }
+        lock.unlock()
+
+        let lines = content.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" })
+        var parsed: [DiffFileView.Row] = []
+        parsed.reserveCapacity(lines.count)
+        // 简单状态机：diff --git 退出 hunk，@@ 进入 hunk。
+        // hunk 外一律 meta（避免 hunk 内删除 markdown 的 "---" 被误标 meta）；
+        // hunk 内只看首字符 + / - / 其余（"\ No newline at end of file" 落 ctx）
+        var inHunk = false
+        for (index, rawLine) in lines.enumerated() {
+            let line = String(rawLine)
+            let kind: DiffFileView.RowKind
+            if line.hasPrefix("diff --git") {
+                inHunk = false
+                kind = .meta
+            } else if line.hasPrefix("@@") {
+                inHunk = true
+                kind = .hunk
+            } else if inHunk {
+                if line.hasPrefix("+") { kind = .add }
+                else if line.hasPrefix("-") { kind = .del }
+                else { kind = .ctx }
+            } else {
+                kind = .meta
+            }
+            parsed.append(DiffFileView.Row(id: index, kind: kind, text: line.isEmpty ? " " : line))
+        }
+        lock.lock()
+        if !diffEntries.contains(where: { $0.content == content }) {
+            if diffEntries.count >= maxEntries { diffEntries.removeFirst() }
+            diffEntries.append((content, parsed))
+        }
+        lock.unlock()
+        return parsed
+    }
+}
+
 /// 代码视图：竖向滚动 + 长行折行。
 /// 不做横向滚动——双向 ScrollView 会让 LazyVStack 为算最大宽度失去惰性（几千行全量实体化）；
 /// 行号列因此始终可见。跨行复制用头部的「复制全部」。
-struct CodeFileView: View {
-    let lines: [String]
+struct CodeFileView: View, Equatable {
+    let content: String
+
+    static func == (lhs: CodeFileView, rhs: CodeFileView) -> Bool {
+        lhs.content == rhs.content
+    }
 
     init(content: String) {
-        // 归一化 Windows 行尾，避免行尾残留不可见 \r
-        let normalized = content.replacingOccurrences(of: "\r\n", with: "\n")
-        self.lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        self.content = content
     }
 
     var body: some View {
+        let lines = PreviewParsedLineCache.codeLines(for: content)
         ScrollView(.vertical, showsIndicators: true) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
@@ -974,46 +1049,26 @@ struct CodeFileView: View {
 }
 
 /// unified diff 视图：红绿行 + hunk 头。不显示行号（diff 行号与文件行号不一致，反而误导）。
-struct DiffFileView: View {
-    enum RowKind { case meta, hunk, add, del, ctx }
-    struct Row: Identifiable {
+struct DiffFileView: View, Equatable {
+    enum RowKind: Sendable { case meta, hunk, add, del, ctx }
+    struct Row: Identifiable, Sendable {
         let id: Int
         let kind: RowKind
         let text: String
     }
 
-    let rows: [Row]
+    let content: String
+
+    static func == (lhs: DiffFileView, rhs: DiffFileView) -> Bool {
+        lhs.content == rhs.content
+    }
 
     init(content: String) {
-        let normalized = content.replacingOccurrences(of: "\r\n", with: "\n")
-        let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        var parsed: [Row] = []
-        parsed.reserveCapacity(lines.count)
-        // 简单状态机：diff --git 退出 hunk，@@ 进入 hunk。
-        // hunk 外一律 meta（避免 hunk 内删除 markdown 的 "---" 被误标 meta）；
-        // hunk 内只看首字符 + / - / 其余（"\ No newline at end of file" 落 ctx）
-        var inHunk = false
-        for (index, line) in lines.enumerated() {
-            let kind: RowKind
-            if line.hasPrefix("diff --git") {
-                inHunk = false
-                kind = .meta
-            } else if line.hasPrefix("@@") {
-                inHunk = true
-                kind = .hunk
-            } else if inHunk {
-                if line.hasPrefix("+") { kind = .add }
-                else if line.hasPrefix("-") { kind = .del }
-                else { kind = .ctx }
-            } else {
-                kind = .meta
-            }
-            parsed.append(Row(id: index, kind: kind, text: line.isEmpty ? " " : line))
-        }
-        self.rows = parsed
+        self.content = content
     }
 
     var body: some View {
+        let rows = PreviewParsedLineCache.diffRows(for: content)
         ScrollView(.vertical, showsIndicators: true) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(rows) { row in
@@ -1067,6 +1122,15 @@ struct DiffFileView: View {
     }
 }
 
+private struct MarkdownRenderTaskKey: Equatable {
+    let content: String
+    let path: String
+    let chatId: String
+    let media: MediaTicket?
+    let palette: JieboPalette
+    let appearance: JieboAppearance
+}
+
 /// Markdown 视图：Swift 转 HTML → rewriteHtml（CSP + 相对资源票据重写）→ 沙箱 WebView。
 /// 对齐网页 MarkdownPreview：内联图片经 /media 票据加载（AttributedString 渲染不了图片，P5c 换掉）。
 struct MarkdownFileView: View {
@@ -1076,8 +1140,15 @@ struct MarkdownFileView: View {
     let media: MediaTicket?
     @State private var renderedHtml: String?
 
-    private var renderTaskKey: String {
-        "\(content)\u{0}\(JieboTheme.shared.palette.rawValue)\u{0}\(JieboTheme.shared.appearance.rawValue)"
+    private var renderTaskKey: MarkdownRenderTaskKey {
+        MarkdownRenderTaskKey(
+            content: content,
+            path: path,
+            chatId: chatId,
+            media: media,
+            palette: JieboTheme.shared.palette,
+            appearance: JieboTheme.shared.appearance
+        )
     }
 
     var body: some View {
@@ -1093,30 +1164,50 @@ struct MarkdownFileView: View {
         }
         .background(JieboColor.paper)
         .task(id: renderTaskKey) {
+            let content = content
+            let path = path
+            let chatId = chatId
+            let media = media
             let palette = JieboTheme.shared.palette
             let appearance = JieboTheme.shared.appearance
-            renderedHtml = markdownToHtmlDocument(
-                content,
-                fromFile: path,
-                palette: palette,
-                appearance: appearance
-            ) { resolved in
-                // loadHTMLString 的 baseURL=nil，相对地址不可靠——补全成绝对地址
-                mediaSrc(path: resolved, chatId: chatId, media: media)
-                    .flatMap { GatewayConfig.resolveHTTP($0)?.absoluteString } ?? ""
-            }
+            // 大 Markdown 转换与正则重写移出主线程，避免预览面板滑入动画掉帧。
+            let html = await Task.detached(priority: .userInitiated) {
+                markdownToHtmlDocument(
+                    content,
+                    fromFile: path,
+                    palette: palette,
+                    appearance: appearance
+                ) { resolved in
+                    // loadHTMLString 的 baseURL=nil，相对地址不可靠——补全成绝对地址
+                    mediaSrc(path: resolved, chatId: chatId, media: media)
+                        .flatMap { GatewayConfig.resolveHTTP($0)?.absoluteString } ?? ""
+                }
+            }.value
+            guard !Task.isCancelled else { return }
+            renderedHtml = html
         }
     }
 }
 
+private struct HTMLRenderTaskKey: Equatable {
+    let content: String
+    let path: String
+    let chatId: String
+    let media: MediaTicket?
+}
+
 /// HTML 预览：rewriteHtml（CSP + 资源票据重写 + javascript: 剥离）→ 沙箱 WebView。
-/// 转换放 .task(id:) 缓存，大 html 不在 body 里重复跑正则。
+/// 转换放后台 Task.detached 缓存，大 html 不在主线程重复跑正则。
 struct HTMLFileView: View {
     let content: String
     let path: String
     let chatId: String
     let media: MediaTicket?
     @State private var rewritten: String?
+
+    private var renderTaskKey: HTMLRenderTaskKey {
+        HTMLRenderTaskKey(content: content, path: path, chatId: chatId, media: media)
+    }
 
     var body: some View {
         Group {
@@ -1129,11 +1220,19 @@ struct HTMLFileView: View {
             }
         }
         .background(JieboColor.paper)
-        .task(id: content) {
-            rewritten = rewriteHtml(source: content, fromFile: path) { resolved in
-                mediaSrc(path: resolved, chatId: chatId, media: media)
-                    .flatMap { GatewayConfig.resolveHTTP($0)?.absoluteString } ?? ""
-            }
+        .task(id: renderTaskKey) {
+            let content = content
+            let path = path
+            let chatId = chatId
+            let media = media
+            let html = await Task.detached(priority: .userInitiated) {
+                rewriteHtml(source: content, fromFile: path) { resolved in
+                    mediaSrc(path: resolved, chatId: chatId, media: media)
+                        .flatMap { GatewayConfig.resolveHTTP($0)?.absoluteString } ?? ""
+                }
+            }.value
+            guard !Task.isCancelled else { return }
+            rewritten = html
         }
     }
 }

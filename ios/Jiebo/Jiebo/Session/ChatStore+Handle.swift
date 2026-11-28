@@ -882,6 +882,7 @@ extension ChatStore {
                 for path in paths + localPool where seen.insert(path).inserted {
                     merged.append(path)
                 }
+                mentionRankTasksByChat.removeValue(forKey: responseChatId)?.cancel()
                 mentionSuggestionsByChat[responseChatId] = ChatStore.rankMentions(merged, query: query)
             } else {
                 guard query.isEmpty else { break }

@@ -23,7 +23,7 @@ struct ChatThreadView: View {
     @State private var profileOpen = false
     @State private var viewer: ImViewerTarget?
     @State private var scrollMetrics = ImScrollMetrics()
-    @FocusState private var composerFocused: Bool
+    @State private var composerFocused = false
 
     private static let bottomId = "im-bottom"
     /// 相邻两条隔超过这么久，中间插一行时间

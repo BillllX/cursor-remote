@@ -11,17 +11,32 @@ extension Notification.Name {
 }
 
 /// 由当前前台场景通过 FocusedValue 提供，菜单动作不会广播到其它窗口。
-struct PadCommandActions {
-    let openDomain: (PadDomain) -> Void
-    let openSection: (PadAssistantSection) -> Void
-    let search: () -> Void
-    let create: () -> Void
-    let openFile: () -> Void
-    let refresh: () -> Void
-    let closeOverlay: () -> Void
-    let previous: () -> Void
-    let next: () -> Void
-    let toggleSidebar: () -> Void
+/// 使用稳定引用容器避免每次视图重算构造新值导致系统重建硬件键盘菜单树（UIMenuSystem）。
+@MainActor
+final class PadCommandActions {
+    var openDomain: (PadDomain) -> Void = { _ in }
+    var openSection: (PadAssistantSection) -> Void = { _ in }
+    var search: () -> Void = {}
+    var create: () -> Void = {}
+    var openFile: () -> Void = {}
+    var refresh: () -> Void = {}
+    var closeOverlay: () -> Void = {}
+    var previous: () -> Void = {}
+    var next: () -> Void = {}
+    var toggleSidebar: () -> Void = {}
+
+    func reset() {
+        openDomain = { _ in }
+        openSection = { _ in }
+        search = {}
+        create = {}
+        openFile = {}
+        refresh = {}
+        closeOverlay = {}
+        previous = {}
+        next = {}
+        toggleSidebar = {}
+    }
 }
 
 private struct PadCommandActionsKey: FocusedValueKey {

@@ -43,6 +43,7 @@ extension ChatStore {
                     self.assistantName = state.name
                 }
                 if !self.bootstrapFileIndexesDirty { self.applyCachedFileIndexIfAvailable(chatId: self.activeId) }
+                self.invalidateMergedFileTreeCache()
                 self.bootstrapLoadCompleted = true
                 if self.bootstrapAssistantDirty || self.bootstrapWorkspacesDirty || self.bootstrapFileIndexesDirty {
                     self.persistBootstrapSnapshot()
@@ -71,6 +72,7 @@ extension ChatStore {
         fileIndex = cached.paths
         treeTruncated = cached.truncated
         gitStatus = cached.status
+        invalidateMergedFileTreeCache(for: chatId)
     }
 
     func persistBootstrapSnapshot() {
@@ -118,9 +120,11 @@ extension ChatStore {
                 ?? snapshot.fileIndexes.keys.sorted().first
             else { break }
             snapshot.fileIndexes.removeValue(forKey: victim)
+            invalidateMergedFileTreeCache(for: victim)
         }
         bootstrapFileIndexesDirty = true
         bootstrapSnapshot = snapshot
+        invalidateMergedFileTreeCache(for: chatId)
         persistBootstrapSnapshot()
     }
 
@@ -129,6 +133,7 @@ extension ChatStore {
         if bootstrapSnapshot == nil { bootstrapSnapshot = emptyBootstrapSnapshot }
         bootstrapSnapshot?.fileIndexes.removeValue(forKey: chatId)
         bootstrapFileIndexesDirty = true
+        invalidateMergedFileTreeCache(for: chatId)
         persistBootstrapSnapshot()
     }
 

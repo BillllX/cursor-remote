@@ -141,7 +141,7 @@ struct SharedWorkspaceFileView: View {
     @State private var notice = ""
     @State private var busy = false
     @State private var openTarget: String?
-    @State private var question = ""
+    @State private var hasQuestion = false
     @State private var historyLoaded = false
     @State private var asking = false
     @State private var askError = ""
@@ -267,7 +267,10 @@ struct SharedWorkspaceFileView: View {
             HStack(alignment: .bottom, spacing: 6) {
                 ComposerEntryField(placeholder: "交代要做的事", lineLimit: 1 ... 6, buffer: composerBuffer,
                     revision: composerRevision, focused: $composerFocused, submitOnReturn: true,
-                    onEdit: { question = $0 }, onSubmit: { Task { await askAgent() } })
+                    onEdit: { value in
+                        let filled = value.contains { !$0.isWhitespace }
+                        if filled != hasQuestion { hasQuestion = filled }
+                    }, onSubmit: { Task { await askAgent() } })
                     .padding(.vertical, 10).padding(.leading, 12)
                 if asking {
                     Button {
@@ -279,7 +282,7 @@ struct SharedWorkspaceFileView: View {
                         Image(systemName: "arrow.up").frame(width: 36, height: 36)
                     }
                     .accessibilityLabel("发送")
-                    .disabled(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!hasQuestion)
                 }
             }
             .padding(4)
@@ -317,7 +320,7 @@ struct SharedWorkspaceFileView: View {
     }
 
     private func askAgent() async {
-        let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = composerBuffer.commitText().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !asking, historyLoaded, available, !text.isEmpty else { return }
         asking = true
         askError = ""
@@ -332,8 +335,8 @@ struct SharedWorkspaceFileView: View {
             let result = try await store.workspaceSharing.request("ask", workspace: workspace.id, fields: fields)
             guard available, let answer = result["answer"]?.string else { return }
             answers.append((text, answer, result))
-            if question.trimmingCharacters(in: .whitespacesAndNewlines) == text {
-                question = ""
+            if composerBuffer.text.trimmingCharacters(in: .whitespacesAndNewlines) == text {
+                hasQuestion = false
                 composerBuffer.text = ""
                 composerRevision += 1
             }

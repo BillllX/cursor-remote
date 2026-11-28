@@ -21,19 +21,23 @@ struct ComposerEntryField: UIViewRepresentable {
         view.onCommittedChange = { [weak coordinator = context.coordinator] view in
             coordinator?.textViewDidChange(view)
         }
+        buffer.activeTextView = view
         configure(view, context: context)
         return view
     }
 
     func updateUIView(_ view: ComposerTextView, context: Context) {
         context.coordinator.parent = self
+        if buffer.activeTextView !== view {
+            buffer.activeTextView = view
+        }
         configure(view, context: context)
     }
 
     private func configure(_ view: ComposerTextView, context: Context) {
-        view.placeholder = placeholder
-        view.accessibilityLabel = placeholder
-        view.submitOnReturn = submitOnReturn
+        if view.placeholder != placeholder { view.placeholder = placeholder }
+        if view.accessibilityLabel != placeholder { view.accessibilityLabel = placeholder }
+        if view.submitOnReturn != submitOnReturn { view.submitOnReturn = submitOnReturn }
         if view.lineLimit != lineLimit {
             view.lineLimit = lineLimit
             view.invalidateHeightCache()
@@ -68,11 +72,18 @@ struct ComposerEntryField: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ view: ComposerTextView, coordinator: Coordinator) {
-        view.desiredFocus = false
-        view.resignFirstResponder()
         view.delegate = nil
         view.onSubmit = nil
         view.onCommittedChange = nil
+        if view.markedTextRange != nil {
+            view.unmarkText()
+            coordinator.parent.buffer.text = view.text ?? ""
+        }
+        if coordinator.parent.buffer.activeTextView === view {
+            coordinator.parent.buffer.activeTextView = nil
+        }
+        view.desiredFocus = false
+        view.resignFirstResponder()
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
@@ -84,11 +95,15 @@ struct ComposerEntryField: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             guard let view = textView as? ComposerTextView else { return }
-            view.scheduleLayoutRefresh()
+            view.scheduleLayoutRefresh(mayShrink: view.textStorage.length < view.lastMeasuredLength)
+            // 组字期间不把整段 NSString 桥接拷贝成 Swift String，也不扫 @ 补全或落库。
+            guard view.markedTextRange == nil else { return }
             let value = view.text ?? ""
+            if view.shouldSuppressDuplicatePublish(for: value, currentBuffer: parent.buffer.text) {
+                return
+            }
             parent.buffer.text = value
-            // Do not scan mentions or persist provisional Pinyin on every composition update.
-            if view.markedTextRange == nil { parent.onEdit(value) }
+            parent.onEdit(value)
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
@@ -108,8 +123,16 @@ final class ComposerTextView: UITextView {
     var lineLimit = 1 ... 6
     var onSubmit: (() -> Void)?
     var onCommittedChange: ((ComposerTextView) -> Void)?
-    var placeholder = "" { didSet { placeholderLabel.text = placeholder } }
+    var placeholder = "" {
+        didSet {
+            guard oldValue != placeholder else { return }
+            placeholderLabel.text = placeholder
+        }
+    }
     private(set) var inTextChange = false
+    private(set) var lastMeasuredLength = 0
+    /// 显式强持有 TextKit 1 底层 NSTextStorage，避免依赖 UIKit 内部引用策略。
+    private let backingTextStorage: NSTextStorage
     private let placeholderLabel = UILabel()
     private var lastHeight: CGFloat = 0
     private var focusUpdatePending = false
@@ -117,13 +140,25 @@ final class ComposerTextView: UITextView {
     private var committedInCurrentEvent = false
     private var compositionGeneration = 0
     private var layoutRefreshPending = false
+    private var layoutRefreshMayShrink = false
     private var layoutGeneration = 0
     private var heightCache: (generation: Int, width: CGFloat, height: CGFloat, lines: Int, scrolls: Bool)?
     private var lastLineCount = 0
     private var keyCommandCache: (submit: Bool, commands: [UIKeyCommand])?
+    private var publishedInCurrentEvent = false
+    private var publishGeneration = 0
 
     init() {
-        super.init(frame: .zero, textContainer: nil)
+        // 显式构建 TextKit 1 栈：外接蓝牙键盘高速击键与中文 IME setMarkedText 期间，
+        // TextKit 1 的同步 sizeThatFits 远比 TextKit 2 稳定且无重排尖峰。
+        let storage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        storage.addLayoutManager(layoutManager)
+        let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        layoutManager.addTextContainer(container)
+        self.backingTextStorage = storage
+        super.init(frame: .zero, textContainer: container)
         backgroundColor = .clear
         textContainerInset = .zero
         textContainer.lineFragmentPadding = 0
@@ -132,6 +167,8 @@ final class ComposerTextView: UITextView {
         verticalScrollIndicatorInsets = .zero
         keyboardDismissMode = .interactive
         returnKeyType = .default
+        // 关闭硬件键盘内联预测，避免中英混输时向文本布局注入虚拟预测字形引发逐键顿挫。
+        inlinePredictionType = .no
         adjustsFontForContentSizeCategory = true
         isScrollEnabled = false
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -153,10 +190,16 @@ final class ComposerTextView: UITextView {
         // to accept candidates. The action also guards composition for IMEs which
         // dispatch confirmation and the key command in the same event.
         if submitOnReturn {
-            commands.append(UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(handleHardwareReturn(_:))))
+            let enter = UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(handleHardwareReturn(_:)))
+            enter.wantsPriorityOverSystemBehavior = false
+            commands.append(enter)
         }
-        commands.append(UIKeyCommand(input: "\r", modifierFlags: .command, action: #selector(handleHardwareReturn(_:))))
-        commands.append(UIKeyCommand(input: "\r", modifierFlags: .shift, action: #selector(insertHardwareNewline(_:))))
+        let cmdEnter = UIKeyCommand(input: "\r", modifierFlags: .command, action: #selector(handleHardwareReturn(_:)))
+        cmdEnter.wantsPriorityOverSystemBehavior = false
+        commands.append(cmdEnter)
+        let shiftEnter = UIKeyCommand(input: "\r", modifierFlags: .shift, action: #selector(insertHardwareNewline(_:)))
+        shiftEnter.wantsPriorityOverSystemBehavior = false
+        commands.append(shiftEnter)
         keyCommandCache = (submitOnReturn, commands)
         return commands
     }
@@ -187,27 +230,41 @@ final class ComposerTextView: UITextView {
         if wasComposing, !replacingDraft {
             markCompositionCommitted()
             onCommittedChange?(self)
-            scheduleLayoutRefresh()
+            scheduleLayoutRefresh(mayShrink: true)
         }
     }
 
     override func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
         let wasComposing = markedTextRange != nil
+        let hadSelection = self.selectedRange.length > 0
+        let beforeLength = textStorage.length
         performTextChange { super.setMarkedText(markedText, selectedRange: selectedRange) }
         if wasComposing, markedTextRange == nil, !replacingDraft { markCompositionCommitted() }
-        scheduleLayoutRefresh()
+        scheduleLayoutRefresh(mayShrink: hadSelection || textStorage.length < beforeLength)
     }
 
     override func insertText(_ text: String) {
         let wasComposing = markedTextRange != nil
+        let hadSelection = selectedRange.length > 0
+        let beforeLength = textStorage.length
         performTextChange { super.insertText(text) } // Software Return and multiline paste retain native newline behavior.
         if wasComposing, markedTextRange == nil { markCompositionCommitted() }
-        scheduleLayoutRefresh()
+        scheduleLayoutRefresh(mayShrink: hadSelection || textStorage.length < beforeLength)
     }
 
     override func deleteBackward() {
         performTextChange { super.deleteBackward() }
-        scheduleLayoutRefresh()
+        scheduleLayoutRefresh(mayShrink: true)
+    }
+
+    override func paste(_ sender: Any?) {
+        performTextChange { super.paste(sender) }
+        scheduleLayoutRefresh(mayShrink: true)
+    }
+
+    override func cut(_ sender: Any?) {
+        performTextChange { super.cut(sender) }
+        scheduleLayoutRefresh(mayShrink: true)
     }
 
     /// 键盘还在推候选时不要量文字、也不要改焦点。测量留到这次按键返回之后。
@@ -223,9 +280,28 @@ final class ComposerTextView: UITextView {
         let generation = compositionGeneration
         // An event boundary, not a time debounce: a fast second Return is still a new action.
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.compositionGeneration == generation else { return }
-            self.committedInCurrentEvent = false
+            MainActor.assumeIsolated {
+                guard let self, self.compositionGeneration == generation else { return }
+                self.committedInCurrentEvent = false
+            }
         }
+    }
+
+    /// 同一事件循环内若已由 unmarkText() / handleHardwareReturn() 推送过相同文本，跳过重复 onEdit。
+    func shouldSuppressDuplicatePublish(for value: String, currentBuffer: String) -> Bool {
+        if publishedInCurrentEvent, currentBuffer == value {
+            return true
+        }
+        publishedInCurrentEvent = true
+        publishGeneration &+= 1
+        let generation = publishGeneration
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.publishGeneration == generation else { return }
+                self.publishedInCurrentEvent = false
+            }
+        }
+        return false
     }
 
     func replaceDraft(_ value: String) {
@@ -238,8 +314,9 @@ final class ComposerTextView: UITextView {
         }
         replacingDraft = false
         committedInCurrentEvent = false
+        publishedInCurrentEvent = false
         invalidateHeightCache()
-        refreshLayout()
+        refreshLayout(mayShrink: true)
     }
 
     func invalidateHeightCache() {
@@ -252,10 +329,12 @@ final class ComposerTextView: UITextView {
         guard !focusUpdatePending, desiredFocus != isFirstResponder else { return }
         focusUpdatePending = true
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.focusUpdatePending = false
-            if self.desiredFocus, self.window != nil { self.becomeFirstResponder() }
-            else if !self.desiredFocus { self.resignFirstResponder() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.focusUpdatePending = false
+                if self.desiredFocus, self.window != nil { self.becomeFirstResponder() }
+                else if !self.desiredFocus { self.resignFirstResponder() }
+            }
         }
     }
 
@@ -282,27 +361,66 @@ final class ComposerTextView: UITextView {
         if lines > lineLimit.upperBound { lines = lineLimit.upperBound }
         let scrolls = measured > line * CGFloat(lineLimit.upperBound) + line * 0.4
         heightCache = (layoutGeneration, widthKey, height, lines, scrolls)
+        lastMeasuredLength = textStorage.length
         lastHeight = height
         lastLineCount = lines
         return height
     }
 
-    func scheduleLayoutRefresh() {
-        placeholderLabel.isHidden = !(text ?? "").isEmpty
+    func scheduleLayoutRefresh(mayShrink: Bool = true) {
+        placeholderLabel.isHidden = hasText
+        layoutRefreshMayShrink = layoutRefreshMayShrink || mayShrink
         guard !layoutRefreshPending else { return }
         layoutRefreshPending = true
-        layoutGeneration &+= 1
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.layoutRefreshPending = false
-            self.refreshLayout()
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let shrink = self.layoutRefreshMayShrink
+                self.layoutRefreshPending = false
+                self.layoutRefreshMayShrink = false
+                self.refreshLayout(mayShrink: shrink)
+            }
         }
     }
 
-    func refreshLayout() {
-        placeholderLabel.isHidden = !(text ?? "").isEmpty
+    /// 避免每次硬件击键都触发全量 sizeThatFits：
+    /// 1) 已经触顶进入滚动（≥lineLimit.upperBound 且 isScrollEnabled 已同步）且本次只增不删，高度必然仍封顶；
+    /// 2) 单行极短且不含任何换行/制表符的文本，宽度仍有明显余量时必然仍是 1 行。
+    private func canSkipHeightRemeasure(width: CGFloat, mayShrink: Bool) -> Bool {
+        guard let cache = heightCache,
+              abs(cache.width - ((width * 2).rounded() / 2)) < 0.5
+        else { return false }
+        let currentLength = textStorage.length
+        if cache.scrolls, isScrollEnabled == cache.scrolls, !mayShrink, currentLength >= lastMeasuredLength {
+            lastMeasuredLength = currentLength
+            return true
+        }
+        if !cache.scrolls,
+           lineLimit.lowerBound == 1,
+           cache.lines == 1,
+           !isScrollEnabled {
+            let maxGlyphWidth = max((font?.pointSize ?? 17) * 1.15, 14)
+            let safeCharBudget = Int((width * 0.72) / maxGlyphWidth)
+            if currentLength <= safeCharBudget {
+                let ns = textStorage.string as NSString
+                if ns.rangeOfCharacter(from: .newlines).location == NSNotFound
+                    && ns.range(of: "\t").location == NSNotFound {
+                    lastMeasuredLength = currentLength
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    func refreshLayout(mayShrink: Bool = true) {
+        placeholderLabel.isHidden = hasText
         guard bounds.width > 0 else { return }
+        if canSkipHeightRemeasure(width: bounds.width, mayShrink: mayShrink) {
+            return
+        }
         let previousLines = lastLineCount
+        layoutGeneration &+= 1
         _ = editorHeight(for: bounds.width)
         let scrolls = heightCache?.scrolls == true
         if isScrollEnabled != scrolls { isScrollEnabled = scrolls }
@@ -318,11 +436,15 @@ final class ComposerTextView: UITextView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        placeholderLabel.font = font
+        if placeholderLabel.font != font { placeholderLabel.font = font }
         let line = font?.lineHeight ?? 22
         if placeholderLabel.bounds.width != bounds.width || placeholderLabel.bounds.height != line {
             placeholderLabel.frame = CGRect(x: 0, y: 0, width: bounds.width, height: line)
         }
-        placeholderLabel.isHidden = !(text ?? "").isEmpty
+        placeholderLabel.isHidden = hasText
+        // 初次以长草稿挂载或切回输入框时，sizeThatFits 已算出 scrolls == true 但尚未同步给 isScrollEnabled。
+        if bounds.width > 0, let scrolls = heightCache?.scrolls, isScrollEnabled != scrolls {
+            isScrollEnabled = scrolls
+        }
     }
 }

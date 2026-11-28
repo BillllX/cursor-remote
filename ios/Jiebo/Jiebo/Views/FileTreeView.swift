@@ -33,30 +33,31 @@ enum FileTreeBuilder {
     /// 实现用「按首段分组递归」（字典分组，O(n×深度)），比 web 的 level.find（O(n²)）便宜；
     /// 语义等价（真实文件系统不会出现「同名既是文件又是目录」的歧义）。
     static func toTree(_ paths: [String]) -> [FileNode] {
-        let items: [(parts: [String], explicitDir: Bool)] = paths.prefix(8000).map { raw in
+        let items: [(parts: [Substring], explicitDir: Bool)] = paths.prefix(8000).map { raw in
             let explicitDir = raw.hasSuffix("/")
-            let parts = raw.split(separator: "/").map(String.init)
+            let parts = raw.split(separator: "/")
             return (parts, explicitDir)
         }
-        return build(items, prefix: "")
+        return build(items, depth: 0, prefix: "")
     }
 
-    private static func build(_ items: [(parts: [String], explicitDir: Bool)], prefix: String) -> [FileNode] {
+    private static func build(_ items: [(parts: [Substring], explicitDir: Bool)], depth: Int, prefix: String) -> [FileNode] {
         var order: [String] = []
-        var groups: [String: [(parts: [String], explicitDir: Bool)]] = [:]
+        var groups: [String: [(parts: [Substring], explicitDir: Bool)]] = [:]
         var isDirSet: Set<String> = []
         for item in items {
-            guard let first = item.parts.first else { continue }
+            guard depth < item.parts.count else { continue }
+            let first = String(item.parts[depth])
             if groups[first] == nil {
                 order.append(first)
                 groups[first] = []
             }
-            let tail = Array(item.parts.dropFirst())
-            if !tail.isEmpty || item.explicitDir {
+            let hasTail = depth + 1 < item.parts.count
+            if hasTail || item.explicitDir {
                 isDirSet.insert(first)
             }
-            if !tail.isEmpty {
-                groups[first]?.append((tail, item.explicitDir))
+            if hasTail {
+                groups[first]?.append(item)
             }
         }
         return order.map { name in
@@ -65,7 +66,7 @@ enum FileTreeBuilder {
             if rest.isEmpty && !isDirSet.contains(name) {
                 return FileNode(name: name, path: path, children: nil)
             }
-            return FileNode(name: name, path: path, children: build(rest, prefix: path))
+            return FileNode(name: name, path: path, children: build(rest, depth: depth + 1, prefix: path))
         }
     }
 
@@ -138,16 +139,17 @@ struct FileTreeView: View {
     var emptyDetail: String? = nil
 
     @State private var openDirs: [String: Bool] = [:]
-    /// 树缓存：paths 变才重建（toTree 是 O(n×深度)，不在 body 里每次算）
+    /// 树与展开行缓存：paths/filter 变才重建树，openDirs/tree 变才重算 flatten（选中高亮等零重算）
     @State private var tree: [FileNode] = []
+    @State private var rows: [FileTreeBuilder.Row] = []
+    @State private var debouncedFilter = ""
+    @State private var filterTask: Task<Void, Never>?
 
     var body: some View {
-        // rows 一次 body 只求值一遍（flatten 是 O(全树)，选中行高亮等高频重建不该翻倍）
-        let rows = self.rows
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if rows.isEmpty {
-                    Text(paths.isEmpty ? (emptyDetail ?? "没有文件列表") : (filter.trimmingCharacters(in: .whitespaces).isEmpty ? "没有文件列表" : "没有匹配的文件"))
+                    Text(paths.isEmpty ? (emptyDetail ?? "没有文件列表") : (debouncedFilter.isEmpty ? "没有文件列表" : "没有匹配的文件"))
                         .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.dim)
                         .frame(maxWidth: .infinity, alignment: .center)
@@ -157,7 +159,7 @@ struct FileTreeView: View {
                         rowView(row)
                     }
                 }
-                if (truncated || truncatedDirs.contains("") || paths.count > 8000) && filter.trimmingCharacters(in: .whitespaces).isEmpty {
+                if (truncated || truncatedDirs.contains("") || paths.count > 8000) && debouncedFilter.isEmpty {
                     // 网关会报 truncated；客户端 toTree 还有 8000 硬顶，旧网关多发时也要提示。
                     // 搜索时隐藏——用户已经在「缩小范围」，再提示「用搜索缩小范围」自相矛盾（GLM R2 MINOR）
                     Text("文件太多，清单被截断了，用搜索缩小范围。")
@@ -170,24 +172,57 @@ struct FileTreeView: View {
             .padding(.vertical, 6)
         }
         .background(JieboColor.paper)
-        // initial: true——onAppear 才 rebuild 会首帧闪「没有文件列表」
+        // initial: true——onAppear 才 rebuild 会首帧闪「没有文件列表」，同时兼容父视图切回时已带非空 filter
+        .onChange(of: filter, initial: true) { old, next in
+            let trimmed = next.trimmingCharacters(in: .whitespacesAndNewlines)
+            if old == next {
+                if debouncedFilter != trimmed { debouncedFilter = trimmed }
+            } else {
+                scheduleFilterRebuild(next)
+            }
+        }
         .onChange(of: paths, initial: true) { _, _ in rebuild() }
-        .onChange(of: filter) { _, _ in rebuild() }
+        .onChange(of: debouncedFilter) { _, _ in rebuild() }
+        .onChange(of: openDirs) { _, _ in refreshRows() }
+        .onDisappear { filterTask?.cancel(); filterTask = nil }
     }
 
     // MARK: 数据
 
-    private var expandAll: Bool { !filter.trimmingCharacters(in: .whitespaces).isEmpty }
+    private var expandAll: Bool { !debouncedFilter.isEmpty }
 
-    private var rows: [FileTreeBuilder.Row] {
-        FileTreeBuilder.flatten(tree, openDirs: openDirs, expandAll: expandAll)
+    private func scheduleFilterRebuild(_ raw: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        filterTask?.cancel()
+        if trimmed.isEmpty {
+            filterTask = nil
+            if !debouncedFilter.isEmpty {
+                debouncedFilter = ""
+            }
+            return
+        }
+        filterTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            // 只写 @State debouncedFilter，由 .onChange(of: debouncedFilter) 读取最新 self.paths 执行 rebuild。
+            if debouncedFilter != trimmed {
+                debouncedFilter = trimmed
+            }
+        }
     }
 
     private func rebuild() {
         // 搜索对齐 web：substring 过滤 → 建树 → 全展开（不用 rankMentions——打分排序会打乱树序）
-        let q = filter.trimmingCharacters(in: .whitespaces).lowercased()
-        let filtered = q.isEmpty ? paths : paths.filter { !$0.hasSuffix("/") && $0.lowercased().contains(q) }
+        let q = debouncedFilter
+        let filtered = q.isEmpty
+            ? paths
+            : paths.filter { !$0.hasSuffix("/") && $0.range(of: q, options: .caseInsensitive) != nil }
         tree = FileTreeBuilder.toTree(filtered)
+        refreshRows()
+    }
+
+    private func refreshRows() {
+        rows = FileTreeBuilder.flatten(tree, openDirs: openDirs, expandAll: expandAll)
     }
 
     // MARK: 行
@@ -217,7 +252,7 @@ struct FileTreeView: View {
                         .font(JieboFont.text(.subheadline, weight: node.isDir ? .medium : .regular))
                         .foregroundStyle(node.isDir ? JieboColor.ink : JieboColor.ink2)
                         .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
-                    if !filter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, node.path != node.name {
+                    if !debouncedFilter.isEmpty, node.path != node.name {
                         Text(node.path)
                             .font(JieboFont.monoText(.caption2))
                             .foregroundStyle(JieboColor.dim)

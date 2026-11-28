@@ -105,7 +105,7 @@ extension ComposerView {
             .foregroundStyle(JieboColor.dim)
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .jieboGlass(in: Capsule(), interactive: true)
+            .jieboGlass(in: Capsule(), interactive: false)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -190,14 +190,29 @@ extension ComposerView {
     }
 }
 
-/// 输入胶囊跟随主题选择实底或玻璃表面，聚焦时加深描边。
+/// 输入胶囊跟随主题选择实底或玻璃表面，聚焦时切至稳定纸白实底并加深描边，
+/// 避免蓝牙键盘/高频输入期间 Liquid Glass 跟随光标与候选条逐帧重采样背板。
+/// 严禁用 if/else 分支包裹 content，确保聚焦切换不销毁重建 ComposerTextView。
 struct CapsuleSurface: ViewModifier {
     var focused: Bool
 
     func body(content: Content) -> some View {
+        let isSticker = JieboTheme.shared.palette == .sticker
+        let strokeColor = isSticker ? JieboColor.ink : JieboColor.pine.opacity(focused ? 0.35 : 0)
         content
-            // 输入胶囊不要用可交互玻璃。按键时玻璃跟着文字重采样，候选栏每字母都会顿一下。
-            .jieboGlass(in: Capsule(), interactive: false)
-            .overlay(Capsule().stroke(JieboTheme.shared.palette == .sticker ? JieboColor.ink : JieboColor.pine.opacity(focused ? 0.35 : 0), lineWidth: focused ? 2 : JieboStroke.outline))
+            .background {
+                if focused || isSticker {
+                    Capsule().fill(JieboColor.white)
+                } else {
+                    // 输入胶囊不要用可交互玻璃。按键时玻璃跟着文字重采样，候选栏每字母都会顿一下。
+                    Color.clear.jieboGlass(in: Capsule(), interactive: false)
+                }
+            }
+            .overlay(
+                Capsule().stroke(
+                    isSticker && !focused ? JieboColor.line : strokeColor,
+                    lineWidth: focused ? 2 : JieboStroke.outline
+                )
+            )
     }
 }

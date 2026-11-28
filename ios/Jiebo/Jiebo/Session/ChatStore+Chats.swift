@@ -236,6 +236,7 @@ extension ChatStore {
         swapActive(to: id)
         mentionQueryByChat.removeValue(forKey: previousActiveId)
         mentionTasksByChat.removeValue(forKey: previousActiveId)?.cancel()
+        mentionRankTasksByChat.removeValue(forKey: previousActiveId)?.cancel()
         mentionSuggestionsByChat[previousActiveId] = []
         patch(id) { chat in
             var next = chat
@@ -259,10 +260,15 @@ extension ChatStore {
             newId = assistantId
         }
         guard newId != activeId else { return }
+        let oldId = activeId
         let oldCwd = active?.cwd
         persistDraft()
         imagesByChat[activeId] = pendingImages // 待发图片跟会话走
         activeId = newId
+        if fileIndexRequestChatId == nil {
+            invalidateMergedFileTreeCache(for: oldId)
+            invalidateMergedFileTreeCache(for: newId)
+        }
         // P9：持久化最后活跃会话（boot 占位不记）；下次启动 applyStoredState 后恢复
         if newId != "boot", let key = lastChatKey {
             UserDefaults.standard.set(newId, forKey: key)
@@ -289,6 +295,7 @@ extension ChatStore {
             fileIndex = []
             treeTruncated = false
             gitStatus = [:]
+            invalidateMergedFileTreeCache()
         }
         requestFileIndex() // Clear the old workspace first, then restore the target's cached index.
         ensureTurnsLoaded(newId) // P8 slim：点开的会话若只有元数据壳，启动分页加载
@@ -346,9 +353,11 @@ extension ChatStore {
         loadingDirsByChat.removeValue(forKey: id)
         truncatedDirsByChat.removeValue(forKey: id)
         loadedDirsByChat.removeValue(forKey: id)
+        invalidateMergedFileTreeCache(for: id)
         mentionSuggestionsByChat.removeValue(forKey: id)
         mentionQueryByChat.removeValue(forKey: id)
         mentionTasksByChat.removeValue(forKey: id)?.cancel()
+        mentionRankTasksByChat.removeValue(forKey: id)?.cancel()
         if mentionRequestChatId == id { mentionRequestChatId = nil }
         checkpointsByChat.removeValue(forKey: id)
         var rest = chats.filter { $0.id != id }

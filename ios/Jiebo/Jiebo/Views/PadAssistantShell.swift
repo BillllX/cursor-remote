@@ -14,9 +14,15 @@ struct PadAssistantShell: View {
     @State private var containerWidth: CGFloat = 0
     @State private var settingsOpen = false
     @State private var skillsOpen = false
+    @State private var projectionCache = PadAssistantProjectionCache()
 
     private var projection: PadAssistantProjection {
-        PadAssistantProjection(state: store.assistantState)
+        let state = store.assistantState
+        return projectionCache.projection(
+            storeId: ObjectIdentifier(store),
+            version: store.assistantProjectionVersion,
+            state: state
+        )
     }
 
     var body: some View {
@@ -457,6 +463,26 @@ private struct PadSectionNavigationRow: View {
         }
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityHint(section == .memory ? "打开栏目" : "打开栏目，也可把匹配项目拖到这里")
+    }
+}
+
+/// 非 @Observable 缓存容器：按 ChatStore.assistantProjectionVersion 复用 PadAssistantProjection，
+/// 壳层分栏、inspector 或弹窗重绘不再重复排序去重 draftCards 与解析日程。
+@MainActor
+private final class PadAssistantProjectionCache {
+    private var cachedStoreId: ObjectIdentifier?
+    private var cachedVersion: UInt64?
+    private var cachedProjection: PadAssistantProjection?
+
+    func projection(storeId: ObjectIdentifier, version: UInt64, state: AssistantState?) -> PadAssistantProjection {
+        if let cachedProjection, cachedStoreId == storeId, cachedVersion == version {
+            return cachedProjection
+        }
+        let next = PadAssistantProjection(state: state)
+        cachedStoreId = storeId
+        cachedVersion = version
+        cachedProjection = next
+        return next
     }
 }
 

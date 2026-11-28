@@ -880,6 +880,9 @@ struct RecordingDetailView: View {
     @State private var errorMessage: String?
     @State private var toastMessage: String?
     @State private var transcriptQuery = ""
+    @State private var appliedTranscriptQuery = ""
+    @State private var cachedMatchedSegments: [RecordingTranscriptSegmentDTO] = []
+    @State private var transcriptFilterTask: Task<Void, Never>?
     @State private var showDeleteSheet = false
     @State private var deleteLinkedMemories = false
 
@@ -902,11 +905,13 @@ struct RecordingDetailView: View {
         hasLocalAudio || (result?.audioAvailable == true && result?.audioExpired != true) || (status.audioUploaded && !status.audioExpired)
     }
 
-    private var filteredSegments: [RecordingTranscriptSegmentDTO] {
-        guard let segs = result?.segments else { return [] }
-        let q = transcriptQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        if q.isEmpty { return segs }
-        return segs.filter { $0.text.localizedCaseInsensitiveContains(q) }
+    private func refreshMatchedSegments() {
+        guard let segs = result?.segments else {
+            cachedMatchedSegments = []
+            return
+        }
+        let q = appliedTranscriptQuery
+        cachedMatchedSegments = q.isEmpty ? segs : segs.filter { $0.text.localizedCaseInsensitiveContains(q) }
     }
 
     var body: some View {
@@ -1091,13 +1096,14 @@ struct RecordingDetailView: View {
                     }
                 }
 
-                // 带时间戳逐字稿
+                // 带时间戳逐字稿（缓存过滤结果，击键期间不再每字重扫）
+                let matchedSegments = cachedMatchedSegments
                 Section {
                     TextField("搜索逐字稿关键词", text: $transcriptQuery)
                         .font(JieboFont.text(.subheadline))
                         .listRowBackground(JieboColor.white)
 
-                    ForEach(filteredSegments) { seg in
+                    ForEach(matchedSegments) { seg in
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(spacing: 8) {
                                 timestampButton(frame: seg.startFrame)
@@ -1120,7 +1126,7 @@ struct RecordingDetailView: View {
                         .listRowBackground(JieboColor.white)
                     }
                 } header: {
-                    Text("带时间戳逐字稿（\(filteredSegments.count) 段）")
+                    Text("带时间戳逐字稿（\(matchedSegments.count) 段）")
                 }
             } else {
                 Section {
@@ -1158,6 +1164,30 @@ struct RecordingDetailView: View {
         }
         .task {
             await loadLatest()
+        }
+        .onChange(of: result?.segments.count) { _, _ in
+            refreshMatchedSegments()
+        }
+        .onChange(of: appliedTranscriptQuery) { _, _ in
+            refreshMatchedSegments()
+        }
+        .onChange(of: transcriptQuery) { _, raw in
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            transcriptFilterTask?.cancel()
+            if trimmed.isEmpty {
+                transcriptFilterTask = nil
+                if !appliedTranscriptQuery.isEmpty { appliedTranscriptQuery = "" }
+                return
+            }
+            transcriptFilterTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(120))
+                guard !Task.isCancelled else { return }
+                if appliedTranscriptQuery != trimmed { appliedTranscriptQuery = trimmed }
+            }
+        }
+        .onDisappear {
+            transcriptFilterTask?.cancel()
+            transcriptFilterTask = nil
         }
         .sheet(isPresented: $showDeleteSheet) {
             deleteConfirmationSheet
@@ -1450,6 +1480,7 @@ struct RecordingDetailView: View {
             switch outcome {
             case .ready(let payload):
                 result = payload
+                refreshMatchedSegments()
             case .pending(let pendingStatus):
                 status = pendingStatus
             }

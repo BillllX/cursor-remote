@@ -72,12 +72,15 @@ struct ChatComposer: View {
     @Environment(\.scenePhase) private var scenePhase
     let peer: String
     let convId: String
-    var focused: FocusState<Bool>.Binding
+    var focused: Binding<Bool>
     var onSent: () -> Void
-    @State private var text = ""
+    /// 打字写入非视图状态缓冲，蓝牙键盘连续击键不重建整条输入栏。
+    @State private var draftBuffer = ComposerDraftBuffer()
+    @State private var draftRevision = 0
+    @State private var hasText = false
+    @State private var ignoreDraftEcho: String?
     @State private var loadedDraft = false
     @State private var draftTenant = ""
-    @State private var draftSaveTask: Task<Void, Never>?
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var pickerOpen = false
     @State private var cameraOpen = false
@@ -95,9 +98,7 @@ struct ChatComposer: View {
     @State private var largeImageBatch: ImLargeImageBatch?
     static let maxPhotos = 9
 
-    private var canSend: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
+    private var canSend: Bool { hasText }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -112,19 +113,24 @@ struct ChatComposer: View {
                 if voiceMode {
                     voiceButton
                 } else {
-                    TextField("发消息", text: $text, axis: .vertical)
-                        .lineLimit(1 ... 5)
-                        .focused(focused)
-                        .font(JieboFont.text(.body))
-                        .foregroundStyle(JieboColor.ink)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
-                        .background(JieboColor.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
-                        )
+                    ComposerEntryField(
+                        placeholder: "发消息",
+                        lineLimit: 1 ... 5,
+                        buffer: draftBuffer,
+                        revision: draftRevision,
+                        focused: focused,
+                        submitOnReturn: true,
+                        onEdit: noteTyped,
+                        onSubmit: send
+                    )
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(JieboColor.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
+                    )
                 }
                 if canSend {
                     Button(action: send) {
@@ -137,7 +143,6 @@ struct ChatComposer: View {
                             .hitTarget()
                     }
                     .buttonStyle(PressScaleButtonStyle())
-                    .keyboardShortcut(.return, modifiers: .command)
                     .accessibilityLabel("发送")
                 } else {
                     attachMenu
@@ -169,31 +174,33 @@ struct ChatComposer: View {
             guard !loadedDraft else { return }
             loadedDraft = true
             draftTenant = im.tenant
-            text = im.draft(for: convId)
+            replaceDraft(im.draft(for: convId))
         }
         .onChange(of: im.tenant) { _, nextTenant in
-            draftSaveTask?.cancel()
-            draftSaveTask = nil
+            draftBuffer.cancelPersist()
             draftTenant = nextTenant
-            text = nextTenant.isEmpty ? "" : im.draft(for: convId)
+            ignoreDraftEcho = nil
+            replaceDraft(nextTenant.isEmpty ? "" : im.draft(for: convId))
         }
         .onChange(of: convId) { oldConvId, nextConvId in
-            flushDraft(for: oldConvId)
-            text = im.draft(for: nextConvId)
+            flushDraft(for: oldConvId, commitComposition: true)
+            ignoreDraftEcho = nil
+            replaceDraft(im.draft(for: nextConvId))
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { flushDraft(for: convId) }
+            if phase != .active { flushDraft(for: convId, commitComposition: true) }
         }
         .onChange(of: im.draft(for: convId)) { _, externalDraft in
-            if externalDraft != text, !focused.wrappedValue {
-                text = externalDraft
+            if externalDraft == ignoreDraftEcho {
+                ignoreDraftEcho = nil
+                return
+            }
+            if externalDraft != draftBuffer.text, !focused.wrappedValue {
+                replaceDraft(externalDraft)
             }
         }
-        .onChange(of: text) { _, value in
-            scheduleDraftSave(value, for: convId)
-        }
         .onDisappear {
-            flushDraft(for: convId)
+            flushDraft(for: convId, commitComposition: true)
             cancelLargeImageBatch()
             recorder.cancel()
             voiceStarted = false
@@ -322,40 +329,87 @@ struct ChatComposer: View {
         .padding(.top, 6)
     }
 
+    private func replaceDraft(_ value: String) {
+        draftBuffer.text = value
+        draftRevision += 1
+        let filled = value.contains { !$0.isWhitespace }
+        if filled != hasText { hasText = filled }
+    }
+
+    private func noteTyped(_ value: String) {
+        let filled = value.contains { !$0.isWhitespace }
+        if filled != hasText { hasText = filled }
+        scheduleDraftSave(value, for: convId)
+    }
+
     private func scheduleDraftSave(_ value: String, for targetConvId: String) {
-        draftSaveTask?.cancel()
         let tenantAtSchedule = im.tenant
         guard !tenantAtSchedule.isEmpty, tenantAtSchedule == draftTenant else { return }
-        guard value != im.draft(for: targetConvId) else { return }
-        // 清空草稿立即同步；常态打字 300ms 防抖落库，避免每敲一字就重挂持久化
+        if let pending = draftBuffer.pendingChatId, pending != targetConvId {
+            flushDraft(for: pending)
+        }
+        // 清空草稿立即同步；常态打字用单一 deadline 循环 300ms 防抖落库，避免每敲一字建毁 Task
         if value.isEmpty {
-            im.setDraft("", convId: targetConvId)
+            draftBuffer.cancelPersist()
+            if !im.draft(for: targetConvId).isEmpty {
+                ignoreDraftEcho = ""
+                im.setDraft("", convId: targetConvId)
+            }
             return
         }
-        draftSaveTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled, im.tenant == tenantAtSchedule else { return }
-            im.setDraft(value, convId: targetConvId)
+        draftBuffer.pendingChatId = targetConvId
+        draftBuffer.pendingText = value
+        draftBuffer.persistDeadline = ContinuousClock.now + .milliseconds(300)
+        guard draftBuffer.persistTask == nil else { return }
+        draftBuffer.persistGeneration &+= 1
+        let generation = draftBuffer.persistGeneration
+        draftBuffer.persistTask = Task { @MainActor in
+            while !Task.isCancelled && draftBuffer.persistGeneration == generation {
+                guard let deadline = draftBuffer.persistDeadline else { break }
+                let remaining = ContinuousClock.now.duration(to: deadline)
+                if remaining > .zero {
+                    try? await Task.sleep(for: remaining)
+                    continue
+                }
+                guard !Task.isCancelled && draftBuffer.persistGeneration == generation else { return }
+                draftBuffer.persistDeadline = nil
+                draftBuffer.persistTask = nil
+                guard im.tenant == tenantAtSchedule, let conv = draftBuffer.pendingChatId else { return }
+                let pendingText = draftBuffer.pendingText
+                draftBuffer.pendingChatId = nil
+                if conv == convId { ignoreDraftEcho = pendingText }
+                im.setDraft(pendingText, convId: conv)
+                return
+            }
+            if draftBuffer.persistGeneration == generation {
+                draftBuffer.persistTask = nil
+            }
         }
     }
 
-    private func flushDraft(for targetConvId: String) {
-        draftSaveTask?.cancel()
-        draftSaveTask = nil
+    private func flushDraft(for targetConvId: String, commitComposition: Bool = false) {
+        let pendingId = draftBuffer.pendingChatId
+        let rawPending = pendingId == targetConvId ? draftBuffer.pendingText : draftBuffer.text
+        // 切会话时 self.convId 已经指向 nextConvId，必须由显式 commitComposition 触发 unmarkText()，
+        // 否则未上屏文字既不会存入 oldConvId，其残留 markedTextRange 还会拦住新会话草稿写入。
+        let pendingText = commitComposition ? draftBuffer.commitText() : rawPending
+        draftBuffer.cancelPersist()
         // 登出或已切租户时绝不把旧视图里的本地 text 回灌进新租户草稿表
         guard !im.tenant.isEmpty, im.tenant == draftTenant else { return }
-        guard text != im.draft(for: targetConvId) else { return }
-        im.setDraft(text, convId: targetConvId)
+        guard pendingText != im.draft(for: targetConvId) else { return }
+        if targetConvId == convId { ignoreDraftEcho = pendingText }
+        im.setDraft(pendingText, convId: targetConvId)
     }
 
     // MARK: 发
 
     private func send() {
-        let value = text
+        let value = draftBuffer.commitText()
+        guard value.contains(where: { !$0.isWhitespace }) else { return }
         if let url = ImLinkMetadata.recognized(value) {
-            draftSaveTask?.cancel()
-            draftSaveTask = nil
-            text = ""
+            draftBuffer.cancelPersist()
+            ignoreDraftEcho = ""
+            replaceDraft("")
             im.setDraft("", convId: convId)
             let tenant = im.tenant
             Task {
@@ -366,9 +420,9 @@ struct ChatComposer: View {
             }
         } else {
             guard im.sendText(value, to: peer) else { return }
-            draftSaveTask?.cancel()
-            draftSaveTask = nil
-            text = ""
+            draftBuffer.cancelPersist()
+            ignoreDraftEcho = ""
+            replaceDraft("")
             im.setDraft("", convId: convId)
             onSent()
         }

@@ -46,6 +46,7 @@ struct HomeShell: View {
     @Environment(\.coldLaunchVisible) private var coldLaunchVisible
     @Environment(\.sceneSessionState) private var sceneSession
     @State private var padRouter = PadRouter()
+    @State private var padCommandActions = PadCommandActions()
     @State private var fallbackSceneToken = UUID().uuidString
     #if DEBUG
     @State private var ranPadRegression = false
@@ -155,13 +156,18 @@ struct HomeShell: View {
             if !visible { dispatchPush(); dispatchWidgetDeepLink() }
         }
         .onAppear {
+            bindPadCommandActions()
             AssistantScenePresenter.shared.register(token: sceneToken, active: scenePhase == .active)
             bootstrapPadRouter()
             dispatchPush()
             dispatchWidgetDeepLink()
             syncWorkbenchViewing()
         }
+        .onChange(of: sceneToken) { _, _ in
+            bindPadCommandActions()
+        }
         .onDisappear {
+            padCommandActions.reset()
             AssistantScenePresenter.shared.unregister(token: sceneToken)
         }
         .onChange(of: router.domain) { _, next in
@@ -201,87 +207,95 @@ struct HomeShell: View {
         }
     }
 
-    private var padCommandActions: PadCommandActions {
-        PadCommandActions(
-            openDomain: { padRouter.openDomain($0) },
-            openSection: { section in
-                padRouter.openAssistant(
-                    section: section,
-                    selection: section == .today ? .assistantChat : nil
-                )
-            },
-            search: {
-                switch padRouter.domain {
-                case .assistant:
-                    if padRouter.assistantSection == .memory {
-                        postSceneCommand(.padSceneSearchRequested)
-                    } else {
-                        padRouter.presentSearch()
-                    }
-                case .workbench:
-                    store.openWorkspaceSwitcher()
-                case .messages:
-                    postSceneCommand(.padSceneSearchRequested)
+    private func bindPadCommandActions() {
+        let router = padRouter
+        let store = store
+        let im = im
+        let sceneSession = sceneSession
+        let token = sceneToken
+        let post: (Notification.Name) -> Void = { name in
+            NotificationCenter.default.post(
+                name: name,
+                object: PadSceneCommandDelivery(sceneToken: token)
+            )
+        }
+        padCommandActions.openDomain = { [weak router] domain in
+            router?.openDomain(domain)
+        }
+        padCommandActions.openSection = { [weak router] section in
+            router?.openAssistant(
+                section: section,
+                selection: section == .today ? .assistantChat : nil
+            )
+        }
+        padCommandActions.search = { [weak router, weak store] in
+            guard let router else { return }
+            switch router.domain {
+            case .assistant:
+                if router.assistantSection == .memory {
+                    post(.padSceneSearchRequested)
+                } else {
+                    router.presentSearch()
                 }
-            },
-            create: {
-                switch padRouter.domain {
-                case .assistant:
-                    padRouter.openAssistant()
-                    Task { @MainActor in
-                        await Task.yield()
-                        postSceneCommand(.assistantComposerFocusRequested)
-                    }
-                case .workbench:
-                    store.openNewChat(in: store.workspacePath(anchoredTo: sceneSession?.workbenchChatId))
-                    sceneSession?.workbenchChatId = store.activeId
-                case .messages:
-                    if let sceneSession {
-                        sceneSession.chatDestination = nil
-                    } else {
-                        store.chatHomeDestination = nil
-                    }
-                    postSceneCommand(.padSceneSearchRequested)
-                }
-            },
-            openFile: {
-                if padRouter.domain != .workbench {
-                    padRouter.openDomain(.workbench)
-                }
+            case .workbench:
+                store?.openWorkspaceSwitcher()
+            case .messages:
+                post(.padSceneSearchRequested)
+            }
+        }
+        padCommandActions.create = { [weak router, weak store, weak sceneSession] in
+            guard let router, let store else { return }
+            switch router.domain {
+            case .assistant:
+                router.openAssistant()
                 Task { @MainActor in
                     await Task.yield()
-                    store.openFilesOnWorkbench()
+                    post(.assistantComposerFocusRequested)
                 }
-            },
-            refresh: {
-                switch padRouter.domain {
-                case .assistant: store.requestAssistant(memory: padRouter.assistantSection == .memory)
-                case .workbench: store.requestStateReload()
-                case .messages: im.refreshList()
-                }
-            },
-            closeOverlay: {
-                if sceneSession?.previewFullscreen == true {
-                    sceneSession?.setPreviewFullscreen(false)
-                } else if sceneSession?.previewKey != nil {
-                    sceneSession?.dismissPreview()
-                } else if padRouter.inspectorPresented {
-                    padRouter.dismissInspector()
+            case .workbench:
+                store.openNewChat(in: store.workspacePath(anchoredTo: sceneSession?.workbenchChatId))
+                sceneSession?.workbenchChatId = store.activeId
+            case .messages:
+                if let sceneSession {
+                    sceneSession.chatDestination = nil
                 } else {
-                    padRouter.searchPresented = false
+                    store.chatHomeDestination = nil
                 }
-            },
-            previous: { padRouter.navigateSectionHistory(by: -1) },
-            next: { padRouter.navigateSectionHistory(by: 1) },
-            toggleSidebar: { postSceneCommand(.padSceneSidebarToggleRequested) }
-        )
-    }
-
-    private func postSceneCommand(_ name: Notification.Name) {
-        NotificationCenter.default.post(
-            name: name,
-            object: PadSceneCommandDelivery(sceneToken: sceneToken)
-        )
+                post(.padSceneSearchRequested)
+            }
+        }
+        padCommandActions.openFile = { [weak router, weak store] in
+            guard let router, let store else { return }
+            if router.domain != .workbench {
+                router.openDomain(.workbench)
+            }
+            Task { @MainActor in
+                await Task.yield()
+                store.openFilesOnWorkbench()
+            }
+        }
+        padCommandActions.refresh = { [weak router, weak store, weak im] in
+            guard let router else { return }
+            switch router.domain {
+            case .assistant: store?.requestAssistant(memory: router.assistantSection == .memory)
+            case .workbench: store?.requestStateReload()
+            case .messages: im?.refreshList()
+            }
+        }
+        padCommandActions.closeOverlay = { [weak router, weak sceneSession] in
+            if sceneSession?.previewFullscreen == true {
+                sceneSession?.setPreviewFullscreen(false)
+            } else if sceneSession?.previewKey != nil {
+                sceneSession?.dismissPreview()
+            } else if router?.inspectorPresented == true {
+                router?.dismissInspector()
+            } else {
+                router?.searchPresented = false
+            }
+        }
+        padCommandActions.previous = { [weak router] in router?.navigateSectionHistory(by: -1) }
+        padCommandActions.next = { [weak router] in router?.navigateSectionHistory(by: 1) }
+        padCommandActions.toggleSidebar = { post(.padSceneSidebarToggleRequested) }
     }
 
     private func bootstrapPadRouter() {

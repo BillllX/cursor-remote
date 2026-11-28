@@ -14,7 +14,7 @@ struct JieboSurfaces {
     var user: UInt32
 }
 
-enum JieboPalette: String, CaseIterable, Identifiable {
+enum JieboPalette: String, CaseIterable, Identifiable, Sendable {
     case sticker, jiebo, neutral, paper, sand, pine, cool, ink, night, clay
 
     var id: String { rawValue }
@@ -117,7 +117,7 @@ enum JieboPalette: String, CaseIterable, Identifiable {
     var swatch: Color { Color(hex: light.accent) }
 }
 
-enum JieboAppearance: String, CaseIterable, Identifiable {
+enum JieboAppearance: String, CaseIterable, Identifiable, Sendable {
     case system, light, dark
 
     var id: String { rawValue }

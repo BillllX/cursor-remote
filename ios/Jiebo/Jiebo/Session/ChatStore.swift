@@ -244,8 +244,13 @@ final class ChatStore {
     var assistantName = AssistantDefaults.name
     /// 个人助理今日页/收件箱/记忆。ready 后拉一次，之后靠网关推送
     var assistantState: AssistantState? {
-        didSet { refreshWidgetSnapshotIfNeeded() }
+        didSet {
+            assistantProjectionVersion &+= 1
+            refreshWidgetSnapshotIfNeeded()
+        }
     }
+    /// 任意来源（网络、本地缓存、乐观更新、清空）改变 assistantState 时均递增，供 PadAssistantShell 缓存投影。
+    @ObservationIgnored var assistantProjectionVersion: UInt64 = 0
     /// Revision at which the retained memory projection was actually fetched.
     @ObservationIgnored var assistantMemoryRevision: Int?
     /// 只由网络确认推进；缓存水合不伪装成网关响应。
@@ -575,7 +580,18 @@ final class ChatStore {
     // MARK: P3 - @补全 / 文件清单 / Quick Look / undo
     /// 当前会话工作区的文件索引（list_files query:"" 的全量结果）
     var fileIndex: [String] = []
-    var fileIndexRequestChatId: String?
+    var fileIndexRequestChatId: String? {
+        didSet {
+            guard oldValue != fileIndexRequestChatId else { return }
+            if let oldValue { invalidateMergedFileTreeCache(for: oldValue) }
+            if let next = fileIndexRequestChatId { invalidateMergedFileTreeCache(for: next) }
+            if oldValue == nil || fileIndexRequestChatId == nil {
+                invalidateMergedFileTreeCache(for: activeId)
+            }
+        }
+    }
+    /// 任意文件索引/目录缓存失效时递增，确保非活跃会话的 bootstrapSnapshot 更新也能唤醒 SwiftUI 订阅。
+    var fileTreeCacheVersion: UInt64 = 0
     @ObservationIgnored var fileIndexSyncGeneration: [String: Int] = [:]
     @ObservationIgnored var fileIndexInFlight: [String: Int] = [:]
     @ObservationIgnored var fileIndexRequestIds: [String: String] = [:]
@@ -591,6 +607,9 @@ final class ChatStore {
     var loadingDirsByChat: [String: Set<String>] = [:]
     var truncatedDirsByChat: [String: Set<String>] = [:]
     @ObservationIgnored var loadedDirsByChat: [String: Set<String>] = [:]
+    @ObservationIgnored var mergedPathsCacheByChat: [String: [String]] = [:]
+    @ObservationIgnored var mentionFilePoolCacheByChat: [String: [String]] = [:]
+    @ObservationIgnored var mentionRankTasksByChat: [String: Task<Void, Never>] = [:]
     /// @补全候选（按会话隔离，防止 iPad 多窗口互相串台或误清空）
     var mentionSuggestionsByChat: [String: [String]] = [:]
     var mentionSuggestions: [String] {

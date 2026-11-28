@@ -6,9 +6,15 @@ struct FileBrowserSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.sceneSessionState) private var sceneSession
     @State private var filter = ""
+    @State private var filtered: [String] = []
+    @State private var filterTask: Task<Void, Never>?
 
     let chatId: String
     let onPick: (String) -> Void
+
+    private var basePaths: [String] {
+        store.mentionFilePool(for: chatId)
+    }
 
     var body: some View {
         NavigationStack {
@@ -76,15 +82,40 @@ struct FileBrowserSheet: View {
                     Button("完成") { dismiss() }
                 }
             }
-            .onAppear { store.requestFileIndex(chatId: chatId, userInitiated: true) }
+            .onAppear {
+                store.requestFileIndex(chatId: chatId, userInitiated: true)
+                refreshFiltered(immediate: true)
+            }
+            .onChange(of: basePaths) { _, _ in refreshFiltered(immediate: true) }
+            .onChange(of: filter) { _, _ in refreshFiltered(immediate: false) }
+            .onDisappear { filterTask?.cancel(); filterTask = nil }
         }
         .presentationDetents([.medium, .large])
     }
 
-    private var filtered: [String] {
-        let base = store.mergedFileTreePaths(for: chatId).filter { !$0.hasSuffix("/") }
+    private func refreshFiltered(immediate: Bool) {
+        filterTask?.cancel()
+        let pool = basePaths
         let q = filter.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return base }
-        return ChatStore.rankMentions(base, query: q, limit: 500)
+        if q.isEmpty {
+            filterTask = nil
+            filtered = pool
+            return
+        }
+        filterTask = Task { @MainActor in
+            if !immediate {
+                try? await Task.sleep(for: .milliseconds(120))
+                guard !Task.isCancelled else { return }
+            }
+            if pool.count > 1000 {
+                let ranked = await Task.detached(priority: .userInitiated) {
+                    ChatStore.rankMentions(pool, query: q, limit: 500)
+                }.value
+                guard !Task.isCancelled else { return }
+                filtered = ranked
+            } else {
+                filtered = ChatStore.rankMentions(pool, query: q, limit: 500)
+            }
+        }
     }
 }

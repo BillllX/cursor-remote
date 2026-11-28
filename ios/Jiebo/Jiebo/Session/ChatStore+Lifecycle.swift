@@ -399,10 +399,13 @@ extension ChatStore {
         loadingDirsByChat = [:]
         truncatedDirsByChat = [:]
         loadedDirsByChat = [:]
+        invalidateMergedFileTreeCache()
         fileBrowserOpen = false // 切租户/登出时文件浏览器不能还挂着（Grok R2 MINOR）
         mentionQueryByChat = [:]
         for task in mentionTasksByChat.values { task.cancel() }
         mentionTasksByChat = [:]
+        for task in mentionRankTasksByChat.values { task.cancel() }
+        mentionRankTasksByChat = [:]
         mentionSuggestionsByChat = [:]
         checkpointsByChat = [:]
         notedCheckpointId = nil
