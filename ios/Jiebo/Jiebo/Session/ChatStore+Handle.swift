@@ -812,6 +812,7 @@ extension ChatStore {
             }
             // 回显的 sha 与页签当前要的版本不一致：换版本前发出的迟到回包，丢掉
             guard replySha == previewTabs[index].readSha else { break }
+            cancelPreviewWatchdog(path: path)
             var tab = previewTabs[index]
             tab.loading = false
             if let error {

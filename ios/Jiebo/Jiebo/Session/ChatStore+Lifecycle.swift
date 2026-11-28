@@ -354,6 +354,7 @@ extension ChatStore {
         shellMemo = nil
         diskBodyCursors = [:]
         diskPrependIds = []
+        cancelAllPreviewWatchdogs()
         previewTabs = []
         previewActivePath = nil
         runningChatIds = []

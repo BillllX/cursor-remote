@@ -648,6 +648,8 @@ final class ChatStore {
     // MARK: P5 - 预览面板（右侧 overlay，对齐网页 FilePreview）
     /// 打开的预览页签（上限 8，超出挤掉最旧的，对齐网页 slice(-8)）
     var previewTabs: [PreviewTab] = []
+    /// path → 8s 读取超时看门狗；新请求/回包/关闭/登出时取消，避免旧超时误杀重试请求
+    @ObservationIgnored var previewWatchdogs: [String: Task<Void, Never>] = [:]
     /// 当前选中页签；非 nil 即面板打开
     var previewActivePath: String?
     /// 网页 preview-max：收起后页签还在，点「预览」芯片再展开。

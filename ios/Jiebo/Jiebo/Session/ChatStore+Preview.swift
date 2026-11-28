@@ -87,15 +87,27 @@ extension ChatStore {
 
     /// loading 看门狗：outbox 挤掉/服务端丢包时给页签一个出口（网页 2.5s×4 重试的简化版）
     func armPreviewWatchdog(path: String) {
-        Task { @MainActor [weak self] in
+        previewWatchdogs.removeValue(forKey: path)?.cancel()
+        previewWatchdogs[path] = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(8))
-            guard let self, let index = self.previewTabs.firstIndex(where: { $0.path == path }) else { return }
+            guard let self, !Task.isCancelled else { return }
+            self.previewWatchdogs[path] = nil
+            guard let index = self.previewTabs.firstIndex(where: { $0.path == path }) else { return }
             let tab = self.previewTabs[index]
             if tab.loading, tab.content == nil, tab.error == nil {
                 self.previewTabs[index].loading = false
                 self.previewTabs[index].error = self.contentReadBlockedTitle() ?? "读取超时。点重试再试一次。"
             }
         }
+    }
+
+    func cancelPreviewWatchdog(path: String) {
+        previewWatchdogs.removeValue(forKey: path)?.cancel()
+    }
+
+    func cancelAllPreviewWatchdogs() {
+        for task in previewWatchdogs.values { task.cancel() }
+        previewWatchdogs.removeAll()
     }
 
     /// 工具卡「看改动」入口：归一路径后按类型路由——skipDiff 类型走 openPreview
@@ -302,7 +314,13 @@ extension ChatStore {
         let tabCwd = pinnedChatId.flatMap { id in chats.first { $0.id == id }?.cwd } ?? cwd
         let tab = PreviewTab(path: path, kind: resolved, diff: diff, content: nil, error: nil, loading: true, url: nil, media: nil, chatId: pinnedChatId, cwd: tabCwd, sha: wantSha, diffSha: wantDiffSha, fromCard: pinnedChatId != nil)
         previewTabs.append(tab)
-        if previewTabs.count > 8 { previewTabs.removeFirst(previewTabs.count - 8) }
+        if previewTabs.count > 8 {
+            let overflow = previewTabs.count - 8
+            for dropped in previewTabs.prefix(overflow) {
+                cancelPreviewWatchdog(path: dropped.path)
+            }
+            previewTabs.removeFirst(overflow)
+        }
         previewActivePath = path
         previewExpanded = true
         sendTabRead(tab)
@@ -369,6 +387,7 @@ extension ChatStore {
 
     /// 关掉正在看的页签就收起面板，不自动换成别的页签
     func closePreviewTab(_ path: String) {
+        cancelPreviewWatchdog(path: path)
         previewTabs.removeAll { $0.path == path }
         if previewActivePath == path {
             previewActivePath = nil
@@ -423,20 +442,52 @@ extension ChatStore {
                 request.timeoutInterval = 60
                 let (data, response) = try await AppTrafficHTTP.data(for: request, category: "预览正文下载")
                 let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-                guard (200 ..< 300).contains(code), let text = String(data: data, encoding: .utf8) else {
+                guard (200 ..< 300).contains(code) else {
+                    throw PreviewError.http(code)
+                }
+                let contentLimit = Self.contentSaveLimit
+                // 大文本 UTF-8 解码与超限临时文件落盘移出主线程，避免数 MB 文本阻塞交互
+                enum DecodedPreview {
+                    case inline(String)
+                    case externalFile(URL, String)
+                    case failed
+                }
+                let decoded: DecodedPreview? = await Task.detached(priority: .userInitiated) {
+                    guard let text = String(data: data, encoding: .utf8) else { return nil }
+                    if text.utf16.count <= contentLimit {
+                        return .inline(text)
+                    }
+                    let filename = (path as NSString).lastPathComponent
+                    let ext = (filename as NSString).pathExtension
+                    let tempURL = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("jiebo-preview-\(UUID().uuidString)")
+                        .appendingPathExtension(ext.isEmpty ? "txt" : ext)
+                    guard (try? data.write(to: tempURL, options: .atomic)) != nil else {
+                        return .failed
+                    }
+                    return .externalFile(tempURL, filename.isEmpty ? tempURL.lastPathComponent : filename)
+                }.value
+                guard let decoded else {
                     throw PreviewError.http(code)
                 }
                 guard tenantId == tenantAtStart,
                       let index = previewTabs.firstIndex(where: { $0.path == path }),
                       previewTabs[index].readSha == shaAtStart, // 期间换了版本的不写旧版本正文
+                      previewTabs[index].mediaURL == url, // 期间重试/刷新换了新票据 URL 的不写旧水合结果
                       previewTabs[index].content == nil // 期间 WS 已补上 content 的不覆盖
-                else { return }
-                switch retainPreviewBody(text, path: path) {
+                else {
+                    if case .externalFile(let tempURL, _) = decoded {
+                        try? FileManager.default.removeItem(at: tempURL)
+                    }
+                    return
+                }
+                switch decoded {
                 case .inline(let kept):
                     previewTabs[index].content = kept
                     previewTabs[index].external = false
                     previewTabs[index].error = nil
-                case .system:
+                case .externalFile(let tempURL, let displayName):
+                    setPreviewFile(PreviewFile(url: tempURL, name: displayName))
                     previewTabs[index].content = nil
                     previewTabs[index].external = true
                     previewTabs[index].error = nil
@@ -450,6 +501,7 @@ extension ChatStore {
                 guard tenantId == tenantAtStart,
                       let index = previewTabs.firstIndex(where: { $0.path == path }),
                       previewTabs[index].readSha == shaAtStart,
+                      previewTabs[index].mediaURL == url,
                       previewTabs[index].content == nil // 已有内容时不盖错误
                 else { return }
                 previewTabs[index].loading = false

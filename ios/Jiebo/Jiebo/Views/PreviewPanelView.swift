@@ -23,9 +23,17 @@ struct PreviewPanelView: View {
     @State private var discardConfirm = false
     @State private var pendingDiscard: (() -> Void)?
 
+    private struct TabIdentity: Equatable {
+        let path: String
+        let diff: Bool
+        let chatId: String?
+        let cwd: String?
+        let readSha: String?
+    }
+
     private var activeTab: PreviewTab { editing ? (editingOrigin ?? tab) : tab }
-    private var tabIdentity: String {
-        "\(tab.path)\u{0}\(tab.diff)\u{0}\(tab.chatId ?? "")\u{0}\(tab.cwd ?? "")\u{0}\(tab.readSha ?? "")"
+    private var tabIdentity: TabIdentity {
+        TabIdentity(path: tab.path, diff: tab.diff, chatId: tab.chatId, cwd: tab.cwd, readSha: tab.readSha)
     }
 
     private var compact: Bool { sizeClass == .compact }
@@ -854,7 +862,11 @@ struct PreviewContentView: View {
                 // P5d：画布运行时（同域 /canvas-runtime）；本地 dev 无 web 路由 → 自动降级源码
                 if let text = tab.content {
                     if tab.showSource || GatewayConfig.canvasRuntimeURL == nil {
-                        CodeFileView(content: text).equatable()
+                        CodeFileView(
+                            content: text,
+                            palette: JieboTheme.shared.palette,
+                            appearance: JieboTheme.shared.appearance
+                        ).equatable()
                     } else {
                         CanvasFileView(
                             source: text,
@@ -880,7 +892,11 @@ struct PreviewContentView: View {
     private var textContent: some View {
         if let text = tab.content {
             if tab.diff {
-                DiffFileView(content: text).equatable()
+                DiffFileView(
+                    content: text,
+                    palette: JieboTheme.shared.palette,
+                    appearance: JieboTheme.shared.appearance
+                ).equatable()
             } else {
                 switch tab.kind {
                 case .markdown:
@@ -888,7 +904,11 @@ struct PreviewContentView: View {
                         .id(tab.path) // 页签级 @State 隔离（对齐 canvas 分支）
                 default:
                     // text / canvas（P5d 前按源码）都走代码视图
-                    CodeFileView(content: text).equatable()
+                    CodeFileView(
+                        content: text,
+                        palette: JieboTheme.shared.palette,
+                        appearance: JieboTheme.shared.appearance
+                    ).equatable()
                 }
             }
         } else if tab.mediaURL != nil {
@@ -939,40 +959,56 @@ struct PreviewContentView: View {
 private enum PreviewParsedLineCache {
     private static let lock = NSLock()
     private static let maxEntries = 4
-    private nonisolated(unsafe) static var codeEntries: [(content: String, lines: [String])] = []
-    private nonisolated(unsafe) static var diffEntries: [(content: String, rows: [DiffFileView.Row])] = []
+    /// 超过该字节数且未命中缓存时转入后台拆行，避免大源码/Diff 首次打开阻塞滑入动画。
+    static let asyncThresholdBytes = 16_384
+    private nonisolated(unsafe) static var codeEntries: [(byteCount: Int, content: String, lines: [String])] = []
+    private nonisolated(unsafe) static var diffEntries: [(byteCount: Int, content: String, rows: [DiffFileView.Row])] = []
 
-    nonisolated static func codeLines(for content: String) -> [String] {
+    nonisolated static func cachedCodeLines(for content: String) -> [String]? {
+        let byteCount = content.utf8.count
         lock.lock()
-        if let idx = codeEntries.firstIndex(where: { $0.content == content }) {
+        defer { lock.unlock() }
+        if let idx = codeEntries.firstIndex(where: { $0.byteCount == byteCount && $0.content == content }) {
             let entry = codeEntries.remove(at: idx)
             codeEntries.append(entry)
-            lock.unlock()
             return entry.lines
         }
-        lock.unlock()
+        return nil
+    }
 
+    nonisolated static func codeLines(for content: String) -> [String] {
+        if let cached = cachedCodeLines(for: content) {
+            return cached
+        }
         // 直接按 LF/CRLF 字形簇拆行，避免整篇大文件 replacingOccurrences 整份拷贝
+        let byteCount = content.utf8.count
         let lines = content.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" }).map(String.init)
         lock.lock()
-        if !codeEntries.contains(where: { $0.content == content }) {
+        if !codeEntries.contains(where: { $0.byteCount == byteCount && $0.content == content }) {
             if codeEntries.count >= maxEntries { codeEntries.removeFirst() }
-            codeEntries.append((content, lines))
+            codeEntries.append((byteCount, content, lines))
         }
         lock.unlock()
         return lines
     }
 
-    nonisolated static func diffRows(for content: String) -> [DiffFileView.Row] {
+    nonisolated static func cachedDiffRows(for content: String) -> [DiffFileView.Row]? {
+        let byteCount = content.utf8.count
         lock.lock()
-        if let idx = diffEntries.firstIndex(where: { $0.content == content }) {
+        defer { lock.unlock() }
+        if let idx = diffEntries.firstIndex(where: { $0.byteCount == byteCount && $0.content == content }) {
             let entry = diffEntries.remove(at: idx)
             diffEntries.append(entry)
-            lock.unlock()
             return entry.rows
         }
-        lock.unlock()
+        return nil
+    }
 
+    nonisolated static func diffRows(for content: String) -> [DiffFileView.Row] {
+        if let cached = cachedDiffRows(for: content) {
+            return cached
+        }
+        let byteCount = content.utf8.count
         let lines = content.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" })
         var parsed: [DiffFileView.Row] = []
         parsed.reserveCapacity(lines.count)
@@ -999,9 +1035,9 @@ private enum PreviewParsedLineCache {
             parsed.append(DiffFileView.Row(id: index, kind: kind, text: line.isEmpty ? " " : line))
         }
         lock.lock()
-        if !diffEntries.contains(where: { $0.content == content }) {
+        if !diffEntries.contains(where: { $0.byteCount == byteCount && $0.content == content }) {
             if diffEntries.count >= maxEntries { diffEntries.removeFirst() }
-            diffEntries.append((content, parsed))
+            diffEntries.append((byteCount, content, parsed))
         }
         lock.unlock()
         return parsed
@@ -1013,38 +1049,78 @@ private enum PreviewParsedLineCache {
 /// 行号列因此始终可见。跨行复制用头部的「复制全部」。
 struct CodeFileView: View, Equatable {
     let content: String
+    let palette: JieboPalette
+    let appearance: JieboAppearance
+    @State private var asyncParsed: (content: String, lines: [String])?
 
     static func == (lhs: CodeFileView, rhs: CodeFileView) -> Bool {
         lhs.content == rhs.content
+            && lhs.palette == rhs.palette
+            && lhs.appearance == rhs.appearance
     }
 
-    init(content: String) {
+    init(
+        content: String,
+        palette: JieboPalette = JieboTheme.shared.palette,
+        appearance: JieboAppearance = JieboTheme.shared.appearance
+    ) {
         self.content = content
+        self.palette = palette
+        self.appearance = appearance
+    }
+
+    private var resolvedLines: [String]? {
+        if let cached = PreviewParsedLineCache.cachedCodeLines(for: content) {
+            return cached
+        }
+        if let asyncParsed, asyncParsed.content == content {
+            return asyncParsed.lines
+        }
+        if content.utf8.count <= PreviewParsedLineCache.asyncThresholdBytes {
+            return PreviewParsedLineCache.codeLines(for: content)
+        }
+        return nil
     }
 
     var body: some View {
-        let lines = PreviewParsedLineCache.codeLines(for: content)
-        ScrollView(.vertical, showsIndicators: true) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                    HStack(alignment: .firstTextBaseline, spacing: 0) {
-                        Text("\(index + 1)")
-                            .font(JieboFont.monoText(.caption2))
-                            .foregroundStyle(JieboColor.dim)
-                            .frame(width: 44, alignment: .trailing)
-                            .padding(.trailing, 10)
-                        Text(line.isEmpty ? " " : line)
-                            .font(JieboFont.monoText(.caption))
-                            .foregroundStyle(JieboColor.ink)
-                            .textSelection(.enabled) // P6：代码行可选中复制（行号列不选）
-                            .frame(maxWidth: .infinity, alignment: .leading)
+        Group {
+            if let lines = resolvedLines {
+                ScrollView(.vertical, showsIndicators: true) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(lines.indices, id: \.self) { index in
+                            let line = lines[index]
+                            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                                Text("\(index + 1)")
+                                    .font(JieboFont.monoText(.caption2))
+                                    .foregroundStyle(JieboColor.dim)
+                                    .frame(width: 44, alignment: .trailing)
+                                    .padding(.trailing, 10)
+                                Text(line.isEmpty ? " " : line)
+                                    .font(JieboFont.monoText(.caption))
+                                    .foregroundStyle(JieboColor.ink)
+                                    .textSelection(.enabled) // P6：代码行可选中复制（行号列不选）
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .padding(.vertical, 1)
+                        }
                     }
-                    .padding(.vertical, 1)
+                    .padding(10)
                 }
+            } else {
+                ProgressView().controlSize(.small).tint(JieboColor.dim)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .padding(10)
         }
         .background(JieboColor.paper)
+        .task(id: content) {
+            guard resolvedLines == nil else { return }
+            let target = content
+            let lines = await Task.detached(priority: .userInitiated) {
+                PreviewParsedLineCache.codeLines(for: target)
+            }.value
+            guard !Task.isCancelled else { return }
+            asyncParsed = (target, lines)
+        }
     }
 }
 
@@ -1058,39 +1134,78 @@ struct DiffFileView: View, Equatable {
     }
 
     let content: String
+    let palette: JieboPalette
+    let appearance: JieboAppearance
+    @State private var asyncParsed: (content: String, rows: [Row])?
 
     static func == (lhs: DiffFileView, rhs: DiffFileView) -> Bool {
         lhs.content == rhs.content
+            && lhs.palette == rhs.palette
+            && lhs.appearance == rhs.appearance
     }
 
-    init(content: String) {
+    init(
+        content: String,
+        palette: JieboPalette = JieboTheme.shared.palette,
+        appearance: JieboAppearance = JieboTheme.shared.appearance
+    ) {
         self.content = content
+        self.palette = palette
+        self.appearance = appearance
+    }
+
+    private var resolvedRows: [Row]? {
+        if let cached = PreviewParsedLineCache.cachedDiffRows(for: content) {
+            return cached
+        }
+        if let asyncParsed, asyncParsed.content == content {
+            return asyncParsed.rows
+        }
+        if content.utf8.count <= PreviewParsedLineCache.asyncThresholdBytes {
+            return PreviewParsedLineCache.diffRows(for: content)
+        }
+        return nil
     }
 
     var body: some View {
-        let rows = PreviewParsedLineCache.diffRows(for: content)
-        ScrollView(.vertical, showsIndicators: true) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(rows) { row in
-                    HStack(spacing: 0) {
-                        // 左侧色条：折行后仍能认出同一逻辑行的归属
-                        Rectangle()
-                            .fill(barColor(row.kind))
-                            .frame(width: 3)
-                        Text(row.text)
-                            .font(JieboFont.monoText(.caption))
-                            .foregroundStyle(foreground(row.kind))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.leading, 9)
-                            .padding(.trailing, 12)
-                            .padding(.vertical, 1)
+        Group {
+            if let rows = resolvedRows {
+                ScrollView(.vertical, showsIndicators: true) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(rows) { row in
+                            HStack(spacing: 0) {
+                                // 左侧色条：折行后仍能认出同一逻辑行的归属
+                                Rectangle()
+                                    .fill(barColor(row.kind))
+                                    .frame(width: 3)
+                                Text(row.text)
+                                    .font(JieboFont.monoText(.caption))
+                                    .foregroundStyle(foreground(row.kind))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.leading, 9)
+                                    .padding(.trailing, 12)
+                                    .padding(.vertical, 1)
+                            }
+                            .background(background(row.kind))
+                        }
                     }
-                    .background(background(row.kind))
+                    .padding(.vertical, 10)
                 }
+            } else {
+                ProgressView().controlSize(.small).tint(JieboColor.dim)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .padding(.vertical, 10)
         }
         .background(JieboColor.paper)
+        .task(id: content) {
+            guard resolvedRows == nil else { return }
+            let target = content
+            let rows = await Task.detached(priority: .userInitiated) {
+                PreviewParsedLineCache.diffRows(for: target)
+            }.value
+            guard !Task.isCancelled else { return }
+            asyncParsed = (target, rows)
+        }
     }
 
     private func barColor(_ kind: RowKind) -> Color {

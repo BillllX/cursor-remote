@@ -53,6 +53,26 @@ struct CanvasFileView: View {
         return nil
     }
 
+    private struct CanvasTaskKey: Equatable {
+        let boot: Int
+        let path: String
+        let chatId: String
+        let source: String
+        let connected: Bool
+        let unlocked: Bool
+    }
+
+    private var taskKey: CanvasTaskKey {
+        CanvasTaskKey(
+            boot: boot,
+            path: path,
+            chatId: chatId,
+            source: source,
+            connected: store.connected,
+            unlocked: store.unlocked
+        )
+    }
+
     var body: some View {
         ZStack {
             CanvasWebView(
@@ -137,7 +157,7 @@ struct CanvasFileView: View {
             didReady = false
             boot += 1
         }
-        .task(id: "\(boot)\u{0}\(path)\u{0}\(chatId)\u{0}\(source)\u{0}\(store.connected)\u{0}\(store.unlocked)") {
+        .task(id: taskKey) {
             guard store.unlocked, store.connected else { return }
             try? await Task.sleep(for: .seconds(didReady ? 8 : 15))
             guard !Task.isCancelled, status != .ready else { return }
@@ -224,8 +244,16 @@ private struct CanvasWebView: UIViewRepresentable {
         private var seq = 0
         /// 已收到 loaded 的 seq；seq > loadedSeq 时按 250ms 间隔重发（对齐网页 setInterval 250）
         private var loadedSeq = 0
-        /// \0 分隔（对齐网页运行时 identity），避免 path 含空格时边界碰撞
-        private var lastSentIdentity = ""
+        private struct LoadIdentity: Equatable {
+            let path: String
+            let chatId: String
+            let source: String
+            let palette: String
+            let themeKind: String
+        }
+
+        /// 结构化判等替代整份 source 字符串拼接，避免每次 updateUIView 拷贝整篇源码
+        private var lastSentIdentity: LoadIdentity?
         private var resendWork: DispatchWorkItem?
 
         init(_ parent: CanvasWebView) { self.parent = parent }
@@ -310,7 +338,13 @@ private struct CanvasWebView: UIViewRepresentable {
         }
 
         func pushLoad(_ webView: WKWebView, force: Bool) {
-            let identity = "\(parent.path)\u{0}\(parent.chatId)\u{0}\(parent.source)\u{0}\(parent.palette)\u{0}\(parent.themeKind)"
+            let identity = LoadIdentity(
+                path: parent.path,
+                chatId: parent.chatId,
+                source: parent.source,
+                palette: parent.palette,
+                themeKind: parent.themeKind
+            )
             if !force, identity == lastSentIdentity { return }
             lastSentIdentity = identity
             sendLoad(webView)

@@ -3,11 +3,16 @@ import Foundation
 // 移植 web/lib/preview.ts 的 resolveAssetPath / mediaSrc / rewriteHtml，
 // 让 html/markdown 预览的相对资源经 /media 票据加载，并注入 CSP（对齐网页沙箱强度）。
 
+private let assetSchemeRegex = try! NSRegularExpression(pattern: #"^[a-z][a-z0-9+.-]*:"#, options: [])
+
 /// 相对路径 → 工作区路径（对齐网页 resolveAssetPath：#/协议/绝对 URL 返回 nil）
 func resolveAssetPath(fromFile: String, href: String) -> String? {
     let raw = href.trimmingCharacters(in: .whitespaces)
     if raw.isEmpty || raw.hasPrefix("#") || raw.hasPrefix("//") { return nil }
-    if raw.range(of: #"^[a-z][a-z0-9+.-]*:"#, options: .regularExpression) != nil { return nil }
+    if raw.contains(":"),
+       assetSchemeRegex.firstMatch(in: raw, options: [], range: NSRange(raw.startIndex ..< raw.endIndex, in: raw)) != nil {
+        return nil
+    }
     let clean = raw.split(separator: "#").first.map(String.init)?.split(separator: "?").first.map(String.init) ?? ""
     if clean.isEmpty { return nil }
     var from = fromFile.replacingOccurrences(of: "\\", with: "/")
@@ -45,6 +50,8 @@ func mediaSrc(path: String, chatId: String, media: MediaTicket?, rev: String? = 
 private let cspMeta = "<meta http-equiv=\"Content-Security-Policy\" content=\"base-uri 'none'; object-src 'none'; form-action 'none'\">"
 private let htmlAssetAttrRegex = try? NSRegularExpression(pattern: #"(?i)(\s)(src|href)=(["'])([^"']*)\3"#, options: [])
 private let htmlStaticExtRegex = try? NSRegularExpression(pattern: #"\.(css|png|jpe?g|gif|webp|svg|ico|woff2?|ttf)(\?|$)"#, options: [])
+private let htmlHeadTagRegex = try! NSRegularExpression(pattern: #"<head(?:\s[^>]*)?>"#, options: [.caseInsensitive])
+private let htmlRootTagRegex = try! NSRegularExpression(pattern: #"<html[^>]*>"#, options: [.caseInsensitive])
 
 /// 重写 html 的 src/href（对齐网页 rewriteHtml）：相对资源 → toSrc(工作区路径)，
 /// http 的 src 只放行常见静态扩展，javascript: 剥成空，最后注入 CSP
@@ -53,6 +60,7 @@ func rewriteHtml(source: String, fromFile: String, toSrc: (String) -> String) ->
     let nsSource = source as NSString
     let matches = regex.matches(in: source, range: NSRange(location: 0, length: nsSource.length))
     var result = ""
+    result.reserveCapacity(source.utf8.count + 256)
     var cursor = 0
     for match in matches {
         let full = match.range
@@ -90,11 +98,14 @@ func rewriteHtml(source: String, fromFile: String, toSrc: (String) -> String) ->
 
     // 注入 CSP（对齐网页：有 <head> 插 head 后，有 <html> 补 head，否则整篇包一层）。
     // 注意 <head[^>]*> 会误匹配 <header>（网页同款 bug），这里用 (?:\s[^>]*)? 收紧
-    if let range = result.range(of: #"<head(?:\s[^>]*)?>"#, options: .regularExpression) {
+    let resultRange = NSRange(result.startIndex ..< result.endIndex, in: result)
+    if let match = htmlHeadTagRegex.firstMatch(in: result, options: [], range: resultRange),
+       let range = Range(match.range, in: result) {
         result.insert(contentsOf: cspMeta, at: range.upperBound)
         return result
     }
-    if let range = result.range(of: #"<html[^>]*>"#, options: .regularExpression) {
+    if let match = htmlRootTagRegex.firstMatch(in: result, options: [], range: resultRange),
+       let range = Range(match.range, in: result) {
         result.insert(contentsOf: "<head>\(cspMeta)</head>", at: range.upperBound)
         return result
     }
@@ -183,22 +194,105 @@ private func escapeHtml(_ text: String) -> String {
         .replacingOccurrences(of: ">", with: "&gt;")
 }
 
+private let mdInlineImageRegex = try! NSRegularExpression(pattern: #"!\[([^\]]*)\]\(([^)\s]+)[^)]*\)"#, options: [])
+private let mdInlineLinkRegex = try! NSRegularExpression(pattern: #"\[([^\]]+)\]\(([^)\s]+)[^)]*\)"#, options: [])
+private let mdInlineCodeRegex = try! NSRegularExpression(pattern: #"`([^`]+)`"#, options: [])
+private let mdInlineBoldRegex = try! NSRegularExpression(pattern: #"\*\*([^*]+)\*\*"#, options: [])
+private let mdInlineItalicRegex = try! NSRegularExpression(pattern: #"(?<![*\w])\*([^*\n]+)\*(?![*\w])"#, options: [])
+private let mdInlineStrikeRegex = try! NSRegularExpression(pattern: #"~~([^~]+)~~"#, options: [])
+
+private func replaceRegex(_ regex: NSRegularExpression, in text: String, template: String) -> String {
+    let range = NSRange(location: 0, length: (text as NSString).length)
+    return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: template)
+}
+
 /// 行内语法：`code`、**bold**、*italic*、~~strike~~、![img](src)、[text](url)
+/// 预编译正则 + 字符存在预检，消除大文档逐行编译数千次正则的开销。
 private func inlineMarkdown(_ text: String) -> String {
     var out = escapeHtml(text)
-    out = out.replacingOccurrences(of: #"!\[([^\]]*)\]\(([^)\s]+)[^)]*\)"#, with: "<img alt=\"$1\" src=\"$2\">", options: .regularExpression)
-    out = out.replacingOccurrences(of: #"\[([^\]]+)\]\(([^)\s]+)[^)]*\)"#, with: "<a href=\"$2\">$1</a>", options: .regularExpression)
-    out = out.replacingOccurrences(of: #"`([^`]+)`"#, with: "<code>$1</code>", options: .regularExpression)
-    out = out.replacingOccurrences(of: #"\*\*([^*]+)\*\*"#, with: "<strong>$1</strong>", options: .regularExpression)
-    out = out.replacingOccurrences(of: #"(?<![*\w])\*([^*\n]+)\*(?![*\w])"#, with: "<em>$1</em>", options: .regularExpression)
-    out = out.replacingOccurrences(of: #"~~([^~]+)~~"#, with: "<del>$1</del>", options: .regularExpression)
+    if out.contains("[") {
+        if out.contains("![") {
+            out = replaceRegex(mdInlineImageRegex, in: out, template: "<img alt=\"$1\" src=\"$2\">")
+        }
+        if out.contains("[") && out.contains("](") {
+            out = replaceRegex(mdInlineLinkRegex, in: out, template: "<a href=\"$2\">$1</a>")
+        }
+    }
+    if out.contains("`") {
+        out = replaceRegex(mdInlineCodeRegex, in: out, template: "<code>$1</code>")
+    }
+    if out.contains("*") {
+        if out.contains("**") {
+            out = replaceRegex(mdInlineBoldRegex, in: out, template: "<strong>$1</strong>")
+        }
+        if out.contains("*") {
+            out = replaceRegex(mdInlineItalicRegex, in: out, template: "<em>$1</em>")
+        }
+    }
+    if out.contains("~~") {
+        out = replaceRegex(mdInlineStrikeRegex, in: out, template: "<del>$1</del>")
+    }
     return out
+}
+
+/// 零正则块级判定辅助：严格等价原正则语义
+private func parseMarkdownHeading(_ trimmed: String) -> (level: Int, content: String)? {
+    var idx = trimmed.startIndex
+    var level = 0
+    while idx < trimmed.endIndex, trimmed[idx] == "#", level < 6 {
+        level += 1
+        idx = trimmed.index(after: idx)
+    }
+    guard level > 0, idx < trimmed.endIndex, trimmed[idx].isWhitespace else { return nil }
+    while idx < trimmed.endIndex, trimmed[idx].isWhitespace {
+        idx = trimmed.index(after: idx)
+    }
+    return (level, String(trimmed[idx...]).trimmingCharacters(in: .whitespaces))
+}
+
+private func isMarkdownHorizontalRule(_ trimmed: String) -> Bool {
+    guard trimmed.count >= 3, let first = trimmed.first, first == "-" || first == "*" else { return false }
+    return trimmed.allSatisfy { $0 == first }
+}
+
+private func stripUnorderedListPrefix(_ trimmed: String) -> String? {
+    guard let first = trimmed.first, first == "-" || first == "*" || first == "+" else { return nil }
+    var idx = trimmed.index(after: trimmed.startIndex)
+    guard idx < trimmed.endIndex, trimmed[idx].isWhitespace else { return nil }
+    while idx < trimmed.endIndex, trimmed[idx].isWhitespace {
+        idx = trimmed.index(after: idx)
+    }
+    return String(trimmed[idx...])
+}
+
+private func stripOrderedListPrefix(_ trimmed: String) -> String? {
+    var idx = trimmed.startIndex
+    var hasDigit = false
+    while idx < trimmed.endIndex, trimmed[idx].wholeNumberValue != nil {
+        hasDigit = true
+        idx = trimmed.index(after: idx)
+    }
+    guard hasDigit, idx < trimmed.endIndex, trimmed[idx] == "." || trimmed[idx] == ")" else { return nil }
+    idx = trimmed.index(after: idx)
+    guard idx < trimmed.endIndex, trimmed[idx].isWhitespace else { return nil }
+    while idx < trimmed.endIndex, trimmed[idx].isWhitespace {
+        idx = trimmed.index(after: idx)
+    }
+    return String(trimmed[idx...])
+}
+
+private func isMarkdownTableSeparator(_ trimmed: String) -> Bool {
+    guard trimmed.count >= 3, trimmed.hasPrefix("|"), trimmed.hasSuffix("|") else { return false }
+    let inner = trimmed.dropFirst().dropLast()
+    guard !inner.isEmpty else { return false }
+    return inner.allSatisfy { $0 == "-" || $0 == ":" || $0 == "|" || $0.isWhitespace }
 }
 
 /// 块级语法：fenced code、标题、hr、引用、列表、表格、段落
 private func markdownBodyToHtml(_ markdown: String) -> String {
-    let lines = markdown.replacingOccurrences(of: "\r\n", with: "\n").split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    let lines = markdown.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" })
     var html = ""
+    html.reserveCapacity(markdown.utf8.count * 2)
     var index = 0
     var inCode = false
     var codeBuffer = ""
@@ -231,7 +325,8 @@ private func markdownBodyToHtml(_ markdown: String) -> String {
             continue
         }
         if inCode {
-            codeBuffer += line + "\n"
+            codeBuffer += line
+            codeBuffer += "\n"
             index += 1
             continue
         }
@@ -240,16 +335,13 @@ private func markdownBodyToHtml(_ markdown: String) -> String {
             index += 1
             continue
         }
-        if let heading = trimmed.range(of: #"^(#{1,6})\s+(.*)$"#, options: .regularExpression) {
+        if let heading = parseMarkdownHeading(trimmed) {
             flushParagraph(); flushList()
-            let text = String(trimmed[heading])
-            let level = text.prefix(while: { $0 == "#" }).count
-            let content = String(text.dropFirst(level)).trimmingCharacters(in: .whitespaces)
-            html += "<h\(level)>" + inlineMarkdown(content) + "</h\(level)>"
+            html += "<h\(heading.level)>" + inlineMarkdown(heading.content) + "</h\(heading.level)>"
             index += 1
             continue
         }
-        if trimmed.range(of: #"^(-{3,}|\*{3,})$"#, options: .regularExpression) != nil {
+        if isMarkdownHorizontalRule(trimmed) {
             flushParagraph(); flushList()
             html += "<hr>"
             index += 1
@@ -268,25 +360,23 @@ private func markdownBodyToHtml(_ markdown: String) -> String {
             html += "<blockquote>" + quote.map(inlineMarkdown).joined(separator: "<br>") + "</blockquote>"
             continue
         }
-        if trimmed.range(of: #"^[-*+]\s+"#, options: .regularExpression) != nil {
+        if let item = stripUnorderedListPrefix(trimmed) {
             flushParagraph()
             if listType != "ul" { flushList(); html += "<ul>"; listType = "ul" }
-            let item = trimmed.replacingOccurrences(of: #"^[-*+]\s+"#, with: "", options: .regularExpression)
             html += "<li>" + inlineMarkdown(item) + "</li>"
             index += 1
             continue
         }
-        if trimmed.range(of: #"^\d+[.)]\s+"#, options: .regularExpression) != nil {
+        if let item = stripOrderedListPrefix(trimmed) {
             flushParagraph()
             if listType != "ol" { flushList(); html += "<ol>"; listType = "ol" }
-            let item = trimmed.replacingOccurrences(of: #"^\d+[.)]\s+"#, with: "", options: .regularExpression)
             html += "<li>" + inlineMarkdown(item) + "</li>"
             index += 1
             continue
         }
         // 表格：| a | b | 紧跟 |---|---|
         if trimmed.hasPrefix("|"), index + 1 < lines.count,
-           lines[index + 1].trimmingCharacters(in: .whitespaces).range(of: #"^\|[\s:|-]+\|$"#, options: .regularExpression) != nil
+           isMarkdownTableSeparator(lines[index + 1].trimmingCharacters(in: .whitespaces))
         {
             flushParagraph(); flushList()
             let cells = splitMarkdownTableCells(trimmed)
@@ -300,7 +390,7 @@ private func markdownBodyToHtml(_ markdown: String) -> String {
             html += "</tbody></table>"
             continue
         }
-        paragraph.append(line)
+        paragraph.append(String(line))
         index += 1
     }
     if inCode { html += "<pre><code>" + escapeHtml(codeBuffer) + "</code></pre>" }
