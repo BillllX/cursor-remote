@@ -31,6 +31,8 @@ final class ActiveTurnBox {
 
     @ObservationIgnored var rawAssistant: String = ""
     @ObservationIgnored var rawThinking: String = ""
+    @ObservationIgnored var rawAssistantHasJeom = false
+    @ObservationIgnored var rawThinkingHasJeom = false
     @ObservationIgnored var touchedText = false
     @ObservationIgnored var touchedThinking = false
     @ObservationIgnored var touchedTools = false
@@ -69,6 +71,8 @@ final class ActiveTurnBox {
     func reset() {
         rawAssistant = ""
         rawThinking = ""
+        rawAssistantHasJeom = false
+        rawThinkingHasJeom = false
         touchedText = false
         touchedThinking = false
         touchedTools = false

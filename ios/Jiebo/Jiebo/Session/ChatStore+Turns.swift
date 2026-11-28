@@ -178,11 +178,12 @@ extension ChatStore {
         }
         applyPhoneChatPreferences(chatId: chatId)
         guard let session = chatSession(chatId) else { return }
-        let untitled = chats.first { $0.id == chatId }?.isUntitled ?? true
+        let untitled = session.isUntitled
         let targetModel = model(for: chatId)
         let targetMode = AgentMode.agent
         // P11：第三方模型无状态——历史随 prompt 上行；须在本地 turn 追加前组装（含运行中流式叠加层）
         let history = ChatStore.externalHistory(model: targetModel, turns: chatWithActiveOverlay(session).turns)
+        let promptImages = images.isEmpty ? [] : images.map(\.promptImage)
         // 对齐网页端：纯图时本地占位「（附图）」，prompt.text 留空由网关兜底
         var turn = Turn.blank(
             user: text.isEmpty ? "（附图）" : text,
@@ -190,7 +191,7 @@ extension ChatStore {
             mode: targetMode,
             running: !isBusy(chatId)
         )
-        turn.images = images.map(\.promptImage)
+        turn.images = promptImages
         if chatId == activeId {
             if !draft.isEmpty { draft = "" }
             if !pendingImages.isEmpty { pendingImages = [] }
@@ -205,26 +206,29 @@ extension ChatStore {
         }
         if !bannerError.isEmpty { bannerError = "" }
         if !notice.isEmpty { notice = "" }
-        patch(chatId) { chat in
+        var turnsIncomplete = false
+        patch(chatId, turnsTouched: true) { chat in
             var next = chat
             next.unread = false
             next.turns.append(turn)
+            turnsIncomplete = !next.turnsComplete
             return next
         }
         // P8 slim：turns 未加载完时的本地新 turn——登记后补齐时保留它，直到分页完成（Grok 评审 M2）
-        if chats.first(where: { $0.id == chatId })?.turnsComplete == false {
+        if turnsIncomplete {
             localTurnsPendingSync.insert(chatId)
         }
         let mentions = ChatStore.extractMentions(text)
+        let hasWorkspaceAgent = workspaceAgent(chatId: chatId) != nil
         send(.prompt(
             text: text,
             model: targetModel,
             mode: targetMode,
             chatId: chatId,
             files: mentions.isEmpty ? nil : mentions,
-            images: images.isEmpty ? nil : images.map(\.promptImage),
-            confirmWrites: workspaceAgent(chatId: chatId) == nil ? session.confirmWrites : false,
-            autoApprove: workspaceAgent(chatId: chatId) == nil ? nil : false,
+            images: promptImages.isEmpty ? nil : promptImages,
+            confirmWrites: hasWorkspaceAgent ? false : session.confirmWrites,
+            autoApprove: hasWorkspaceAgent ? false : nil,
             fresh: nil,
             nameChat: untitled,
             policy: session.policy,
@@ -240,22 +244,32 @@ extension ChatStore {
     /// 注意：history 在提交时组装——排队期间完成的 turn 不在其内（客户端权威设计的固有权衡）
     static func externalHistory(model: String?, turns: [Turn]) -> [HistoryItem]? {
         guard let model, model.contains(":") else { return nil }
-        var items: [HistoryItem] = []
-        for t in turns where !t.queued && t.error == nil && !t.deferred {
-            let user = t.user.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 从后往前收集最多 12 条，避免长会话把数百轮旧消息全部 trim/截取后再丢弃
+        var reversedItems: [HistoryItem] = []
+        reversedItems.reserveCapacity(12)
+        for t in turns.reversed() where !t.queued && t.error == nil && !t.deferred {
             let assistant = t.assistant.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !user.isEmpty { items.append(HistoryItem(role: "user", text: String(user.prefix(3000)))) }
-            if !assistant.isEmpty { items.append(HistoryItem(role: "assistant", text: String(assistant.prefix(3000)))) }
+            if !assistant.isEmpty {
+                reversedItems.append(HistoryItem(role: "assistant", text: String(assistant.prefix(3000))))
+                if reversedItems.count >= 12 { break }
+            }
+            let user = t.user.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !user.isEmpty {
+                reversedItems.append(HistoryItem(role: "user", text: String(user.prefix(3000))))
+                if reversedItems.count >= 12 { break }
+            }
         }
-        return items.isEmpty ? nil : Array(items.suffix(12))
+        return reversedItems.isEmpty ? nil : Array(reversedItems.reversed())
     }
 
     /// 与网页端同一规则：草稿里的 @路径 在发送时抽成 files 数组
     static func extractMentions(_ text: String) -> [String] {
+        guard text.contains("@") else { return [] }
         var out: [String] = []
+        var seen = Set<String>()
         for match in text.matches(of: /@(\S+)/) {
             let path = String(match.1)
-            if !path.isEmpty, !out.contains(path) { out.append(path) }
+            if !path.isEmpty, seen.insert(path).inserted { out.append(path) }
         }
         return out
     }

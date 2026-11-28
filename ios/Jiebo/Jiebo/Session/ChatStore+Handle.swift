@@ -209,6 +209,10 @@ extension ChatStore {
         case .syncAck(let rev, let ackRevs, let reviewOnly, let truncated):
             // P4b 回执：确认服务端收下了这些会话。保留回执只对齐版本，不把在途正文同步当成已落盘。
             serverSupportsP4 = true
+            let followedIds = Set(followedBodyChatIds())
+            let turnsCompleteById: [String: Bool]? = ackRevs.count > 1
+                ? Dictionary(chats.map { ($0.id, $0.turnsComplete) }, uniquingKeysWith: { _, latest in latest })
+                : nil
             for (id, chatRev) in ackRevs {
                 let prior = chatRevs[id]
                 chatRevs[id] = chatRev
@@ -236,8 +240,9 @@ extension ChatStore {
                 }
                 inflightChatIds.remove(id)
                 let base = inflightBases.removeValue(forKey: id)
-                let follow = followedBodyChatIds().contains(id)
-                guard chats.first(where: { $0.id == id })?.turnsComplete == true else {
+                let follow = followedIds.contains(id)
+                let isComplete = turnsCompleteById?[id] ?? (chats.first(where: { $0.id == id })?.turnsComplete == true)
+                guard isComplete else {
                     // 尾部还没标完整。回执里的版本若已经前进，不能继续把旧尾页当成最新。
                     if follow, prior != chatRev { ensureTurnsLoaded(id) }
                     continue
@@ -357,7 +362,7 @@ extension ChatStore {
                 workspaceAgents = items
             } else {
                 guard after == workspaceAgentsPendingCursor else { break }
-                var byPath = Dictionary(uniqueKeysWithValues: workspaceAgents.map { ($0.path, $0) })
+                var byPath = Dictionary(workspaceAgents.map { ($0.path, $0) }, uniquingKeysWith: { _, latest in latest })
                 for item in items { byPath[item.path] = item }
                 workspaceAgents = byPath.values.sorted { $0.directoryName < $1.directoryName }
             }
@@ -662,15 +667,24 @@ extension ChatStore {
             // 分页中途他端增删会索引漂移（去重防重不防漏）；漂移靠 digest→stored_chat 全量
             // 替换（或 deferred 降级重载）自愈，不在这里做复杂对账
             let page = decodedPage
-            let existing = Set(chats[index].turns.map(\.id))
+            // 一次构建 id -> 索引表，同时服务文件合并与新增去重，避免 O(P * N) 线性扫描
+            let existingIndexById = Dictionary(
+                chats[index].turns.enumerated().map { ($0.element.id, $0.offset) },
+                uniquingKeysWith: { first, _ in first }
+            )
             // 缓存基线可能已有同 id 回合但没有 files；分页去重前先合文件状态。
+            var fresh: [Turn] = []
+            fresh.reserveCapacity(page.count)
             for remote in page {
-                if let turnIndex = chats[index].turns.firstIndex(where: { $0.id == remote.id }) {
+                if let turnIndex = existingIndexById[remote.id] {
                     chats[index].turns[turnIndex] = chats[index].turns[turnIndex].mergingFiles(from: remote)
+                } else {
+                    fresh.append(remote)
                 }
             }
-            let fresh = page.filter { !existing.contains($0.id) }
-            chats[index].turns = fresh + chats[index].turns
+            if !fresh.isEmpty {
+                chats[index].turns = fresh + chats[index].turns
+            }
             invalidateTurnListMemo(chatId)
             loadedPageTurnCounts[chatId] = (loadedPageTurnCounts[chatId] ?? 0) + fresh.count
             loadPageCounts[chatId] = (loadPageCounts[chatId] ?? 0) + 1
@@ -879,11 +893,32 @@ extension ChatStore {
                 }
                 var seen = Set<String>()
                 var merged: [String] = []
-                for path in paths + localPool where seen.insert(path).inserted {
+                merged.reserveCapacity(paths.count + localPool.count)
+                for path in paths where seen.insert(path).inserted {
+                    merged.append(path)
+                }
+                for path in localPool where seen.insert(path).inserted {
                     merged.append(path)
                 }
                 mentionRankTasksByChat.removeValue(forKey: responseChatId)?.cancel()
-                mentionSuggestionsByChat[responseChatId] = ChatStore.rankMentions(merged, query: query)
+                if merged.count <= 200 {
+                    mentionSuggestionsByChat[responseChatId] = ChatStore.rankMentions(merged, query: query)
+                } else {
+                    let expectedQuery = query
+                    mentionRankTasksByChat[responseChatId] = Task { [weak self] in
+                        let ranked = await Task.detached(priority: .userInitiated) {
+                            ChatStore.rankMentions(merged, query: expectedQuery)
+                        }.value
+                        guard !Task.isCancelled, let self,
+                              !self.deletedIds.contains(responseChatId),
+                              self.mentionQueryByChat[responseChatId] == expectedQuery
+                        else { return }
+                        self.mentionRankTasksByChat[responseChatId] = nil
+                        if self.mentionSuggestionsByChat[responseChatId] != ranked {
+                            self.mentionSuggestionsByChat[responseChatId] = ranked
+                        }
+                    }
+                }
             } else {
                 guard query.isEmpty else { break }
                 if let filesError, !filesError.isEmpty {
@@ -1099,65 +1134,95 @@ extension ChatStore {
             box.turnId = baseTurn.id
             box.rawAssistant = baseTurn.assistant
             box.rawThinking = baseTurn.thinking
-            box.assistant = baseTurn.assistant.isEmpty ? "" : ReplyText.repair(baseTurn.assistant)
-            box.thinking = baseTurn.thinking.isEmpty ? "" : ReplyText.repair(baseTurn.thinking)
+            box.rawAssistantHasJeom = baseTurn.assistant.contains("점")
+            box.rawThinkingHasJeom = baseTurn.thinking.contains("점")
+            box.assistant = box.rawAssistantHasJeom ? ReplyText.repair(baseTurn.assistant) : baseTurn.assistant
+            box.thinking = box.rawThinkingHasJeom ? ReplyText.repair(baseTurn.thinking) : baseTurn.thinking
         }
         var touchedText = false
         var touchedThinking = false
         var touchedTools = false
         var addedExtraTool = false
+        // 同批次多条 toolOutput 按 callId 原地累积，避免对大 stdout 反复拷贝封装 JSONValue.object
+        var pendingToolRecords: [String: [String: JSONValue]] = [:]
+        var pendingToolIsExtra: [String: Int] = [:]
         for event in events {
             switch event {
             case .text(let text):
-                box.rawAssistant += text
-                touchedText = true
+                if !text.isEmpty {
+                    box.rawAssistant += text
+                    if !box.rawAssistantHasJeom, text.contains("점") {
+                        box.rawAssistantHasJeom = true
+                    }
+                    touchedText = true
+                }
             case .thinking(let text):
-                box.rawThinking += text
-                touchedThinking = true
+                if !text.isEmpty {
+                    box.rawThinking += text
+                    if !box.rawThinkingHasJeom, text.contains("점") {
+                        box.rawThinkingHasJeom = true
+                    }
+                    touchedThinking = true
+                }
             case .toolOutput(let callId, let stream, let chunk, let stdout, let stderr):
                 touchedTools = true
-                if let baseTool = baseTurn.tools.first(where: { $0.callId == callId }) {
-                    let current = box.toolOutputs[callId] ?? baseTool.result
-                    box.toolOutputs[callId] = mergeOutput(
-                        current,
-                        stream: stream,
-                        chunk: chunk,
-                        stdout: stdout,
-                        stderr: stderr
-                    )
-                } else if let idx = box.extraTools.firstIndex(where: { $0.callId == callId }) {
-                    box.extraTools[idx].result = mergeOutput(
-                        box.extraTools[idx].result,
-                        stream: stream,
-                        chunk: chunk,
-                        stdout: stdout,
-                        stderr: stderr
-                    )
-                } else {
-                    box.extraTools.append(ToolCall(
-                        callId: callId,
-                        name: "shell",
-                        args: nil,
-                        result: mergeOutput(nil, stream: stream, chunk: chunk, stdout: stdout, stderr: stderr),
-                        status: "running",
-                        parentCallId: nil,
-                        agent: nil,
-                        model: nil,
-                        at: nil
-                    ))
-                    addedExtraTool = true
+                if pendingToolRecords[callId] == nil {
+                    if let baseTool = baseTurn.tools.first(where: { $0.callId == callId }) {
+                        let current = box.toolOutputs[callId] ?? baseTool.result
+                        pendingToolRecords[callId] = initialOutputRecord(current)
+                    } else if let idx = box.extraTools.firstIndex(where: { $0.callId == callId }) {
+                        pendingToolRecords[callId] = initialOutputRecord(box.extraTools[idx].result)
+                        pendingToolIsExtra[callId] = idx
+                    } else {
+                        let newIdx = box.extraTools.count
+                        box.extraTools.append(ToolCall(
+                            callId: callId,
+                            name: "shell",
+                            args: nil,
+                            result: nil,
+                            status: "running",
+                            parentCallId: nil,
+                            agent: nil,
+                            model: nil,
+                            at: nil
+                        ))
+                        pendingToolRecords[callId] = initialOutputRecord(nil)
+                        pendingToolIsExtra[callId] = newIdx
+                        addedExtraTool = true
+                    }
                 }
+                if var record = pendingToolRecords[callId] {
+                    applyOutputChunk(&record, stream: stream, chunk: chunk, stdout: stdout, stderr: stderr)
+                    pendingToolRecords[callId] = record
+                }
+            }
+        }
+        for (callId, record) in pendingToolRecords {
+            let value = JSONValue.object(record)
+            if let extraIdx = pendingToolIsExtra[callId] {
+                box.extraTools[extraIdx].result = value
+            } else {
+                box.toolOutputs[callId] = value
             }
         }
         if touchedText {
             box.touchedText = true
-            let repaired = ReplyText.repair(box.rawAssistant)
-            if box.assistant != repaired { box.assistant = repaired }
+            if box.rawAssistantHasJeom {
+                let repaired = ReplyText.repair(box.rawAssistant)
+                if box.assistant != repaired { box.assistant = repaired }
+            } else {
+                // 未出现韩文异常字符时直接共享 COW 缓冲，避免流式每 50ms 对数万字全文扫描与逐字节判等
+                box.assistant = box.rawAssistant
+            }
         }
         if touchedThinking {
             box.touchedThinking = true
-            let repaired = ReplyText.repair(box.rawThinking)
-            if box.thinking != repaired { box.thinking = repaired }
+            if box.rawThinkingHasJeom {
+                let repaired = ReplyText.repair(box.rawThinking)
+                if box.thinking != repaired { box.thinking = repaired }
+            } else {
+                box.thinking = box.rawThinking
+            }
         }
         if touchedTools {
             box.touchedTools = true
@@ -1230,15 +1295,24 @@ extension ServerMessage {
     }
 }
 
-private func mergeOutput(_ result: JSONValue?, stream: String?, chunk: String?, stdout: String?, stderr: String?) -> JSONValue {
+private func initialOutputRecord(_ result: JSONValue?) -> [String: JSONValue] {
     var record = result?.object ?? [:]
     if record["stdout"] == nil { record["stdout"] = .string("") }
     if record["stderr"] == nil { record["stderr"] = .string("") }
+    return record
+}
+
+private func applyOutputChunk(
+    _ record: inout [String: JSONValue],
+    stream: String?,
+    chunk: String?,
+    stdout: String?,
+    stderr: String?
+) {
     if let stdout { record["stdout"] = .string(stdout) }
     if let stderr { record["stderr"] = .string(stderr) }
     if let chunk, !chunk.isEmpty {
         let key = stream == "stderr" ? "stderr" : "stdout"
         record[key] = .string((record[key]?.string ?? "") + chunk)
     }
-    return .object(record)
 }

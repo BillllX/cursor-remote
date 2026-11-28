@@ -237,11 +237,16 @@ extension ChatStore {
         mentionQueryByChat.removeValue(forKey: previousActiveId)
         mentionTasksByChat.removeValue(forKey: previousActiveId)?.cancel()
         mentionRankTasksByChat.removeValue(forKey: previousActiveId)?.cancel()
-        mentionSuggestionsByChat[previousActiveId] = []
-        patch(id) { chat in
-            var next = chat
-            next.unread = false
-            return next
+        if !(mentionSuggestionsByChat[previousActiveId]?.isEmpty ?? true) {
+            mentionSuggestionsByChat[previousActiveId] = []
+        }
+        // 已读会话切入时跳过无意义的 patch，避免白白写 chats、标脏并触发全树重绘与 sync_chat
+        if chats.first(where: { $0.id == id })?.unread == true {
+            patch(id) { chat in
+                var next = chat
+                next.unread = false
+                return next
+            }
         }
         applySession(chats.first { $0.id == id })
     }
@@ -313,15 +318,15 @@ extension ChatStore {
             flash("这条对话还没对上服务器，改名不会留下。")
             return
         }
-        let before = chats.first { $0.id == id }?.title
+        guard let existing = chats.first(where: { $0.id == id }) else { return }
+        guard existing.title != title else { return }
+        if title == "新对话", !existing.isUntitled { return }
         patch(id) { chat in
-            if chat.title == title { return chat }
-            if title == "新对话", !chat.isUntitled { return chat }
             var next = chat
             next.title = title
             return next
         }
-        guard chats.first(where: { $0.id == id })?.title == title, before != title, !client.isOpen else { return }
+        guard chats.first(where: { $0.id == id })?.title == title, !client.isOpen else { return }
         flash(linkState == .offline
             ? "已断开。这台设备已改名，连上后其他设备也会看到。"
             : "正在连接。这台设备已改名，连上后其他设备也会看到。")
