@@ -23,6 +23,7 @@ struct MemoryCenterImportPane: View {
     }
 
     var body: some View {
+        let scopeIds = workspaceScopeIds
         VStack(alignment: .leading, spacing: 8) {
             Text("导入 / 导出").font(JieboFont.text(.subheadline, weight: .semibold))
             if let err = extras.importError, !err.isEmpty {
@@ -32,7 +33,7 @@ struct MemoryCenterImportPane: View {
                 Toggle("个人记忆", isOn: $exportPersonal)
                 Toggle("工作偏好 (W0)", isOn: $exportWorkPreference)
                 Toggle("个人设置", isOn: $exportSettings)
-                ForEach(workspaceScopeIds, id: \.self) { scopeId in
+                ForEach(scopeIds, id: \.self) { scopeId in
                     Toggle("文件夹 \(scopeId)", isOn: Binding(
                         get: { exportWorkspaceIds.contains(scopeId) },
                         set: { on in
@@ -44,12 +45,12 @@ struct MemoryCenterImportPane: View {
             .tint(JieboColor.pine)
             .font(JieboFont.text(.caption))
             .onAppear {
-                if !initializedScopes, !workspaceScopeIds.isEmpty {
-                    exportWorkspaceIds = Set(workspaceScopeIds)
+                if !initializedScopes, !scopeIds.isEmpty {
+                    exportWorkspaceIds = Set(scopeIds)
                     initializedScopes = true
                 }
             }
-            .onChange(of: workspaceScopeIds) { _, ids in
+            .onChange(of: scopeIds) { _, ids in
                 let valid = Set(ids)
                 if !initializedScopes, !valid.isEmpty {
                     exportWorkspaceIds = valid
@@ -94,7 +95,7 @@ struct MemoryCenterImportPane: View {
             ActionButton(title: "预演", kind: .outline) {
                 store.memoryCenterImportPreview(path: importPath)
             }
-            .disabled(extras.importBusyReqId != nil || importPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(extras.importBusyReqId != nil || !importPath.contains { !$0.isWhitespace && !$0.isNewline })
             ForEach(extras.importWarnings, id: \.self) { w in
                 Text("⚠ \(w)").font(JieboFont.text(.caption)).foregroundStyle(JieboColor.warnFg)
             }

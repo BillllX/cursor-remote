@@ -129,10 +129,22 @@ enum MemoryCenterReducer {
     static func dropPending(_ data: MemoryCenterDataState, reqId: String) -> MemoryCenterDataState {
         var next = data
         next.pending = data.pending.filter { $0.reqId != reqId }
-        next.loadingOverview = next.pending.contains { $0.kind == .overview }
-        next.loadingScope = next.pending.contains { $0.kind == .scope }
-        next.loadingSearch = next.pending.contains { $0.kind == .search }
-        next.mutating = next.pending.contains { $0.kind == .mutation }
+        var hasOverview = false
+        var hasScope = false
+        var hasSearch = false
+        var hasMutation = false
+        for req in next.pending {
+            switch req.kind {
+            case .overview: hasOverview = true
+            case .scope: hasScope = true
+            case .search: hasSearch = true
+            case .mutation: hasMutation = true
+            }
+        }
+        next.loadingOverview = hasOverview
+        next.loadingScope = hasScope
+        next.loadingSearch = hasSearch
+        next.mutating = hasMutation
         return next
     }
 
@@ -248,9 +260,7 @@ enum MemoryCenterReducer {
     }
 
     private static func dropPendingOfKind(_ pending: [MemoryCenterPendingRequest], kind: MemoryCenterRequestKind) -> [MemoryCenterPendingRequest] {
-        if kind == .scope { return pending.filter { $0.kind != .scope } }
-        if kind == .mutation { return pending.filter { $0.kind != .mutation } }
-        return pending.filter { $0.kind != kind }
+        pending.filter { $0.kind != kind }
     }
 
     static func detailForScope(_ detail: MemoryCenterScopeDetail?, scopeId: String?) -> MemoryCenterScopeDetail? {
@@ -279,8 +289,12 @@ enum MemoryCenterReducer {
             byParent[key]?.sort { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
         }
         var out: [ScopeTreeRow] = []
+        out.reserveCapacity(workspace.count)
+        var visited: Set<String> = []
+        visited.reserveCapacity(workspace.count)
         func walk(parentId: String?, depth: Int) {
             for row in byParent[parentId] ?? [] {
+                guard visited.insert(row.id).inserted else { continue }
                 out.append(ScopeTreeRow(summary: row, depth: depth))
                 walk(parentId: row.id, depth: depth + 1)
             }

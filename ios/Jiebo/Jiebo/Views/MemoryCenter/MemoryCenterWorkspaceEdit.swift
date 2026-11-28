@@ -40,7 +40,7 @@ struct MemoryCenterWorkspaceCreateSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { submitCreate() }
-                        .disabled(store.memoryCenterData.mutating || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(store.memoryCenterData.mutating || !text.contains { !$0.isWhitespace && !$0.isNewline })
                 }
             }
             .disabled(store.memoryCenterData.mutating)
@@ -200,7 +200,7 @@ struct MemoryCenterWorkspaceEditSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { savePatch() }
-                        .disabled(store.memoryCenterData.mutating || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(store.memoryCenterData.mutating || !text.contains { !$0.isWhitespace && !$0.isNewline })
                 }
             }
             .disabled(store.memoryCenterData.mutating)

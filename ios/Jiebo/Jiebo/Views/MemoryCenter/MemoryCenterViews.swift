@@ -678,7 +678,7 @@ struct MemoryCenterToolbar: View {
         .padding(.vertical, 8)
         .searchable(text: $searchText, isPresented: $searchActive, prompt: "搜索记忆")
         .onChange(of: searchText) { _, value in
-            if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if value.contains(where: { !$0.isWhitespace && !$0.isNewline }) {
                 searchActive = true
             }
         }
@@ -799,35 +799,42 @@ struct MemoryCenterOverviewCards: View {
                 .assistantCard()
             }
             if showsFolders {
+            let workspaceScopes = MemoryCenterReducer.workspaceScopesForOverview(scopes: overview.scopes)
+            let palette = JieboTheme.shared.palette
+            let appearance = JieboTheme.shared.appearance
             AssistantSection("文件夹") {
-                Text("范围 \(MemoryCenterReducer.workspaceScopesForOverview(scopes: overview.scopes).count) · 待处理 \(pending)")
+                Text("范围 \(workspaceScopes.count) · 待处理 \(pending)")
                     .font(JieboFont.text(.caption))
                     .foregroundStyle(JieboColor.dim)
-                ForEach(MemoryCenterReducer.workspaceScopesForOverview(scopes: overview.scopes)) { scope in
-                    if linkScopes,
-                       let middleTab = scopeListMiddleTab,
-                       let stateFilter = scopeListStateFilter
-                    {
-                        NavigationLink {
-                            MemoryCenterPhoneScopeList(
-                                scopeId: scope.id,
-                                scopeLabel: scope.label,
-                                middleTab: middleTab,
-                                stateFilter: stateFilter
-                            )
-                        } label: {
-                            MemoryCenterScopeHealthRow(scope: scope)
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(workspaceScopes) { scope in
+                        if linkScopes,
+                           let middleTab = scopeListMiddleTab,
+                           let stateFilter = scopeListStateFilter
+                        {
+                            NavigationLink {
+                                MemoryCenterPhoneScopeList(
+                                    scopeId: scope.id,
+                                    scopeLabel: scope.label,
+                                    middleTab: middleTab,
+                                    stateFilter: stateFilter
+                                )
+                            } label: {
+                                MemoryCenterScopeHealthRow(scope: scope, palette: palette, appearance: appearance)
+                                    .equatable()
+                            }
+                            .buttonStyle(.plain)
+                            .hitTarget()
+                        } else {
+                            Button {
+                                onSelectScope(scope.id)
+                            } label: {
+                                MemoryCenterScopeHealthRow(scope: scope, palette: palette, appearance: appearance)
+                                    .equatable()
+                            }
+                            .buttonStyle(.plain)
+                            .hitTarget()
                         }
-                        .buttonStyle(.plain)
-                        .hitTarget()
-                    } else {
-                        Button {
-                            onSelectScope(scope.id)
-                        } label: {
-                            MemoryCenterScopeHealthRow(scope: scope)
-                        }
-                        .buttonStyle(.plain)
-                        .hitTarget()
                     }
                 }
             }
@@ -836,8 +843,11 @@ struct MemoryCenterOverviewCards: View {
     }
 }
 
-struct MemoryCenterScopeHealthRow: View {
+struct MemoryCenterScopeHealthRow: View, Equatable {
     let scope: MemoryCenterScopeSummary
+    /// 参与 .equatable() 判等，确保主题配色或明暗切换时触发行重绘。
+    let palette: JieboPalette
+    let appearance: JieboAppearance
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -977,7 +987,6 @@ struct MemoryCenterScopeItemsContent: View {
                 }
                 MemoryCenterItemsList(
                     items: MemoryCenterLabels.filterFolder(detail.items, menu: stateFilter),
-                    diagnostics: detail.diagnostics,
                     selectedKey: $selectedKey,
                     itemNavigation: itemNavigation,
                     emptyTitle: detail.items.isEmpty ? "这个文件夹还没有记忆" : "这个筛选里没有",
@@ -1012,7 +1021,6 @@ struct MemoryCenterScopeItemsContent: View {
 
 struct MemoryCenterItemsList: View {
     let items: [WorkspaceMemoryItem]
-    let diagnostics: InjectionDiagnostics?
     @Binding var selectedKey: String?
     var itemNavigation: MemoryCenterItemNavigation = .columnSelection
     var emptyTitle = "没有条目"
@@ -1022,36 +1030,54 @@ struct MemoryCenterItemsList: View {
         if items.isEmpty {
             MemoryCenterEmptyBlock(title: emptyTitle, hint: emptyHint)
         } else {
-            ForEach(items, id: \.stableId) { item in
-                let key = MemoryCenterReducer.itemKey(scopeId: item.scopeId, id: item.id)
-                switch itemNavigation {
-                case .columnSelection:
-                    Button {
-                        selectedKey = key
-                    } label: {
-                        MemoryCenterItemRow(item: item, diagnostics: diagnostics, selected: selectedKey == key)
+            let palette = JieboTheme.shared.palette
+            let appearance = JieboTheme.shared.appearance
+            LazyVStack(alignment: .leading, spacing: 8) {
+                ForEach(items, id: \.stableId) { item in
+                    let key = MemoryCenterReducer.itemKey(scopeId: item.scopeId, id: item.id)
+                    switch itemNavigation {
+                    case .columnSelection:
+                        Button {
+                            selectedKey = key
+                        } label: {
+                            MemoryCenterItemRow(
+                                item: item,
+                                selected: selectedKey == key,
+                                palette: palette,
+                                appearance: appearance
+                            )
+                            .equatable()
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(selectedKey == key ? .isSelected : [])
+                        .hitTarget()
+                    case .drillDown(let scopeId):
+                        NavigationLink(value: PhoneRoute.memoryPage(.item(scopeId: scopeId, key: key))) {
+                            MemoryCenterItemRow(
+                                item: item,
+                                selected: false,
+                                palette: palette,
+                                appearance: appearance
+                            )
+                            .equatable()
+                        }
+                        .buttonStyle(.plain)
+                        .hitTarget()
+                    case .drillDownSearchHit:
+                        EmptyView()
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(selectedKey == key ? .isSelected : [])
-                    .hitTarget()
-                case .drillDown(let scopeId):
-                    NavigationLink(value: PhoneRoute.memoryPage(.item(scopeId: scopeId, key: key))) {
-                        MemoryCenterItemRow(item: item, diagnostics: diagnostics, selected: false)
-                    }
-                    .buttonStyle(.plain)
-                    .hitTarget()
-                case .drillDownSearchHit:
-                    EmptyView()
                 }
             }
         }
     }
 }
 
-struct MemoryCenterItemRow: View {
+struct MemoryCenterItemRow: View, Equatable {
     let item: WorkspaceMemoryItem
-    let diagnostics: InjectionDiagnostics?
     var selected: Bool
+    /// 参与 .equatable() 判等，确保主题配色或明暗切换时触发行重绘。
+    let palette: JieboPalette
+    let appearance: JieboAppearance
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1188,6 +1214,8 @@ struct MemoryCenterSearchList: View {
     @Environment(ChatStore.self) private var store
     @Binding var selectedKey: String?
     var itemNavigation: MemoryCenterItemNavigation = .columnSelection
+    /// 在 List Section 中调用时直出 ForEach，避免嵌套 LazyVStack 塌缩成单行并沿用 List 自身复用。
+    var embedInList = false
 
     var body: some View {
         let data = store.memoryCenterData
@@ -1204,23 +1232,22 @@ struct MemoryCenterSearchList: View {
             if search.hits.isEmpty {
                 MemoryCenterEmptyBlock(title: "没找到", hint: "换个词，或到筛选里放宽。")
             } else {
-                ForEach(search.hits, id: \.stableId) { hit in
-                    let key = MemoryCenterReducer.itemKey(scopeId: hit.scopeId, id: hit.id)
-                    switch itemNavigation {
-                    case .columnSelection:
-                        Button {
-                            selectedKey = key
-                        } label: {
-                            MemoryCenterSearchHitRow(hit: hit, selected: selectedKey == key)
-                        }
-                        .buttonStyle(.plain)
-                        .hitTarget()
-                    case .drillDown, .drillDownSearchHit:
-                        NavigationLink(value: PhoneRoute.memoryPage(.searchHit(key: key))) {
-                            MemoryCenterSearchHitRow(hit: hit, selected: false)
-                        }
-                        .buttonStyle(.plain)
-                        .hitTarget()
+                let scopeLabelMap: [String: String] = {
+                    let scopes = data.overview?.scopes ?? []
+                    var map: [String: String] = [:]
+                    map.reserveCapacity(scopes.count)
+                    for scope in scopes where map[scope.id] == nil {
+                        map[scope.id] = scope.label
+                    }
+                    return map
+                }()
+                let palette = JieboTheme.shared.palette
+                let appearance = JieboTheme.shared.appearance
+                if embedInList {
+                    hitRows(search.hits, scopeLabelMap: scopeLabelMap, palette: palette, appearance: appearance)
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        hitRows(search.hits, scopeLabelMap: scopeLabelMap, palette: palette, appearance: appearance)
                     }
                 }
             }
@@ -1230,19 +1257,58 @@ struct MemoryCenterSearchList: View {
             MemoryCenterEmptyBlock(title: "正在找…", hint: "")
         }
     }
+
+    @ViewBuilder
+    private func hitRows(
+        _ hits: [MemoryCenterSearchHit],
+        scopeLabelMap: [String: String],
+        palette: JieboPalette,
+        appearance: JieboAppearance
+    ) -> some View {
+        ForEach(hits, id: \.stableId) { hit in
+            let key = MemoryCenterReducer.itemKey(scopeId: hit.scopeId, id: hit.id)
+            let scopeLabel = scopeLabelMap[hit.scopeId] ?? hit.scopeId
+            switch itemNavigation {
+            case .columnSelection:
+                Button {
+                    selectedKey = key
+                } label: {
+                    MemoryCenterSearchHitRow(
+                        hit: hit,
+                        scopeLabel: scopeLabel,
+                        selected: selectedKey == key,
+                        palette: palette,
+                        appearance: appearance
+                    )
+                    .equatable()
+                }
+                .buttonStyle(.plain)
+                .hitTarget()
+            case .drillDown, .drillDownSearchHit:
+                NavigationLink(value: PhoneRoute.memoryPage(.searchHit(key: key))) {
+                    MemoryCenterSearchHitRow(
+                        hit: hit,
+                        scopeLabel: scopeLabel,
+                        selected: false,
+                        palette: palette,
+                        appearance: appearance
+                    )
+                    .equatable()
+                }
+                .buttonStyle(.plain)
+                .hitTarget()
+            }
+        }
+    }
 }
 
-struct MemoryCenterSearchHitRow: View {
-    @Environment(ChatStore.self) private var store
+struct MemoryCenterSearchHitRow: View, Equatable {
     let hit: MemoryCenterSearchHit
+    let scopeLabel: String
     var selected: Bool
-
-    private var scopeLabel: String {
-        MemoryCenterReducer.resolveScopeLabel(
-            scopeId: hit.scopeId,
-            scopes: store.memoryCenterData.overview?.scopes ?? []
-        )
-    }
+    /// 参与 .equatable() 判等，确保主题配色或明暗切换时触发行重绘。
+    let palette: JieboPalette
+    let appearance: JieboAppearance
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1329,27 +1395,29 @@ struct MemoryCenterRulesList: View {
         if rules.isEmpty {
             MemoryCenterEmptyBlock(title: "这个文件夹没有规则", hint: "")
         } else {
-            ForEach(rules) { rule in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(rule.relPath)
-                        .font(JieboFont.text(.subheadline, weight: .semibold))
-                    Text("\(rule.chars) 字 · 作用于 \(rule.appliesDir)")
-                        .font(JieboFont.text(.caption))
-                        .foregroundStyle(JieboColor.dim)
-                    Text(rule.body)
-                        .font(JieboFont.text(.footnote))
-                        .lineLimit(4)
-                        .foregroundStyle(JieboColor.ink2)
-                    if rule.truncated {
-                        Text("正文已截断")
-                            .font(JieboFont.text(.caption2))
-                            .foregroundStyle(JieboColor.clay)
+            LazyVStack(alignment: .leading, spacing: 8) {
+                ForEach(rules) { rule in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(rule.relPath)
+                            .font(JieboFont.text(.subheadline, weight: .semibold))
+                        Text("\(rule.chars) 字 · 作用于 \(rule.appliesDir)")
+                            .font(JieboFont.text(.caption))
+                            .foregroundStyle(JieboColor.dim)
+                        Text(rule.body)
+                            .font(JieboFont.text(.footnote))
+                            .lineLimit(4)
+                            .foregroundStyle(JieboColor.ink2)
+                        if rule.truncated {
+                            Text("正文已截断")
+                                .font(JieboFont.text(.caption2))
+                                .foregroundStyle(JieboColor.clay)
+                        }
                     }
+                    .assistantCard()
                 }
-                .assistantCard()
-            }
-            if truncated {
-                MemoryCenterBanner(text: "规则列表已截断", tone: .warn)
+                if truncated {
+                    MemoryCenterBanner(text: "规则列表已截断", tone: .warn)
+                }
             }
         }
     }
@@ -1407,8 +1475,17 @@ struct MemoryCenterRememberMe: View {
 
     var body: some View {
         let memory = store.assistantState?.memory
-        VStack(alignment: .leading, spacing: 12) {
+        LazyVStack(alignment: .leading, spacing: 12) {
             if let memory {
+                let partitioned: (valid: [AssistantMemoryEntry], stale: [AssistantMemoryEntry]) = {
+                    var valid: [AssistantMemoryEntry] = []
+                    var stale: [AssistantMemoryEntry] = []
+                    valid.reserveCapacity(memory.entries.count)
+                    for entry in memory.entries {
+                        if entry.isValid { valid.append(entry) } else { stale.append(entry) }
+                    }
+                    return (valid, stale)
+                }()
                 HStack {
                     Text(memory.paused ? "记忆已暂停" : "关于我和工作偏好每次都会带上。标了「不在这一轮」的句子还在，也能搜到。")
                         .font(JieboFont.text(.caption))
@@ -1427,12 +1504,14 @@ struct MemoryCenterRememberMe: View {
                     .font(JieboFont.text(.caption2))
                     .foregroundStyle(JieboColor.dim)
                 ForEach(memory.orderedCoreKeys, id: \.self) { key in
+                    let rawValue = memory.coreFields[key] ?? ""
+                    let displayValue = rawValue.contains(where: { !$0.isWhitespace && !$0.isNewline }) ? rawValue : "还没写"
                     Button {
                         selectedKey = "core:\(key)"
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(key).font(JieboFont.text(.subheadline, weight: .semibold))
-                            Text((memory.coreFields[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "还没写" : memory.coreFields[key] ?? "")
+                            Text(displayValue)
                                 .font(JieboFont.text(.footnote))
                                 .foregroundStyle(JieboColor.ink2)
                                 .lineLimit(2)
@@ -1442,7 +1521,7 @@ struct MemoryCenterRememberMe: View {
                     }
                     .buttonStyle(.plain)
                 }
-                ForEach(memory.entries.filter(\.isValid)) { entry in
+                ForEach(partitioned.valid) { entry in
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Text(entry.topic.nilIfEmpty ?? "一条记忆").font(JieboFont.text(.subheadline, weight: .semibold))
@@ -1472,33 +1551,34 @@ struct MemoryCenterRememberMe: View {
                     }
                     .assistantCard()
                 }
-                let stale = memory.entries.filter { !$0.isValid }
-                if !stale.isEmpty {
+                if !partitioned.stale.isEmpty {
                     DisclosureGroup("已失效记忆") {
-                        ForEach(stale) { entry in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(entry.topic.nilIfEmpty ?? "一条记忆")
-                                    .font(JieboFont.text(.subheadline, weight: .semibold))
-                                Text(entry.text)
-                                    .font(JieboFont.text(.footnote))
-                                    .foregroundStyle(JieboColor.dim)
-                                    .lineLimit(3)
-                                HStack(spacing: 12) {
-                                    Button("恢复") {
-                                        _ = store.queueMemoryChange("memory_restore", args: ["id": .string(entry.id)], pending: "恢复这条记忆")
+                        LazyVStack(alignment: .leading, spacing: 8) {
+                            ForEach(partitioned.stale) { entry in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(entry.topic.nilIfEmpty ?? "一条记忆")
+                                        .font(JieboFont.text(.subheadline, weight: .semibold))
+                                    Text(entry.text)
+                                        .font(JieboFont.text(.footnote))
+                                        .foregroundStyle(JieboColor.dim)
+                                        .lineLimit(3)
+                                    HStack(spacing: 12) {
+                                        Button("恢复") {
+                                            _ = store.queueMemoryChange("memory_restore", args: ["id": .string(entry.id)], pending: "恢复这条记忆")
+                                        }
+                                        .foregroundStyle(JieboColor.pine)
+                                        .frame(minHeight: 36)
+                                        Button("彻底删除") {
+                                            _ = store.queueMemoryChange("memory_purge", args: ["id": .string(entry.id)], pending: "删掉这条记忆")
+                                        }
+                                        .foregroundStyle(JieboColor.danger)
+                                        .frame(minHeight: 36)
                                     }
-                                    .foregroundStyle(JieboColor.pine)
-                                    .frame(minHeight: 36)
-                                    Button("彻底删除") {
-                                        _ = store.queueMemoryChange("memory_purge", args: ["id": .string(entry.id)], pending: "删掉这条记忆")
-                                    }
-                                    .foregroundStyle(JieboColor.danger)
-                                    .frame(minHeight: 36)
+                                    .font(JieboFont.text(.caption, weight: .medium))
+                                    .buttonStyle(.plain)
                                 }
-                                .font(JieboFont.text(.caption, weight: .medium))
-                                .buttonStyle(.plain)
+                                .assistantCard()
                             }
-                            .assistantCard()
                         }
                     }
                 }
@@ -1572,8 +1652,7 @@ struct MemoryCenterRememberDetail: View {
     }
 
     private var entryCanSave: Bool {
-        let body = entryText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty else { return false }
+        guard entryText.contains(where: { !$0.isWhitespace && !$0.isNewline }) else { return false }
         return entryTopic != originalEntryTopic || entryText != originalEntryText
     }
 
@@ -1630,7 +1709,7 @@ struct MemoryCenterPersonalCreateForm: View {
                 topic = ""
                 text = ""
             }
-            .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(!text.contains { !$0.isWhitespace && !$0.isNewline })
         }
     }
 }
@@ -1641,6 +1720,15 @@ struct MemoryCenterPhoneRememberMe: View {
     var body: some View {
         List {
             if let memory = store.assistantState?.memory {
+                let partitioned: (valid: [AssistantMemoryEntry], stale: [AssistantMemoryEntry]) = {
+                    var valid: [AssistantMemoryEntry] = []
+                    var stale: [AssistantMemoryEntry] = []
+                    valid.reserveCapacity(memory.entries.count)
+                    for entry in memory.entries {
+                        if entry.isValid { valid.append(entry) } else { stale.append(entry) }
+                    }
+                    return (valid, stale)
+                }()
                 Section {
                     Text(memory.paused ? "记忆已暂停" : "关于我和工作偏好每次都会带上。标了「不在这一轮」的句子还在，也能搜到。约 \(memory.coreTokens)/\(memory.coreBudget)")
                         .font(JieboFont.text(.caption))
@@ -1654,10 +1742,12 @@ struct MemoryCenterPhoneRememberMe: View {
                 .listRowBackground(JieboColor.white)
                 Section {
                     ForEach(memory.orderedCoreKeys, id: \.self) { key in
+                        let rawValue = memory.coreFields[key] ?? ""
+                        let displayValue = rawValue.contains(where: { !$0.isWhitespace }) ? rawValue : "还没写"
                         NavigationLink(value: PhoneRoute.memoryPage(.coreField(key))) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(key)
-                                Text((memory.coreFields[key] ?? "").isEmpty ? "还没写" : (memory.coreFields[key] ?? ""))
+                                Text(displayValue)
                                     .font(JieboFont.text(.footnote))
                                     .foregroundStyle(JieboColor.ink2)
                                     .lineLimit(2)
@@ -1667,7 +1757,7 @@ struct MemoryCenterPhoneRememberMe: View {
                 }
                 .listRowBackground(JieboColor.white)
                 Section {
-                    ForEach(memory.entries.filter(\.isValid)) { entry in
+                    ForEach(partitioned.valid) { entry in
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
                                 Text(entry.topic.nilIfEmpty ?? "一条记忆")
@@ -1699,10 +1789,9 @@ struct MemoryCenterPhoneRememberMe: View {
                     }
                 }
                 .listRowBackground(JieboColor.white)
-                let stale = memory.entries.filter { !$0.isValid }
-                if !stale.isEmpty {
+                if !partitioned.stale.isEmpty {
                     Section("已失效记忆") {
-                        ForEach(stale) { entry in
+                        ForEach(partitioned.stale) { entry in
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(entry.topic.nilIfEmpty ?? "一条记忆")
                                 Text(entry.text)
@@ -1809,7 +1898,7 @@ struct MemoryCenterPhonePersonalCreate: View {
                 ], pending: "记一条") else { return }
                 dismiss()
             }
-            .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(!text.contains { !$0.isWhitespace && !$0.isNewline })
             .listRowBackground(JieboColor.white)
         }
         .scrollContentBackground(.hidden)
@@ -1833,8 +1922,7 @@ struct MemoryCenterPhonePersonalEdit: View {
     }
 
     private var canSave: Bool {
-        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty else { return false }
+        guard text.contains(where: { !$0.isWhitespace && !$0.isNewline }) else { return false }
         return topic != originalTopic || text != originalText
     }
 
@@ -1991,7 +2079,11 @@ struct MemoryCenterPhoneHome: View {
             }
             if searchActive {
                 Section {
-                    MemoryCenterSearchList(selectedKey: .constant(nil), itemNavigation: .drillDownSearchHit)
+                    MemoryCenterSearchList(
+                        selectedKey: .constant(nil),
+                        itemNavigation: .drillDownSearchHit,
+                        embedInList: true
+                    )
                 }
                 .listRowBackground(JieboColor.white)
             } else {
@@ -2078,7 +2170,7 @@ struct MemoryCenterPhoneHome: View {
             store.memoryCenterLoadSkills()
         }
         .onChange(of: searchText) { _, value in
-            if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if value.contains(where: { !$0.isWhitespace && !$0.isNewline }) {
                 searchActive = true
             }
         }

@@ -4,7 +4,7 @@ struct MemoryCenterActivityPane: View {
     @Environment(ChatStore.self) private var store
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        LazyVStack(alignment: .leading, spacing: 8) {
             if let err = store.memoryCenterActivityError, !err.isEmpty {
                 Text(err).font(JieboFont.text(.caption)).foregroundStyle(JieboColor.warnFg)
             }
@@ -64,12 +64,9 @@ struct MemoryCenterSuggestionsPane: View {
     @Environment(ChatStore.self) private var store
     @State private var confirmBulk = false
 
-    private var bulk: [MemoryCenterSuggestionRow] {
-        store.memoryCenterSuggestionRows.filter { $0.risk == "low" && $0.kind != "missing_ref" }
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let bulk = store.memoryCenterSuggestionRows.filter { $0.risk == "low" && $0.kind != "missing_ref" }
+        LazyVStack(alignment: .leading, spacing: 8) {
             Text("重复、日期和搬家后的文件，用「梳理一遍」处理。这里的卡片可以不点。")
                 .font(JieboFont.text(.caption))
                 .foregroundStyle(JieboColor.dim)
@@ -95,20 +92,20 @@ struct MemoryCenterSuggestionsPane: View {
                     confirmBulk = false
                 }
             } else {
-            suggestionList
-            if !bulk.isEmpty {
-                ActionButton(title: "一次处理风险低的 \(bulk.count) 条", kind: .outline) {
-                    confirmBulk = true
+                suggestionList
+                if !bulk.isEmpty {
+                    ActionButton(title: "一次处理风险低的 \(bulk.count) 条", kind: .outline) {
+                        confirmBulk = true
+                    }
+                    .padding(.top, 8)
                 }
-                .padding(.top, 8)
-            }
             }
         }
         .onAppear { store.memoryCenterLoadSuggestions() }
     }
 
     private var suggestionList: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        LazyVStack(alignment: .leading, spacing: 8) {
             if let err = store.memoryCenterSuggestionsError, !err.isEmpty {
                 Text(err).font(JieboFont.text(.caption)).foregroundStyle(JieboColor.warnFg)
             }
@@ -158,22 +155,6 @@ struct MemoryCenterSkillsPane: View {
     @State private var expandedId: String?
     @State private var scopeFilter = "all"
 
-    private var pendingProposals: [SkillFactoryProposalRow] {
-        store.memoryCenterSkillProposals.filter { $0.status == "pending" }
-    }
-
-    private var visibleSkills: [SkillFactorySummaryRow] {
-        store.memoryCenterSkillRows.filter { scopeFilter == "all" ? true : $0.scope == scopeFilter }
-    }
-
-    private var callableSkills: [SkillFactorySummaryRow] {
-        visibleSkills.filter { $0.kind != "channel_guard" }
-    }
-
-    private var guardSkills: [SkillFactorySummaryRow] {
-        visibleSkills.filter { $0.kind == "channel_guard" }
-    }
-
     private var activeKey: String? {
         selectedKey?.wrappedValue ?? expandedId
     }
@@ -187,7 +168,23 @@ struct MemoryCenterSkillsPane: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let pendingProposals = store.memoryCenterSkillProposals.filter { $0.status == "pending" }
+        let partitioned: (callable: [SkillFactorySummaryRow], guards: [SkillFactorySummaryRow]) = {
+            var callable: [SkillFactorySummaryRow] = []
+            var guards: [SkillFactorySummaryRow] = []
+            for row in store.memoryCenterSkillRows {
+                if scopeFilter != "all" && row.scope != scopeFilter { continue }
+                if row.kind == "channel_guard" {
+                    guards.append(row)
+                } else {
+                    callable.append(row)
+                }
+            }
+            return (callable, guards)
+        }()
+        let callableSkills = partitioned.callable
+        let guardSkills = partitioned.guards
+        LazyVStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("对话技能 \(callableSkills.count) 项 · 后台守卫 \(guardSkills.count) 项\(pendingProposals.isEmpty ? "" : " · 待启用 \(pendingProposals.count) 项")")
                     .font(JieboFont.text(.caption))
@@ -410,17 +407,13 @@ struct MemoryCenterSkillDetailPane: View {
     @State private var editKeywords = ""
     @State private var editBody = ""
 
-    private var pendingProposals: [SkillFactoryProposalRow] {
-        store.memoryCenterSkillProposals.filter { $0.status == "pending" }
-    }
-
     private var activeProposal: SkillFactoryProposalRow? {
         if let key = selectedKey, key.hasPrefix("prop:") {
             let id = String(key.dropFirst(5))
             return store.memoryCenterSkillProposals.first { $0.id == id }
         }
-        if selectedKey == nil, let first = pendingProposals.first {
-            return first
+        if selectedKey == nil {
+            return store.memoryCenterSkillProposals.first { $0.status == "pending" }
         }
         return nil
     }
@@ -593,7 +586,11 @@ struct MemoryCenterSkillDetailPane: View {
                                 )
                                 editingSkillId = nil
                             }
-                            .disabled(editName.trimmingCharacters(in: .whitespaces).isEmpty || editSummary.trimmingCharacters(in: .whitespaces).isEmpty || editBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .disabled(
+                                !editName.contains { !$0.isWhitespace }
+                                    || !editSummary.contains { !$0.isWhitespace }
+                                    || !editBody.contains { !$0.isWhitespace && !$0.isNewline }
+                            )
                             ActionButton(title: "取消", kind: .outline) {
                                 editingSkillId = nil
                             }
