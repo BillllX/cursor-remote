@@ -243,7 +243,28 @@ enum ImTimeline {
     /// 按 seq 合并：同 seq 以新来的为准；本机待发的那条按 clientId 认领（自己发的才认）。
     /// 结果：有 seq 的按 seq 升序，还没 ack 的按时间排在最后
     static func merge(_ existing: [ImLocalMessage], _ incoming: [ImLocalMessage], me: String) -> [ImLocalMessage] {
+        // 常见实时单条新消息快路径：若现有时间线全是严格升序的已确认消息且新消息 seq 更大，直接 O(1) 追加，跳过建字典与排序
+        if incoming.count == 1, let item = incoming.first, let newSeq = item.seq {
+            if existing.isEmpty { return [item] }
+            if let lastSeq = existing.last?.seq, newSeq > lastSeq {
+                var strictlyAscendingSent = true
+                var prev = Int.min
+                for entry in existing {
+                    guard let seq = entry.seq, seq > prev else {
+                        strictlyAscendingSent = false
+                        break
+                    }
+                    prev = seq
+                }
+                if strictlyAscendingSent {
+                    var out = existing
+                    out.append(item)
+                    return out
+                }
+            }
+        }
         var bySeq: [Int: ImLocalMessage] = [:]
+        bySeq.reserveCapacity(existing.count + incoming.count)
         var pending: [ImLocalMessage] = []
         for item in existing {
             if let seq = item.seq { bySeq[seq] = item } else { pending.append(item) }
@@ -283,13 +304,26 @@ enum ImTimeline {
 
     /// 写缓存时只留最近 cacheLimit 条有 seq 的，加上所有还没发出去的
     static func trimmed(_ items: [ImLocalMessage]) -> [ImLocalMessage] {
-        let sent = items.filter { $0.seq != nil }
-        let pending = items.filter { $0.seq == nil }
-        return Array(sent.suffix(cacheLimit)) + pending
+        var sent: [ImLocalMessage] = []
+        var pending: [ImLocalMessage] = []
+        sent.reserveCapacity(min(items.count, cacheLimit))
+        for item in items {
+            if item.seq != nil {
+                sent.append(item)
+            } else {
+                pending.append(item)
+            }
+        }
+        if sent.count > cacheLimit {
+            return Array(sent.suffix(cacheLimit)) + pending
+        }
+        return pending.isEmpty ? sent : sent + pending
     }
 }
 
 enum ImFormat {
+    private static let weekdayNames = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"]
+
     /// 未读数：≥1000 显示 999+
     static func badge(_ count: Int) -> String {
         count >= 1000 ? "999+" : "\(count)"
@@ -300,6 +334,19 @@ enum ImFormat {
         guard ms > 0 else { return "" }
         let date = Date(timeIntervalSince1970: ms / 1000)
         if calendar.isDate(date, inSameDayAs: now) { return clock(date, calendar: calendar) }
+        return nonTodayDayLabel(date, now: now, calendar: calendar)
+    }
+
+    /// 聊天页里居中的时间：今天 HH:mm、昨天 HH:mm、一周内「星期几 HH:mm」、更早 yyyy/M/d HH:mm
+    static func dividerTime(_ ms: Double, now: Date = Date(), calendar: Calendar = .current) -> String {
+        let date = Date(timeIntervalSince1970: ms / 1000)
+        let time = clock(date, calendar: calendar)
+        if calendar.isDate(date, inSameDayAs: now) { return time }
+        let day = ms > 0 ? nonTodayDayLabel(date, now: now, calendar: calendar) : ""
+        return "\(day) \(time)"
+    }
+
+    private static func nonTodayDayLabel(_ date: Date, now: Date, calendar: Calendar) -> String {
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) {
             return "昨天"
         }
@@ -310,24 +357,14 @@ enum ImFormat {
         return "\(parts.year ?? 0)/\(parts.month ?? 0)/\(parts.day ?? 0)"
     }
 
-    /// 聊天页里居中的时间：今天 HH:mm、昨天 HH:mm、一周内「星期几 HH:mm」、更早 yyyy/M/d HH:mm
-    static func dividerTime(_ ms: Double, now: Date = Date(), calendar: Calendar = .current) -> String {
-        let date = Date(timeIntervalSince1970: ms / 1000)
-        let time = clock(date, calendar: calendar)
-        if calendar.isDate(date, inSameDayAs: now) { return time }
-        let day = listTime(ms, now: now, calendar: calendar)
-        return "\(day) \(time)"
-    }
-
     private static func clock(_ date: Date, calendar: Calendar) -> String {
         let parts = calendar.dateComponents([.hour, .minute], from: date)
         return String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
     }
 
     private static func weekday(_ date: Date, calendar: Calendar) -> String {
-        let names = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"]
         let index = calendar.component(.weekday, from: date) - 1
-        return names.indices.contains(index) ? names[index] : ""
+        return weekdayNames.indices.contains(index) ? weekdayNames[index] : ""
     }
 
     private static func dayDistance(from date: Date, to now: Date, calendar: Calendar) -> Int? {
@@ -338,7 +375,7 @@ enum ImFormat {
     static func preview(kind: String, body: ImBody?) -> String {
         switch body {
         case .text(let text)?:
-            return text.replacingOccurrences(of: "\n", with: " ")
+            return text.contains("\n") ? text.replacingOccurrences(of: "\n", with: " ") : text
         case .image?:
             return "[图片]"
         case .voice?:
@@ -390,6 +427,7 @@ struct ImPinyin: Sendable, Hashable {
 
     /// 昵称本身、全拼、首字母任一包含查询词
     static func matches(nickname: String, key: ImPinyin, query: String) -> Bool {
+        guard !query.isEmpty else { return true }
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return true }
         if nickname.lowercased().contains(needle) { return true }

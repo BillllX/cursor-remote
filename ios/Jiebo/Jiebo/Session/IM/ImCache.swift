@@ -50,12 +50,7 @@ enum ImCache {
     static func loadPending(tenant: String) async -> [String: [ImLocalMessage]] {
         await withCheckedContinuation { continuation in
             queue.async {
-                var pending: [String: [ImLocalMessage]] = [:]
-                for (convId, items) in readTimelines(tenant: tenant) {
-                    let unsent = items.filter { $0.seq == nil }
-                    if !unsent.isEmpty { pending[convId] = unsent }
-                }
-                continuation.resume(returning: pending)
+                continuation.resume(returning: readPendingTimelines(tenant: tenant))
             }
         }
     }
@@ -121,7 +116,45 @@ enum ImCache {
         return timelines
     }
 
+    /// 冷启动专用：仅跳过确定可解码为已发送 ImMessage（seq > 0 且 convId/from 非空）的条目，与旧版 filter { $0.seq == nil } 严格等价。
+    private static func readPendingTimelines(tenant: String) -> [String: [ImLocalMessage]] {
+        guard let dir = tenantDir(tenant) else { return [:] }
+        let convDir = dir.appendingPathComponent("conv", isDirectory: true)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: convDir.path)) ?? []
+        var pending: [String: [ImLocalMessage]] = [:]
+        for name in names where name.hasSuffix(".json") {
+            guard let data = try? Data(contentsOf: convDir.appendingPathComponent(name)),
+                  let row = try? JSONValue.parse(data).object,
+                  let convId = row["convId"]?.string, !convId.isEmpty,
+                  let rawMessages = row["messages"]?.array
+            else { continue }
+            var unsent: [ImLocalMessage] = []
+            for raw in rawMessages {
+                if let obj = raw.object,
+                   let seq = obj["seq"]?.int, seq > 0,
+                   let msgConvId = obj["convId"]?.string, !msgConvId.isEmpty,
+                   obj["from"]?.string != nil
+                { continue }
+                guard let item = ImLocalMessage.from(raw), item.seq == nil else { continue }
+                unsent.append(item)
+            }
+            if !unsent.isEmpty { pending[convId] = unsent }
+        }
+        return pending
+    }
+
     // MARK: 写
+
+    struct StateWritePayload: Sendable {
+        var me: ImMe?
+        var users: [ImUser]
+        var convs: [ImConvRow]
+        var blocked: Set<String>
+        var drafts: [String: String]
+        var hidden: [String: Set<Int>]
+        var heardVoice: [String: Set<Int>]
+        var voiceText: [String: [Int: String]]
+    }
 
     static func saveState(tenant: String, state: JSONValue) {
         queue.async {
@@ -131,9 +164,80 @@ enum ImCache {
         }
     }
 
-    static func saveTimeline(tenant: String, convId: String, items: [ImLocalMessage]) {
-        let rows = ImTimeline.trimmed(items).map { $0.json() }
+    /// 将状态排序、JSON 构树与磁盘写入整段移出主线程，在缓存串行队列后台执行。
+    static func saveState(tenant: String, payload: StateWritePayload) {
         queue.async {
+            guard let dir = tenantDir(tenant) else { return }
+            var object: [String: JSONValue] = [
+                "v": .number(1),
+                "users": .array(payload.users.sorted { $0.id < $1.id }.map { $0.json() }),
+                "convs": .array(payload.convs.sorted { $0.convId < $1.convId }.map { $0.json() }),
+                "blocked": .array(payload.blocked.sorted().map(JSONValue.string)),
+                "drafts": .object(payload.drafts.reduce(into: [String: JSONValue]()) { out, entry in
+                    if !entry.value.isEmpty { out[entry.key] = .string(entry.value) }
+                }),
+                "hidden": .object(payload.hidden.mapValues { seqs in .array(seqs.sorted().map { .number(Double($0)) }) }),
+                "heardVoice": .object(payload.heardVoice.mapValues { seqs in .array(seqs.sorted().map { .number(Double($0)) }) }),
+                "voiceText": .object(payload.voiceText.mapValues { rows in
+                    .object(Dictionary(uniqueKeysWithValues: rows.map { (String($0.key), .string($0.value)) }))
+                }),
+            ]
+            if let me = payload.me { object["me"] = me.json() }
+            guard let data = try? JSONValue.object(object).data() else { return }
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try? data.write(to: dir.appendingPathComponent("state.json"), options: .atomic)
+        }
+    }
+
+    private static let shareLock = NSLock()
+    nonisolated(unsafe) private static var shareGeneration: UInt64 = 0
+
+    /// 分享目录排序与 App Group 落盘排入同一串行队列，避免阻塞主线程；通过代际号防退出竞态覆写。
+    static func saveShareSnapshot(
+        tenant: String,
+        sendURL: String,
+        uploadSendURL: String,
+        assistantIngestURL: String?,
+        assistantUploadURL: String?,
+        people: [ImShareBridge.Person]
+    ) {
+        shareLock.lock()
+        let gen = shareGeneration
+        shareLock.unlock()
+        queue.async {
+            shareLock.lock()
+            let valid = (gen == shareGeneration)
+            shareLock.unlock()
+            guard valid else { return }
+            let sorted = people.sorted {
+                if $0.recentAt != $1.recentAt { return $0.recentAt > $1.recentAt }
+                return $0.nickname.localizedStandardCompare($1.nickname) == .orderedAscending
+            }
+            ImShareBridge.save(.init(
+                tenant: tenant,
+                sendURL: sendURL,
+                uploadSendURL: uploadSendURL,
+                assistantIngestURL: assistantIngestURL,
+                assistantUploadURL: assistantUploadURL,
+                people: sorted
+            ))
+        }
+    }
+
+    /// 递增代际号废止队列中尚未执行的旧账号写入，再在串行队列中清理快照文件。
+    static func clearShareSnapshot() {
+        shareLock.lock()
+        shareGeneration &+= 1
+        shareLock.unlock()
+        queue.async {
+            ImShareBridge.clear()
+        }
+    }
+
+    static func saveTimeline(tenant: String, convId: String, items: [ImLocalMessage]) {
+        // ImLocalMessage 为 Sendable 值类型，裁剪与 JSON 序列化全部在后台串行队列完成，主线程零开销
+        queue.async {
+            let rows = ImTimeline.trimmed(items).map { $0.json() }
             guard let dir = tenantDir(tenant)?.appendingPathComponent("conv", isDirectory: true) else { return }
             let file = dir.appendingPathComponent(safeName(convId) + ".json")
             if rows.isEmpty {
@@ -296,7 +400,18 @@ enum ImCache {
 
     /// 租户 id、会话号只含小写字母数字、短横线和 ~；别的字符一律换成 _
     private static func safeName(_ raw: String) -> String {
-        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_~")
-        return String(raw.map { allowed.contains($0) ? $0 : "_" }.prefix(160))
+        var out = String()
+        out.reserveCapacity(min(raw.utf8.count, 160))
+        var count = 0
+        for ch in raw {
+            if count >= 160 { break }
+            if ch.isASCII, ch.isLetter || ch.isNumber || ch == "-" || ch == "_" || ch == "~" {
+                out.append(ch)
+            } else {
+                out.append("_")
+            }
+            count += 1
+        }
+        return out
     }
 }

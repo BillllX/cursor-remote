@@ -100,7 +100,12 @@ enum ImDurableOutboxPolicy {
     }
 
     static func isPermanent(errorCode: String) -> Bool {
-        ["bad_body", "forbidden", "not_found", "not_visible", "too_large", "unsupported"].contains(errorCode)
+        switch errorCode {
+        case "bad_body", "forbidden", "not_found", "not_visible", "too_large", "unsupported":
+            return true
+        default:
+            return false
+        }
     }
 
     /// 只为可重放状态生成安全的毫秒等待值；在途、成功和永久失败永不进入整数转换。

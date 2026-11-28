@@ -437,7 +437,7 @@ final class ImStore {
     func resetTenant() {
         let old = tenant.isEmpty ? (ImShareBridge.load()?.tenant ?? "") : tenant
         ImShareBackgroundQueue.shared.cancel(tenant: old)
-        ImShareBridge.clear()
+        ImCache.clearShareSnapshot()
         clearMemory()
         tenant = ""
         if !old.isEmpty { ImCache.clear(tenant: old) }
@@ -450,7 +450,7 @@ final class ImStore {
         clearMemory()
         tenant = ""
         ImCache.clearAll()
-        ImShareBridge.clear()
+        ImCache.clearShareSnapshot()
     }
 
     /// App 进出前台
@@ -2172,22 +2172,22 @@ final class ImStore {
 
     private func persistState() {
         guard !tenant.isEmpty else { return }
-        var object: [String: JSONValue] = [
-            "v": .number(1),
-            "users": .array(users.values.sorted { $0.id < $1.id }.map { $0.json() }),
-            "convs": .array(convs.values.sorted { $0.convId < $1.convId }.map { $0.json() }),
-            "blocked": .array(blocked.sorted().map(JSONValue.string)),
-            "drafts": .object(draftBoxes.reduce(into: [String: JSONValue]()) { out, entry in
-                if !entry.value.text.isEmpty { out[entry.key] = .string(entry.value.text) }
-            }),
-            "hidden": .object(hidden.mapValues { seqs in .array(seqs.sorted().map { .number(Double($0)) }) }),
-            "heardVoice": .object(heardVoice.mapValues { seqs in .array(seqs.sorted().map { .number(Double($0)) }) }),
-            "voiceText": .object(voiceText.mapValues { rows in
-                .object(Dictionary<String, JSONValue>(uniqueKeysWithValues: rows.map { (String($0.key), .string($0.value)) }))
-            }),
-        ]
-        if let me { object["me"] = me.json() }
-        ImCache.saveState(tenant: tenant, state: .object(object))
+        // 主线程仅拷贝轻量值快照，排序、JSON 构树与磁盘写入全部交给 ImCache 串行后台队列
+        var drafts: [String: String] = [:]
+        for (key, box) in draftBoxes where !box.text.isEmpty {
+            drafts[key] = box.text
+        }
+        let payload = ImCache.StateWritePayload(
+            me: me,
+            users: Array(users.values),
+            convs: Array(convs.values),
+            blocked: blocked,
+            drafts: drafts,
+            hidden: hidden,
+            heardVoice: heardVoice,
+            voiceText: voiceText
+        )
+        ImCache.saveState(tenant: tenant, payload: payload)
         writeShareDirectory()
     }
 
@@ -2198,18 +2198,15 @@ final class ImStore {
         else { return }
         let people = users.values.map { user in
             ImShareBridge.Person(id: user.id, nickname: user.nickname, recentAt: rawLastActivity(convs[convId(with: user.id)]))
-        }.sorted {
-            if $0.recentAt != $1.recentAt { return $0.recentAt > $1.recentAt }
-            return $0.nickname.localizedStandardCompare($1.nickname) == .orderedAscending
         }
-        ImShareBridge.save(.init(
+        ImCache.saveShareSnapshot(
             tenant: tenant,
             sendURL: send,
             uploadSendURL: upload,
             assistantIngestURL: GatewayConfig.assistantIngestURL?.absoluteString,
             assistantUploadURL: GatewayConfig.assistantUploadURL?.absoluteString,
             people: people
-        ))
+        )
     }
 
     private func saveTimelineSoon(_ convId: String) {
