@@ -69,12 +69,15 @@ extension ImPickTemp {
 /// 聊天页底部的输入栏：多行（最多 5 行，再多就在框里滚）、「+」菜单、引用条。草稿按会话存
 struct ChatComposer: View {
     @Environment(ImStore.self) private var im
+    @Environment(\.scenePhase) private var scenePhase
     let peer: String
     let convId: String
     var focused: FocusState<Bool>.Binding
     var onSent: () -> Void
     @State private var text = ""
     @State private var loadedDraft = false
+    @State private var draftTenant = ""
+    @State private var draftSaveTask: Task<Void, Never>?
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var pickerOpen = false
     @State private var cameraOpen = false
@@ -165,20 +168,32 @@ struct ChatComposer: View {
         .onAppear {
             guard !loadedDraft else { return }
             loadedDraft = true
-            text = im.drafts[convId] ?? ""
+            draftTenant = im.tenant
+            text = im.draft(for: convId)
         }
-        .onChange(of: convId) { _, nextConvId in
-            text = im.drafts[nextConvId] ?? ""
+        .onChange(of: im.tenant) { _, nextTenant in
+            draftSaveTask?.cancel()
+            draftSaveTask = nil
+            draftTenant = nextTenant
+            text = nextTenant.isEmpty ? "" : im.draft(for: convId)
         }
-        .onChange(of: im.drafts[convId] ?? "") { _, externalDraft in
+        .onChange(of: convId) { oldConvId, nextConvId in
+            flushDraft(for: oldConvId)
+            text = im.draft(for: nextConvId)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { flushDraft(for: convId) }
+        }
+        .onChange(of: im.draft(for: convId)) { _, externalDraft in
             if externalDraft != text, !focused.wrappedValue {
                 text = externalDraft
             }
         }
         .onChange(of: text) { _, value in
-            im.setDraft(value, convId: convId)
+            scheduleDraftSave(value, for: convId)
         }
         .onDisappear {
+            flushDraft(for: convId)
             cancelLargeImageBatch()
             recorder.cancel()
             voiceStarted = false
@@ -279,7 +294,7 @@ struct ChatComposer: View {
     }
 
     private func replyStrip(_ seq: Int) -> some View {
-        let target = im.timelines[convId]?.first { $0.seq == seq }
+        let target = im.timelineMessage(convId: convId, seq: seq)
         let who = target.map { $0.from == im.meId ? "我" : im.user($0.from).nickname } ?? ""
         let text = target.map { ImFormat.preview(kind: $0.kind, body: $0.body) } ?? "一条消息"
         return HStack(spacing: 8) {
@@ -307,12 +322,41 @@ struct ChatComposer: View {
         .padding(.top, 6)
     }
 
+    private func scheduleDraftSave(_ value: String, for targetConvId: String) {
+        draftSaveTask?.cancel()
+        let tenantAtSchedule = im.tenant
+        guard !tenantAtSchedule.isEmpty, tenantAtSchedule == draftTenant else { return }
+        guard value != im.draft(for: targetConvId) else { return }
+        // 清空草稿立即同步；常态打字 300ms 防抖落库，避免每敲一字就重挂持久化
+        if value.isEmpty {
+            im.setDraft("", convId: targetConvId)
+            return
+        }
+        draftSaveTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, im.tenant == tenantAtSchedule else { return }
+            im.setDraft(value, convId: targetConvId)
+        }
+    }
+
+    private func flushDraft(for targetConvId: String) {
+        draftSaveTask?.cancel()
+        draftSaveTask = nil
+        // 登出或已切租户时绝不把旧视图里的本地 text 回灌进新租户草稿表
+        guard !im.tenant.isEmpty, im.tenant == draftTenant else { return }
+        guard text != im.draft(for: targetConvId) else { return }
+        im.setDraft(text, convId: targetConvId)
+    }
+
     // MARK: 发
 
     private func send() {
         let value = text
         if let url = ImLinkMetadata.recognized(value) {
+            draftSaveTask?.cancel()
+            draftSaveTask = nil
             text = ""
+            im.setDraft("", convId: convId)
             let tenant = im.tenant
             Task {
                 let metadata = await ImLinkMetadata.load(url, tenant: tenant)
@@ -322,7 +366,10 @@ struct ChatComposer: View {
             }
         } else {
             guard im.sendText(value, to: peer) else { return }
+            draftSaveTask?.cancel()
+            draftSaveTask = nil
             text = ""
+            im.setDraft("", convId: convId)
             onSent()
         }
     }

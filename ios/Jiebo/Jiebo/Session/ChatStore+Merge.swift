@@ -193,7 +193,8 @@ extension ChatStore {
 
     func applySession(_ chat: ChatSession?) {
         guard let chat else { return }
-        draft = chat.draft
+        let nextDraft = draft(for: chat.id)
+        if draft != nextDraft { draft = nextDraft }
         mode = chat.mode
         if let sessionModel = chat.sessionModel {
             let catalog = ModelCatalog.withCurrentModel(models, current: sessionModel)
@@ -278,7 +279,6 @@ extension ChatStore {
                 var slim = chat
                 slim.turns = current.turns
                 slim.turnsComplete = current.turnsComplete
-                slim.draft = current.draft.isEmpty ? chat.draft : current.draft
                 slim.agentId = current.agentId ?? chat.agentId
                 return slim
             }
@@ -294,7 +294,6 @@ extension ChatStore {
                 var next = chat
                 next.turns = Self.mergingTurnFiles(base: chat.turns, other: current.turns)
                 next.cwd = current.cwd ?? chat.cwd
-                next.draft = current.draft.isEmpty ? chat.draft : current.draft
                 next.agentId = current.agentId ?? chat.agentId
                 return next
             }
@@ -305,16 +304,34 @@ extension ChatStore {
                 keep.turns = Self.mergingTurnFiles(base: current.turns, other: chat.turns)
                 keep.agentId = current.agentId ?? chat.agentId
                 keep.cwd = current.cwd ?? chat.cwd
-                keep.draft = current.draft.isEmpty ? chat.draft : current.draft
                 return keep
             }
             var next = chat
             next.turns = Self.mergingTurnFiles(base: chat.turns, other: current.turns)
             next.cwd = current.cwd ?? chat.cwd
-            next.draft = current.draft.isEmpty ? chat.draft : current.draft
             next.agentId = current.agentId ?? chat.agentId
             return next
         }
+    }
+
+    /// 将单会话 ActiveTurnBox 中未提交的流式增量原子回写到 chats，并清空叠加层。
+    @discardableResult
+    func commitActiveTurnBox(_ id: String, bumpRevision: Bool = true) -> Bool {
+        guard let box = existingActiveTurnBox(for: id), box.hasPendingOverlay else { return false }
+        guard let chatIndex = chats.firstIndex(where: { $0.id == id }),
+              let targetTurnId = box.turnId,
+              let turnIndex = chats[chatIndex].turns.lastIndex(where: { $0.id == targetTurnId })
+        else {
+            box.reset()
+            return false
+        }
+        var updated = chats[chatIndex]
+        box.apply(to: &updated.turns[turnIndex])
+        box.reset()
+        chats[chatIndex] = updated
+        if bodySegs[id] != nil { bodySegs[id] = nil }
+        if bumpRevision { turnRenderRevisions[id, default: 0] &+= 1 }
+        return true
     }
 
     /// turnsTouched：调用方已经改了某一轮。流式每几十毫秒进来一次，不再把前面所有回合逐字段比一遍。
@@ -327,10 +344,19 @@ extension ChatStore {
         _ update: (ChatSession) -> ChatSession
     ) {
         guard let index = chats.firstIndex(where: { $0.id == id }) else { return }
-        let before = chats[index]
+        var before = chats[index]
+        var overlayMerged = false
+        if let box = existingActiveTurnBox(for: id), box.hasPendingOverlay {
+            if let targetTurnId = box.turnId,
+               let turnIndex = before.turns.lastIndex(where: { $0.id == targetTurnId }) {
+                box.apply(to: &before.turns[turnIndex])
+                overlayMerged = true
+            }
+            box.reset()
+        }
         chats[index] = update(before)
         mergePendingTurnFiles(chatId: id, bumpRevision: false)
-        let turnsChanged = turnsTouched || chats[index].turns != before.turns
+        let turnsChanged = overlayMerged || turnsTouched || chats[index].turns != before.turns
         // 本地改过的正文不再是那份服务端段哈希对应的内容（清掉后不再比，流式增量只比一次）
         if bodySegs[id] != nil, turnsChanged { bodySegs[id] = nil }
         if turnsChanged { turnRenderRevisions[id, default: 0] &+= 1 }

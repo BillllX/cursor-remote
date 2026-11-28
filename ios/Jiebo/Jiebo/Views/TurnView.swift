@@ -39,11 +39,34 @@ struct TurnView: View, Equatable {
         }
     }
 
-    private var assistantText: String {
-        turn.assistant.isEmpty ? "" : ReplyText.repair(turn.assistant)
+    /// 仅当本轮处于运行中时订阅单会话 ActiveTurnBox；已完成的历史轮次零观察开销。
+    private var activeOverlay: ActiveTurnBox? {
+        guard turn.running else { return nil }
+        let box = store.activeTurnBox(for: chatId)
+        return box.turnId == turn.id ? box : nil
     }
+
+    private var assistantText: String {
+        if let box = activeOverlay, !box.assistant.isEmpty {
+            return box.assistant
+        }
+        return turn.assistant.isEmpty ? "" : ReplyText.repair(turn.assistant)
+    }
+
     private var thinkingText: String {
-        turn.thinking.isEmpty ? "" : ReplyText.repair(turn.thinking)
+        if let box = activeOverlay, !box.thinking.isEmpty {
+            return box.thinking
+        }
+        return turn.thinking.isEmpty ? "" : ReplyText.repair(turn.thinking)
+    }
+
+    private var effectiveTools: [ToolCall] {
+        guard let box = activeOverlay else { return turn.tools }
+        return box.mergedTools(for: turn)
+    }
+
+    private var effectiveWaitingForLink: Bool {
+        waitingForLink && assistantText.isEmpty && thinkingText.isEmpty && effectiveTools.isEmpty
     }
 
     static func == (lhs: TurnView, rhs: TurnView) -> Bool {
@@ -57,7 +80,7 @@ struct TurnView: View, Equatable {
     }
 
     private var thinkingShimmerActive: Bool {
-        turn.running && turn.assistant.isEmpty && turn.tools.isEmpty && turn.task?.nilIfEmpty == nil
+        turn.running && assistantText.isEmpty && effectiveTools.isEmpty && turn.task?.nilIfEmpty == nil
     }
     private func turnThumb(_ image: PromptImage, index: Int, total: Int) -> some View {
         let base64 = image.data
@@ -83,7 +106,7 @@ struct TurnView: View, Equatable {
     /// 所有 chrome（含 iPad）都隐藏沉默工具；propose 不属于 silent，仍正常显示
     private var visibleTools: [ToolCall] {
         guard !turn.deferred else { return [] }
-        let tools = ToolCall.uniqued(turn.tools)
+        let tools = ToolCall.uniqued(effectiveTools)
         return tools.filter { !AssistantToolText.isSilent($0) }
     }
 
@@ -293,7 +316,7 @@ struct TurnView: View, Equatable {
                     Text(task)
                         .font(JieboFont.text(.subheadline))
                         .foregroundStyle(JieboColor.ink2)
-                } else if waitingForLink {
+                } else if effectiveWaitingForLink {
                     HStack(spacing: 8) {
                         Text("等连上再开始")
                             .font(JieboFont.text(.subheadline))
@@ -303,11 +326,11 @@ struct TurnView: View, Equatable {
                         }
                         .accessibilityHint("这句话回到输入框，连上后也不会发出去")
                     }
-                } else if turn.thinking.isEmpty, turn.tools.isEmpty {
+                } else if thinkingText.isEmpty, effectiveTools.isEmpty {
                     ShimmerText(text: "开始动手", font: JieboFont.text(.subheadline))
                 }
             }
-            if turn.running, isLastAssistant, !waitingForLink {
+            if turn.running, isLastAssistant, !effectiveWaitingForLink {
                 StallHintRow()
             }
             if !captured.isEmpty {
@@ -335,10 +358,7 @@ struct TurnView: View, Equatable {
                     HStack(spacing: 8) {
                         Spacer(minLength: 0)
                         if canRestorePrompt {
-                            ActionButton(title: "放回输入框", kind: .outline) {
-                                store.restoreFailedPromptIfDraftEmpty(chatId: chatId)
-                            }
-                            .accessibilityHint("不发送，上一句回到输入框")
+                            TurnRestorePromptButton(chatId: chatId)
                         }
                         ActionButton(title: "重试", kind: .destructive) {
                             store.retryTurn(turn.id, chatId: chatId)
@@ -576,6 +596,21 @@ enum ReplyText {
 private struct ShareItem: Identifiable {
     let id = UUID()
     let text: String
+}
+
+/// 隔离草稿判空订阅：末轮出错时打字只更新此按钮显隐，不触发 ThreadView 与 TurnView 重算。
+private struct TurnRestorePromptButton: View {
+    @Environment(ChatStore.self) private var store
+    let chatId: String
+
+    var body: some View {
+        if store.draft(for: chatId).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            ActionButton(title: "放回输入框", kind: .outline) {
+                store.restoreFailedPromptIfDraftEmpty(chatId: chatId)
+            }
+            .accessibilityHint("不发送，上一句回到输入框")
+        }
+    }
 }
 
 /// 一段时间没有新输出时的提示：4 秒起「仍在处理…」，15 秒起带秒数并给一个停止按钮（对齐网页）。

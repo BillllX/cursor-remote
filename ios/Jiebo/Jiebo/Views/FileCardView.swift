@@ -268,7 +268,10 @@ private struct ThumbRequest: ViewModifier {
     private func request() {
         // 正在写的文件内容不完整，等写完再截
         guard !writing else { return }
-        requestedKeys.insert(ThumbnailStore.shared.cacheKey(for: file, chatId: chatId, store: store).key)
+        let key = ThumbnailStore.shared.cacheKey(for: file, chatId: chatId, store: store).key
+        if requestedKeys.insert(key).inserted {
+            ThumbnailStore.shared.retain(key: key)
+        }
         ThumbnailStore.shared.request(file: file, chatId: chatId, store: store)
     }
 
@@ -307,7 +310,10 @@ private struct ThumbRequest: ViewModifier {
                 request()
             }
             .onDisappear {
-                for key in requestedKeys { ThumbnailStore.shared.cancel(key: key) }
+                for key in requestedKeys {
+                    ThumbnailStore.shared.release(key: key)
+                    ThumbnailStore.shared.cancel(key: key)
+                }
                 requestedKeys.removeAll()
             }
     }

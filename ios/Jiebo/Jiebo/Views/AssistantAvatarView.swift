@@ -6,7 +6,7 @@ extension ChatStore {
         let now = Date().timeIntervalSince1970 * 1000
         return AssistantAvatarState.resolve(
             connected: connected,
-            turns: assistantChat?.turns ?? [],
+            turnSnapshot: assistantAvatarTurnSnapshot,
             chatBusy: runningChatIds.contains(chatId) || queuedChatIds.contains(chatId)
                 || assistantState?.delegations.contains { $0.status == "queued" } == true,
             hasApproval: assistantState?.approvals.contains { $0.expiresAt <= 0 || $0.expiresAt > now } == true
@@ -69,14 +69,31 @@ struct AssistantAvatarView: View {
             displayedPhase = .idle
         }
         .task(id: motionKey) {
-            motionActive = false
-            guard !reduceMotion, homeActive, scenePhase == .active, JieboTheme.shared.palette != .sticker else { return }
+            // 显式用短时有限动画归位，覆盖并彻底终止上一阶段的 repeatForever
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                motionActive = false
+            }
+            // 非贴纸主题在静止/离线/失败态不再跑 repeatForever，减少常驻 Core Animation / GPU 帧占用
+            guard !reduceMotion, homeActive, scenePhase == .active,
+                  JieboTheme.shared.palette != .sticker,
+                  shouldAnimateMotion
+            else { return }
             await Task.yield()
+            guard !Task.isCancelled else { return }
             withAnimation(motionAnimation.repeatForever(autoreverses: true)) {
                 motionActive = true
             }
         }
         .accessibilityHidden(true)
+    }
+
+    private var shouldAnimateMotion: Bool {
+        switch displayedPhase {
+        case .listening, .thinking, .executing, .approval, .success:
+            return true
+        case .idle, .failure, .offline:
+            return false
+        }
     }
 
     private var completionKey: String {
@@ -104,7 +121,7 @@ struct AssistantAvatarView: View {
     private let motionGain: CGFloat = 1.75
 
     private var motionScale: CGSize {
-        guard motionActive else { return CGSize(width: 1, height: 1) }
+        guard motionActive, shouldAnimateMotion else { return CGSize(width: 1, height: 1) }
         let raw: CGSize
         switch displayedPhase {
         case .idle: raw = CGSize(width: 1.008, height: 1.014)
@@ -123,7 +140,7 @@ struct AssistantAvatarView: View {
     }
 
     private var motionOffset: CGSize {
-        guard motionActive else { return .zero }
+        guard motionActive, shouldAnimateMotion else { return .zero }
         let distance = max(1, size * 0.035) * motionGain
         switch displayedPhase {
         case .idle: return CGSize(width: 0, height: -distance * 0.45)
@@ -138,7 +155,7 @@ struct AssistantAvatarView: View {
     }
 
     private var motionRotation: Angle {
-        guard motionActive else { return .zero }
+        guard motionActive, shouldAnimateMotion else { return .zero }
         switch displayedPhase {
         case .listening: return .degrees(-1.2 * Double(motionGain))
         case .thinking: return .degrees(Double(motionGain))

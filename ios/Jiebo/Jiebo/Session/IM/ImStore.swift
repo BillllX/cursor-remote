@@ -38,6 +38,53 @@ final class ImWeakStore: @unchecked Sendable {
     init(_ value: ImStore) { self.value = value }
 }
 
+/// 按会话隔离的 IM 时间线盒：任意会话新消息、翻页或撤回只刷新该会话自身。
+@Observable
+@MainActor
+final class ImTimelineBox {
+    var messages: [ImLocalMessage] = []
+    /// 仅追踪最新待发消息（seq == nil），供会话列表行预览订阅，不受历史翻页或已确认消息影响。
+    var latestPending: ImLocalMessage?
+    @ObservationIgnored var pendingActivityAt: Double = 0
+    @ObservationIgnored private var cachedSeqIndex: [Int: ImLocalMessage] = [:]
+    @ObservationIgnored private var seqIndexDirty = true
+
+    func setMessages(_ next: [ImLocalMessage]) {
+        messages = next
+        seqIndexDirty = true
+        let pending = next.last(where: { $0.seq == nil })
+        if latestPending != pending { latestPending = pending }
+        pendingActivityAt = pending?.at ?? 0
+    }
+
+    func seqIndex() -> [Int: ImLocalMessage] {
+        if seqIndexDirty {
+            var map: [Int: ImLocalMessage] = [:]
+            map.reserveCapacity(messages.count)
+            for msg in messages {
+                if let seq = msg.seq { map[seq] = msg }
+            }
+            cachedSeqIndex = map
+            seqIndexDirty = false
+        }
+        return cachedSeqIndex
+    }
+}
+
+/// 按会话隔离的 IM 草稿盒：打字落库只影响当前会话输入框与对应列表行。
+@Observable
+@MainActor
+final class ImDraftBox {
+    var text = ""
+}
+
+/// 按消息 clientId 隔离的上传进度盒：10Hz 进度更新只驱动单个进度环重绘，零时间线数组拷贝。
+@Observable
+@MainActor
+final class ImUploadProgressBox {
+    var progress: Double?
+}
+
 /// 平台用户之间即时消息的数据层（docs/im.md、docs/im-ios.md）。
 /// 网关下行由 ChatStore 转进 handle(_:)；连上（含重连）后拉联系人、分页拉全会话列表，再按本地最大 seq 补缺。
 @MainActor
@@ -60,21 +107,41 @@ final class ImStore {
     /// 网关支持 im 且连接就绪
     private(set) var online = false
     /// 内存和缓存属于哪个租户
-    private(set) var tenant = ""
-    var me: ImMe?
-    var users: [String: ImUser] = [:]
+    private(set) var tenant = "" {
+        didSet { if tenant != oldValue { invalidateDirectoryCache() } }
+    }
+    var me: ImMe? {
+        didSet { if me != oldValue { invalidateDirectoryCache() } }
+    }
+    var users: [String: ImUser] = [:] {
+        didSet { invalidateDirectoryCache() }
+    }
     var avatarTicket: ImTicket?
-    var convs: [String: ImConvRow] = [:]
+    var convs: [String: ImConvRow] = [:] {
+        didSet { invalidateDirectoryCache() }
+    }
     var tickets: [String: ImTicket] = [:]
     var blocked: Set<String> = []
-    var timelines: [String: [ImLocalMessage]] = [:]
+    /// 按会话隔离的时间线盒、草稿盒与按消息隔离的上传进度盒，消除全局字典广播。
+    @ObservationIgnored private var timelineBoxes: [String: ImTimelineBox] = [:]
+    private(set) var timelineBoxesEpoch = 0
+    @ObservationIgnored private var draftBoxes: [String: ImDraftBox] = [:]
+    private(set) var draftBoxesEpoch = 0
+    @ObservationIgnored private var uploadProgressBoxes: [String: ImUploadProgressBox] = [:]
+    private(set) var uploadProgressEpoch = 0
+    /// 联系人目录修订号与缓存：me/users/convs 或会话待发状态变化时递增，免除 ChatListView 重复全量排序。
+    private(set) var directoryRevision: UInt64 = 0
+    @ObservationIgnored private var directoryCache: (
+        revision: UInt64,
+        query: String,
+        result: (chatted: [ImDirectoryRow], others: [ImDirectoryRow])
+    )?
     /// Collab 运行图是网关规范化服务数据；界面只读，审批和执行仍留在既有安全边界。
     var collabRuns: [String: [CollabRunSnapshot]] = [:]
     /// false = 前面没有更早的了；nil = 还不知道，按还有处理
     var olderMore: [String: Bool] = [:]
     var loadingOlder: Set<String> = []
     var loadingLatest: Set<String> = []
-    var drafts: [String: String] = [:]
     /// 只在本机删掉（隐藏）的消息
     var hidden: [String: Set<Int>] = [:]
     /// 引用回复：会话号 → 被引用的 seq
@@ -123,6 +190,8 @@ final class ImStore {
     @ObservationIgnored private var sendTimers: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var uploadTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var uploadGenerations: [String: Int] = [:]
+    /// 上传进度发布节流表：避免 URLSession 高频进度回调反复拷贝时间线数组。
+    @ObservationIgnored private var lastUploadProgressPublish: [String: (time: TimeInterval, value: Double)] = [:]
     @ObservationIgnored private var uploadGenerationSeed = 0
     @ObservationIgnored private var readTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var stateSaveTask: Task<Void, Never>?
@@ -166,6 +235,105 @@ final class ImStore {
     func user(_ id: String) -> ImUser {
         if id == me?.id, let me { return me.user }
         return users[id] ?? ImUser(id: id, nickname: id, avatar: nil)
+    }
+
+    // MARK: 分会话隔离盒
+
+    func timelineBox(for convId: String) -> ImTimelineBox {
+        _ = timelineBoxesEpoch
+        if let box = timelineBoxes[convId] { return box }
+        let box = ImTimelineBox()
+        timelineBoxes[convId] = box
+        return box
+    }
+
+    func timelineMessages(for convId: String) -> [ImLocalMessage] {
+        timelineBox(for: convId).messages
+    }
+
+    func timelineSeqIndex(for convId: String) -> [Int: ImLocalMessage] {
+        let box = timelineBox(for: convId)
+        _ = box.messages
+        return box.seqIndex()
+    }
+
+    func timelineMessage(convId: String, seq: Int) -> ImLocalMessage? {
+        timelineSeqIndex(for: convId)[seq]
+    }
+
+    func latestPendingMessage(for convId: String) -> ImLocalMessage? {
+        timelineBox(for: convId).latestPending
+    }
+
+    func draft(for convId: String) -> String {
+        _ = draftBoxesEpoch
+        return draftBox(for: convId).text
+    }
+
+    func uploadProgress(for clientId: String) -> Double? {
+        _ = uploadProgressEpoch
+        return uploadProgressBox(for: clientId).progress
+    }
+
+    private func draftBox(for convId: String) -> ImDraftBox {
+        if let box = draftBoxes[convId] { return box }
+        let box = ImDraftBox()
+        draftBoxes[convId] = box
+        return box
+    }
+
+    private func uploadProgressBox(for clientId: String) -> ImUploadProgressBox {
+        if let box = uploadProgressBoxes[clientId] { return box }
+        let box = ImUploadProgressBox()
+        uploadProgressBoxes[clientId] = box
+        return box
+    }
+
+    private func rawMessages(_ convId: String) -> [ImLocalMessage] {
+        timelineBoxes[convId]?.messages ?? []
+    }
+
+    private func setTimelineMessages(_ next: [ImLocalMessage], for convId: String) {
+        let box = timelineBoxes[convId] ?? {
+            let created = ImTimelineBox()
+            timelineBoxes[convId] = created
+            return created
+        }()
+        let hadPending = box.latestPending != nil
+        let oldPendingAt = box.pendingActivityAt
+        box.setMessages(next)
+        let hasPending = box.latestPending != nil
+        if hadPending != hasPending || oldPendingAt != box.pendingActivityAt {
+            invalidateDirectoryCache()
+        }
+    }
+
+    private func invalidateDirectoryCache() {
+        directoryCache = nil
+        directoryRevision &+= 1
+    }
+
+    private func clearUploadProgress(for clientId: String) {
+        if let box = uploadProgressBoxes[clientId], box.progress != nil {
+            box.progress = nil
+        }
+        if uploadProgressBoxes.count > 64 {
+            let staleKeys = uploadProgressBoxes.keys.filter { uploadTasks[$0] == nil && uploadProgressBoxes[$0]?.progress == nil }
+            if !staleKeys.isEmpty {
+                for key in staleKeys { uploadProgressBoxes.removeValue(forKey: key) }
+                uploadProgressEpoch &+= 1
+            }
+        }
+    }
+
+    private func clearAllUploadProgressBoxes() {
+        for box in uploadProgressBoxes.values where box.progress != nil {
+            box.progress = nil
+        }
+        if !uploadProgressBoxes.isEmpty {
+            uploadProgressBoxes.removeAll()
+            uploadProgressEpoch &+= 1
+        }
     }
 
     // MARK: 生命周期
@@ -226,8 +394,8 @@ final class ImStore {
         sendTimers = [:]
         // 断线前没等到确认的设置算没成；重连后拉列表会把真实状态带回来
         rollbackPending()
-        for (convId, items) in timelines where items.contains(where: { $0.state == .sending }) {
-            timelines[convId] = items.map { item in
+        for (convId, box) in timelineBoxes where box.messages.contains(where: { $0.state == .sending }) {
+            let updated = box.messages.map { item in
                 var next = item
                 if next.state == .sending {
                     next.state = .failed
@@ -241,6 +409,7 @@ final class ImStore {
                 }
                 return next
             }
+            setTimelineMessages(updated, for: convId)
             saveTimelineSoon(convId)
         }
     }
@@ -336,7 +505,10 @@ final class ImStore {
             }
             if blocked.isEmpty { blocked = Set(snapshot.blocked) }
         }
-        for (key, text) in snapshot.drafts where drafts[key] == nil { drafts[key] = text }
+        for (key, text) in snapshot.drafts where (draftBoxes[key]?.text ?? "").isEmpty {
+            let box = draftBox(for: key)
+            if box.text != text { box.text = text }
+        }
         for (key, seqs) in snapshot.hidden { hidden[key, default: []].formUnion(seqs) }
         for (key, seqs) in snapshot.heardVoice { heardVoice[key, default: []].formUnion(seqs) }
         for (convId, rows) in snapshot.voiceText {
@@ -356,8 +528,8 @@ final class ImStore {
     /// 磁盘时间线后到：和这段时间已经进内存的消息合并。合并前不能落盘，否则会把还没读到的记录覆盖掉
     private func applyTimelines(_ cached: [String: [ImLocalMessage]]) {
         for (convId, items) in cached {
-            let merged = ImTimeline.merge(items, timelines[convId] ?? [], me: meId)
-            timelines[convId] = merged.filter { ($0.seq ?? Int.max) > hideBefore(convId) }
+            let merged = ImTimeline.merge(items, rawMessages(convId), me: meId)
+            setTimelineMessages(merged.filter { ($0.seq ?? Int.max) > hideBefore(convId) }, for: convId)
         }
     }
 
@@ -393,14 +565,28 @@ final class ImStore {
         convs = [:]
         tickets = [:]
         blocked = []
-        timelines = [:]
+        for box in timelineBoxes.values where !box.messages.isEmpty {
+            box.setMessages([])
+        }
+        if !timelineBoxes.isEmpty {
+            timelineBoxes.removeAll()
+            timelineBoxesEpoch &+= 1
+        }
         timelineLoaded = []
         timelineLoading = []
         collabRuns = [:]
         olderMore = [:]
         loadingOlder = []
         loadingLatest = []
-        drafts = [:]
+        for box in draftBoxes.values where !box.text.isEmpty {
+            box.text = ""
+        }
+        if !draftBoxes.isEmpty {
+            draftBoxes.removeAll()
+            draftBoxesEpoch &+= 1
+        }
+        clearAllUploadProgressBoxes()
+        invalidateDirectoryCache()
         hidden = [:]
         replyTo = [:]
         heardVoice = [:]
@@ -466,7 +652,7 @@ final class ImStore {
             if let ticket { tickets[convId] = ticket }
             let floor = hideBefore(convId)
             let incoming = messages.filter { $0.seq > floor }.map(ImLocalMessage.init)
-            timelines[convId] = ImTimeline.merge(timelines[convId] ?? [], incoming, me: meId)
+            setTimelineMessages(ImTimeline.merge(rawMessages(convId), incoming, me: meId), for: convId)
             if let after {
                 if more, let last = messages.last?.seq, last > after {
                     send(.imHistory(convId: convId, before: nil, after: last, limit: 50))
@@ -486,7 +672,7 @@ final class ImStore {
         case .ack(let clientId, let convId, let seq, let at, let rejected):
             sendTimers.removeValue(forKey: clientId)?.cancel()
             cancelUploadTask(clientId: clientId)
-            var items = timelines[convId] ?? []
+            var items = rawMessages(convId)
             guard let index = items.firstIndex(where: { $0.clientId == clientId && $0.from == meId }) else { return }
             var item = items.remove(at: index)
             item.seq = seq
@@ -495,7 +681,7 @@ final class ImStore {
             item.state = .sent
             item.progress = nil
             item.durableOutbox = nil
-            timelines[convId] = ImTimeline.merge(items, [item], me: meId)
+            setTimelineMessages(ImTimeline.merge(items, [item], me: meId), for: convId)
             var conv = ensureConv(convId)
             if seq >= (conv.last?.seq ?? 0), let message = item.message { conv.last = message }
             conv.maxSeq = max(conv.maxSeq, seq)
@@ -506,7 +692,7 @@ final class ImStore {
             let convId = message.convId
             if let ticket { tickets[convId] = ticket }
             guard message.seq > hideBefore(convId) else { return }
-            timelines[convId] = ImTimeline.merge(timelines[convId] ?? [], [ImLocalMessage(message)], me: meId)
+            setTimelineMessages(ImTimeline.merge(rawMessages(convId), [ImLocalMessage(message)], me: meId), for: convId)
             var conv = ensureConv(convId)
             if message.seq >= (conv.last?.seq ?? 0) { conv.last = message }
             conv.maxSeq = max(conv.maxSeq, message.seq)
@@ -573,10 +759,11 @@ final class ImStore {
         case "recall":
             guard let convId = update.convId, let seq = update.seq else { return }
             noteLive(convId)
-            if var items = timelines[convId], let index = items.firstIndex(where: { $0.seq == seq }) {
+            var items = rawMessages(convId)
+            if let index = items.firstIndex(where: { $0.seq == seq }) {
                 items[index].recalled = true
                 items[index].body = nil
-                timelines[convId] = items
+                setTimelineMessages(items, for: convId)
                 saveTimelineSoon(convId)
             }
             if var conv = convs[convId] {
@@ -698,8 +885,9 @@ final class ImStore {
     private func applyHideBefore(_ convId: String) {
         guard var conv = convs[convId], conv.hideBefore > 0 else { return }
         let floor = conv.hideBefore
-        if let items = timelines[convId], items.contains(where: { ($0.seq ?? Int.max) <= floor }) {
-            timelines[convId] = items.filter { ($0.seq ?? Int.max) > floor }
+        let items = rawMessages(convId)
+        if items.contains(where: { ($0.seq ?? Int.max) <= floor }) {
+            setTimelineMessages(items.filter { ($0.seq ?? Int.max) > floor }, for: convId)
             saveTimelineSoon(convId)
         }
         if let last = conv.last, last.seq <= floor { conv.last = nil }
@@ -724,7 +912,8 @@ final class ImStore {
     /// 还没发出去的附件在 outbox 里的文件名
     private func pendingOutboxFiles() -> Set<String> {
         var names = Set<String>()
-        for items in timelines.values {
+        for box in timelineBoxes.values {
+            let items = box.messages
             for item in items where item.seq == nil {
                 guard let outgoing = item.outgoing else { continue }
                 names.insert(outgoing.file)
@@ -741,9 +930,10 @@ final class ImStore {
     /// 时间线还在读磁盘时不能跑：local seq 会是 0，接着把还没读进来的记录从磁盘删掉
     private func catchUp() {
         guard timelinesReady else { return }
-        for (convId, items) in timelines {
+        for (convId, box) in timelineBoxes {
             guard timelineLoaded.contains(convId) else { continue }
             guard let conv = convs[convId] else { continue }
+            let items = box.messages
             let local = ImTimeline.maxSeq(items)
             guard conv.maxSeq > local else { continue }
             if transport?.imNetworkCost.shouldReduceBackgroundTraffic == true, convId != visibleConvId {
@@ -752,7 +942,7 @@ final class ImStore {
             }
             catchUp(convId: convId, items: items, conv: conv, local: local)
         }
-        if let open = visibleConvId, timelineLoaded.contains(open), timelines[open]?.contains(where: { $0.seq != nil }) != true {
+        if let open = visibleConvId, timelineLoaded.contains(open), !rawMessages(open).contains(where: { $0.seq != nil }) {
             requestLatest(open)
         }
     }
@@ -765,7 +955,7 @@ final class ImStore {
             loadTimelineIfNeeded(convId)
             return
         }
-        let items = timelines[convId] ?? []
+        let items = rawMessages(convId)
         let local = ImTimeline.maxSeq(items)
         guard conv.maxSeq > local else {
             deferredCatchUp.remove(convId)
@@ -777,7 +967,7 @@ final class ImStore {
 
     private func catchUp(convId: String, items: [ImLocalMessage], conv: ImConvRow, local: Int) {
         if local == 0 || conv.maxSeq - local > ImTimeline.cacheLimit {
-            timelines[convId] = items.filter { $0.seq == nil }
+            setTimelineMessages(items.filter { $0.seq == nil }, for: convId)
             olderMore[convId] = nil
             saveTimelineSoon(convId)
             if convId == visibleConvId { requestLatest(convId) }
@@ -831,7 +1021,7 @@ final class ImStore {
             return
         }
         catchUp(convId: convId)
-        if timelines[convId]?.contains(where: { $0.seq != nil }) != true, convs[convId] != nil {
+        if !rawMessages(convId).contains(where: { $0.seq != nil }), convs[convId] != nil {
             requestLatest(convId)
         } else if convs[convId] == nil {
             // 没聊过：没什么可拉的
@@ -865,7 +1055,7 @@ final class ImStore {
                 self.catchUp(convId: convId)
             }
             if self.visibleConvId == convId,
-               self.timelines[convId]?.contains(where: { $0.seq != nil }) != true,
+               !self.rawMessages(convId).contains(where: { $0.seq != nil }),
                self.convs[convId] != nil {
                 self.requestLatest(convId)
             } else if self.visibleConvId == convId, self.convs[convId] == nil {
@@ -888,7 +1078,7 @@ final class ImStore {
     func loadOlder(_ convId: String) {
         guard timelineLoaded.contains(convId) else { return }
         guard online, olderMore[convId] != false, !loadingOlder.contains(convId), !loadingLatest.contains(convId) else { return }
-        guard let first = ImTimeline.minSeq(timelines[convId] ?? []) else {
+        guard let first = ImTimeline.minSeq(rawMessages(convId)) else {
             if convs[convId] != nil { requestLatest(convId) }
             return
         }
@@ -900,9 +1090,9 @@ final class ImStore {
         send(.imHistory(convId: convId, before: first, after: nil, limit: 30))
     }
 
-    /// 本机能显示的消息（去掉只在本机删掉的）
+    /// 本机能显示的消息（去掉只在本机删掉的）；只订阅当前会话的 ImTimelineBox。
     func visibleMessages(_ convId: String) -> [ImLocalMessage] {
-        let items = timelines[convId] ?? []
+        let items = timelineMessages(for: convId)
         guard let gone = hidden[convId], !gone.isEmpty else { return items }
         return items.filter { item in
             guard let seq = item.seq else { return true }
@@ -1073,7 +1263,7 @@ final class ImStore {
     }
 
     private func append(_ item: ImLocalMessage) {
-        timelines[item.convId] = ImTimeline.merge(timelines[item.convId] ?? [], [item], me: meId)
+        setTimelineMessages(ImTimeline.merge(rawMessages(item.convId), [item], me: meId), for: item.convId)
         saveTimelineSoon(item.convId)
     }
 
@@ -1121,9 +1311,9 @@ final class ImStore {
         }
         beginDurableAttempt(clientId: clientId, convId: convId)
         setState(clientId, convId, .sending)
-        setProgress(clientId, convId, 0)
         let tenantAtStart = tenant
         let generation = beginUploadTask(clientId: clientId)
+        setProgress(clientId, convId, 0)
         let box = ImWeakStore(self)
         let report: @Sendable (Double) -> Void = { fraction in
             Task { @MainActor in
@@ -1178,9 +1368,9 @@ final class ImStore {
         }
         beginDurableAttempt(clientId: clientId, convId: convId)
         setState(clientId, convId, .sending)
-        setProgress(clientId, convId, 0)
         let tenantAtStart = tenant
         let generation = beginUploadTask(clientId: clientId)
+        setProgress(clientId, convId, 0)
         let box = ImWeakStore(self)
         uploadTasks[clientId] = Task { [weak self] in
             var upload = start
@@ -1237,13 +1427,14 @@ final class ImStore {
     }
 
     private func find(_ clientId: String, _ convId: String) -> ImLocalMessage? {
-        timelines[convId]?.first { $0.seq == nil && $0.clientId == clientId }
+        rawMessages(convId).first { $0.seq == nil && $0.clientId == clientId }
     }
 
     private func mutatePending(_ clientId: String, _ convId: String, _ change: (inout ImLocalMessage) -> Void) {
-        guard var items = timelines[convId], let index = items.firstIndex(where: { $0.seq == nil && $0.clientId == clientId }) else { return }
+        var items = rawMessages(convId)
+        guard let index = items.firstIndex(where: { $0.seq == nil && $0.clientId == clientId }) else { return }
         change(&items[index])
-        timelines[convId] = items
+        setTimelineMessages(items, for: convId)
     }
 
     private func setState(_ clientId: String, _ convId: String, _ state: ImSendState) {
@@ -1251,7 +1442,10 @@ final class ImStore {
             item.state = state
             if state != .sending { item.progress = nil }
         }
-        if state != .sending { saveTimelineSoon(convId) }
+        if state != .sending {
+            clearUploadProgress(for: clientId)
+            saveTimelineSoon(convId)
+        }
     }
 
     private func beginDurableAttempt(clientId: String, convId: String) {
@@ -1264,8 +1458,9 @@ final class ImStore {
     }
 
     private func failDurableOutbox(clientId: String, permanent: Bool) {
-        for (convId, items) in timelines
-        where items.contains(where: { $0.seq == nil && $0.clientId == clientId }) {
+        clearUploadProgress(for: clientId)
+        for (convId, box) in timelineBoxes
+        where box.messages.contains(where: { $0.seq == nil && $0.clientId == clientId }) {
             mutatePending(clientId, convId) { item in
                 var metadata = item.durableOutbox
                     ?? ImDurableOutboxMetadata(stableID: clientId, now: Self.nowMs)
@@ -1288,8 +1483,9 @@ final class ImStore {
     }
 
     private func rateLimitDurableOutbox(clientId: String) {
-        for (convId, items) in timelines
-        where items.contains(where: { $0.seq == nil && $0.clientId == clientId }) {
+        clearUploadProgress(for: clientId)
+        for (convId, box) in timelineBoxes
+        where box.messages.contains(where: { $0.seq == nil && $0.clientId == clientId }) {
             mutatePending(clientId, convId) { item in
                 let metadata = item.durableOutbox
                     ?? ImDurableOutboxMetadata(stableID: clientId, now: Self.nowMs)
@@ -1311,8 +1507,8 @@ final class ImStore {
         durableReplayTask?.cancel()
         durableReplayTask = nil
         let now = Self.nowMs
-        let candidates = timelines
-            .flatMap { convId, items in items.map { (convId, $0) } }
+        let candidates = timelineBoxes
+            .flatMap { convId, box in box.messages.map { (convId, $0) } }
             .filter { _, item in
                 guard item.seq == nil, let metadata = item.durableOutbox else { return false }
                 return ImDurableOutboxPolicy.mayReplay(metadata, now: now)
@@ -1340,8 +1536,8 @@ final class ImStore {
     private func scheduleDurableReplay() {
         guard online, transport?.imLinkOpen == true else { return }
         let now = Self.nowMs
-        let wait = timelines.values
-            .flatMap { $0 }
+        let wait = timelineBoxes.values
+            .flatMap { $0.messages }
             .compactMap { item -> Int64? in
                 guard item.seq == nil, let metadata = item.durableOutbox else { return nil }
                 return ImDurableOutboxPolicy.scheduledDelay(metadata, now: now)
@@ -1377,24 +1573,40 @@ final class ImStore {
         guard uploadGenerations[clientId] == generation else { return }
         uploadTasks[clientId] = nil
         uploadGenerations[clientId] = nil
+        lastUploadProgressPublish[clientId] = nil
+        clearUploadProgress(for: clientId)
     }
 
     private func cancelUploadTask(clientId: String) {
         uploadTasks.removeValue(forKey: clientId)?.cancel()
         uploadGenerations[clientId] = nil
+        lastUploadProgressPublish[clientId] = nil
+        clearUploadProgress(for: clientId)
     }
 
     private func cancelAllUploadTasks() {
         for task in uploadTasks.values { task.cancel() }
         uploadTasks = [:]
         uploadGenerations = [:]
+        lastUploadProgressPublish = [:]
+        clearAllUploadProgressBoxes()
     }
 
+    /// 10Hz + 2% 步进限频，且只写入按 clientId 隔离的 ImUploadProgressBox，零时间线数组拷贝与整页重排。
     func setProgress(_ clientId: String, _ convId: String, _ fraction: Double) {
-        mutatePending(clientId, convId) { item in
-            guard item.state == .sending else { return }
-            item.progress = min(max(fraction, 0), 1)
+        let clamped = min(max(fraction, 0), 1)
+        let now = ProcessInfo.processInfo.systemUptime
+        let isBoundary = clamped <= 0 || clamped >= 1
+        if !isBoundary, let last = lastUploadProgressPublish[clientId] {
+            if now - last.time < 0.10 || abs(clamped - last.value) < 0.02 {
+                return
+            }
         }
+        guard rawMessages(convId).contains(where: { $0.seq == nil && $0.clientId == clientId && $0.state == .sending })
+        else { return }
+        lastUploadProgressPublish[clientId] = (now, clamped)
+        let box = uploadProgressBox(for: clientId)
+        if box.progress != clamped { box.progress = clamped }
     }
 
     private func setOutgoing(_ clientId: String, _ convId: String, _ outgoing: ImOutgoingImage) {
@@ -1428,7 +1640,10 @@ final class ImStore {
             saveStateSoon()
         } else {
             sendTimers.removeValue(forKey: item.clientId)?.cancel()
-            timelines[item.convId]?.removeAll { $0.seq == nil && $0.clientId == item.clientId }
+            cancelUploadTask(clientId: item.clientId)
+            var items = rawMessages(item.convId)
+            items.removeAll { $0.seq == nil && $0.clientId == item.clientId }
+            setTimelineMessages(items, for: item.convId)
             if let outgoing = item.outgoing {
                 ImCache.removeOutbox(tenant: tenant, files: [outgoing.file, outgoing.thumbFile])
             }
@@ -1482,7 +1697,7 @@ final class ImStore {
 
     /// 清空聊天记录 = hideBefore 推到可见的最大 seq（只对自己生效）。会删掉本机消息，等网关确认后再清
     func clearHistory(_ convId: String) {
-        let top = max(convs[convId]?.maxSeq ?? 0, ImTimeline.maxSeq(timelines[convId] ?? []))
+        let top = max(convs[convId]?.maxSeq ?? 0, ImTimeline.maxSeq(rawMessages(convId)))
         guard top > 0, requireOnline() else { return }
         expectConfirm("hide:\(convId)") {}
         send(.imSettings(convId: convId, pin: nil, mute: nil, hideBefore: top))
@@ -1649,8 +1864,15 @@ final class ImStore {
     }
 
     func setDraft(_ text: String, convId: String) {
-        guard drafts[convId] ?? "" != text else { return }
-        drafts[convId] = text.isEmpty ? nil : text
+        let current = draftBoxes[convId]?.text ?? ""
+        guard current != text else { return }
+        if text.isEmpty {
+            if let existing = draftBoxes[convId], !existing.text.isEmpty {
+                existing.text = ""
+            }
+        } else {
+            draftBox(for: convId).text = text
+        }
         saveStateSoon()
     }
 
@@ -1723,13 +1945,17 @@ final class ImStore {
 
     // MARK: 联系人目录
 
-    /// 聊过的：置顶优先，再按最后一条时间倒序；没聊过的按拼音排在下面
+    /// 聊过的：置顶优先，再按最后一条时间倒序；没聊过的按拼音排在下面；按 directoryRevision + query 缓存。
     func directory(query: String) -> (chatted: [ImDirectoryRow], others: [ImDirectoryRow]) {
+        let rev = directoryRevision
+        if let hit = directoryCache, hit.revision == rev, hit.query == query {
+            return hit.result
+        }
         let myId = meId
         var chatted: [ImDirectoryRow] = []
         var taken = Set<String>()
         for conv in convs.values where !conv.peer.isEmpty && conv.peer != myId {
-            let pending = timelines[conv.convId]?.contains(where: { $0.seq == nil }) == true
+            let pending = timelineBoxes[conv.convId]?.latestPending != nil
             guard conv.last != nil || pending, !taken.contains(conv.peer) else { continue }
             let person = user(conv.peer)
             taken.insert(conv.peer)
@@ -1740,8 +1966,8 @@ final class ImStore {
             let pinA = a.conv?.pin ?? false
             let pinB = b.conv?.pin ?? false
             if pinA != pinB { return pinA }
-            let atA = lastActivity(a.conv)
-            let atB = lastActivity(b.conv)
+            let atA = rawLastActivity(a.conv)
+            let atB = rawLastActivity(b.conv)
             if atA != atB { return atA > atB }
             return a.user.id < b.user.id
         }
@@ -1754,7 +1980,9 @@ final class ImStore {
                 return a.id < b.id
             }
             .map { ImDirectoryRow(user: $0, conv: convs[convId(with: $0.id)]) }
-        return (chatted, others)
+        let result = (chatted, others)
+        directoryCache = (rev, query, result)
+        return result
     }
 
     /// 协作群使用既有 IM 会话投影；iOS 只提供运行图读取入口，不开放 collab_op。
@@ -1767,16 +1995,24 @@ final class ImStore {
             }
             .sorted { lhs, rhs in
                 if lhs.pin != rhs.pin { return lhs.pin }
-                let left = max(lhs.activityAt, lastActivity(lhs))
-                let right = max(rhs.activityAt, lastActivity(rhs))
+                let left = max(lhs.activityAt, rawLastActivity(lhs))
+                let right = max(rhs.activityAt, rawLastActivity(rhs))
                 if left != right { return left > right }
                 return lhs.convId < rhs.convId
             }
     }
 
+    /// 视图层观察态：订阅单会话 latestPending，避免独立行视图漏刷新。
     func lastActivity(_ conv: ImConvRow?) -> Double {
         guard let conv else { return 0 }
-        let pendingAt = timelines[conv.convId]?.last(where: { $0.seq == nil })?.at ?? 0
+        let pendingAt = latestPendingMessage(for: conv.convId)?.at ?? 0
+        return max(conv.last?.at ?? 0, pendingAt)
+    }
+
+    /// 内部非观察快路径：供目录缓存构建与分享扩展目录使用，不注册多余视图订阅。
+    private func rawLastActivity(_ conv: ImConvRow?) -> Double {
+        guard let conv else { return 0 }
+        let pendingAt = timelineBoxes[conv.convId]?.pendingActivityAt ?? 0
         return max(conv.last?.at ?? 0, pendingAt)
     }
 
@@ -1846,7 +2082,9 @@ final class ImStore {
             "users": .array(users.values.sorted { $0.id < $1.id }.map { $0.json() }),
             "convs": .array(convs.values.sorted { $0.convId < $1.convId }.map { $0.json() }),
             "blocked": .array(blocked.sorted().map(JSONValue.string)),
-            "drafts": .object(drafts.filter { !$0.value.isEmpty }.mapValues(JSONValue.string)),
+            "drafts": .object(draftBoxes.reduce(into: [String: JSONValue]()) { out, entry in
+                if !entry.value.text.isEmpty { out[entry.key] = .string(entry.value.text) }
+            }),
             "hidden": .object(hidden.mapValues { seqs in .array(seqs.sorted().map { .number(Double($0)) }) }),
             "heardVoice": .object(heardVoice.mapValues { seqs in .array(seqs.sorted().map { .number(Double($0)) }) }),
             "voiceText": .object(voiceText.mapValues { rows in
@@ -1864,7 +2102,7 @@ final class ImStore {
               let upload = GatewayConfig.imHTTPUploadAndSendURL?.absoluteString
         else { return }
         let people = users.values.map { user in
-            ImShareBridge.Person(id: user.id, nickname: user.nickname, recentAt: lastActivity(convs[convId(with: user.id)]))
+            ImShareBridge.Person(id: user.id, nickname: user.nickname, recentAt: rawLastActivity(convs[convId(with: user.id)]))
         }.sorted {
             if $0.recentAt != $1.recentAt { return $0.recentAt > $1.recentAt }
             return $0.nickname.localizedStandardCompare($1.nickname) == .orderedAscending
@@ -1900,7 +2138,7 @@ final class ImStore {
                 if self.timelinesReady { self.loadTimelineIfNeeded(convId) }
                 return
             }
-            ImCache.saveTimeline(tenant: self.tenant, convId: convId, items: self.timelines[convId] ?? [])
+            ImCache.saveTimeline(tenant: self.tenant, convId: convId, items: self.rawMessages(convId))
         }
     }
 }

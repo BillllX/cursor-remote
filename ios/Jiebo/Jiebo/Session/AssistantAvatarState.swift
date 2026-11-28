@@ -42,25 +42,67 @@ enum AssistantAvatarPhase: String, CaseIterable {
     }
 }
 
+/// 助理头像只依赖末轮少量状态字段，抽成轻量值快照后，流式正文增量不再穿透广播到顶部头像。
+struct AssistantTurnAvatarSnapshot: Equatable, Sendable {
+    var status: String?
+    var hasPendingTool: Bool
+    var hasRunningTool: Bool
+    var running: Bool
+    var queued: Bool
+    var hasError: Bool
+
+    static let empty = AssistantTurnAvatarSnapshot(
+        status: nil,
+        hasPendingTool: false,
+        hasRunningTool: false,
+        running: false,
+        queued: false,
+        hasError: false
+    )
+
+    static func from(turns: [Turn]) -> AssistantTurnAvatarSnapshot {
+        guard let last = turns.last else { return .empty }
+        return AssistantTurnAvatarSnapshot(
+            status: last.status,
+            hasPendingTool: last.pendingTool != nil,
+            hasRunningTool: last.tools.contains(where: { $0.status == "running" }),
+            running: last.running,
+            queued: last.queued,
+            hasError: last.error?.nilIfEmpty != nil
+        )
+    }
+}
+
 /// 头像表达当前工作状态；回合终态高于工具中间结果，历史工具不参与忙碌判定。
 struct AssistantAvatarState {
     static func resolve(connected: Bool, turns: [Turn], chatBusy: Bool = false,
                         hasApproval: Bool = false, hasDelegation: Bool = false,
                         hasDraft: Bool = false) -> AssistantAvatarPhase {
+        resolve(
+            connected: connected,
+            turnSnapshot: .from(turns: turns),
+            chatBusy: chatBusy,
+            hasApproval: hasApproval,
+            hasDelegation: hasDelegation,
+            hasDraft: hasDraft
+        )
+    }
+
+    static func resolve(connected: Bool, turnSnapshot: AssistantTurnAvatarSnapshot, chatBusy: Bool = false,
+                        hasApproval: Bool = false, hasDelegation: Bool = false,
+                        hasDraft: Bool = false) -> AssistantAvatarPhase {
         guard connected else { return .offline }
-        let last = turns.last
-        let status = last?.status?.lowercased() ?? ""
+        let status = turnSnapshot.status?.lowercased() ?? ""
         let succeeded = AssistantAvatarPhase.isSuccessful(status)
         let failed = ["error", "failed", "failure"].contains(status)
         let terminal = succeeded || failed || ["cancelled", "canceled", "stopped"].contains(status)
-        let live = terminal ? nil : last
-        if hasApproval || live?.pendingTool != nil { return .approval }
-        if hasDelegation || live?.tools.contains(where: { $0.status == "running" }) == true {
+        if hasApproval || (!terminal && turnSnapshot.hasPendingTool) { return .approval }
+        if hasDelegation || (!terminal && turnSnapshot.hasRunningTool) {
             return .executing
         }
-        if chatBusy || live?.running == true || live?.queued == true { return .thinking }
+        if chatBusy || (!terminal && (turnSnapshot.running || turnSnapshot.queued)) { return .thinking }
         // 重试成功的工具错误仍保留在历史里，不能据此推翻已完成的回合。
-        if failed || (!terminal && last?.error?.nilIfEmpty != nil) { return .failure }
+        if failed || (!terminal && turnSnapshot.hasError) { return .failure }
         return hasDraft ? .listening : .idle
     }
 }

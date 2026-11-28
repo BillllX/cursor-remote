@@ -1,5 +1,6 @@
 import AVKit
 import CryptoKit
+import ImageIO
 import PDFKit
 import SwiftUI
 import WebKit
@@ -132,7 +133,7 @@ private struct SingleImageView: View {
                     // 双向 ScrollView 给无界提议；内层 frame 固定原始尺寸（布局基准），
                     // scaleEffect 视觉缩放，外层 frame 把布局框撑到缩放后尺寸 → 滚动范围正确
                     ScrollView([.vertical, .horizontal]) {
-                        RemoteImage(url: url)
+                        RemoteImage(url: url, maxPixel: nil)
                             .frame(width: natural.width, height: natural.height)
                             .scaleEffect(total)
                             .frame(width: natural.width * total, height: natural.height * total)
@@ -205,10 +206,12 @@ private struct SingleImageView: View {
                 return
             }
             if let data = try? await PreviewMediaCache.shared.data(for: url, category: "图片预览下载"),
-               let image = UIImage(data: data)
+               let size = await (Task.detached(priority: .userInitiated) {
+                   PreviewImageDecoder.naturalSize(of: data)
+               }).value
             {
                 guard !Task.isCancelled else { return }
-                natural = image.size
+                natural = size
             } else {
                 // 取消（url 变了旧任务被撤）也会走 else——别用迟到失败覆盖新任务的加载态
                 guard !Task.isCancelled else { return }
@@ -262,18 +265,91 @@ private struct SingleImageView: View {
     }
 }
 
+/// 预览图后台解码器：先用 ImageIO 读元信息/按面积预算降采样，再在后台 preparingForDisplay，消除进屏主线程解码尖峰。
+private enum PreviewImageDecoder {
+    /// contain 预览总像素面积上限（约 12MP，RGBA 约 48MB）：常规 48MP 照片降到高清范围，长截图按宽度保留可读清晰度。
+    private static let containMaxArea: Double = 12_000_000
+    private static let containMaxLongEdge = 8_192
+
+    nonisolated private static func imageProperties(from source: CGImageSource) -> (width: Double, height: Double, orientation: Int)? {
+        guard let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue,
+              let height = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue,
+              width > 0, height > 0
+        else { return nil }
+        let topOrientation = (props[kCGImagePropertyOrientation] as? NSNumber)?.intValue
+        let tiffOrientation = ((props[kCGImagePropertyTIFFDictionary] as? [CFString: Any])?[kCGImagePropertyTIFFOrientation] as? NSNumber)?.intValue
+        return (width, height, topOrientation ?? tiffOrientation ?? 1)
+    }
+
+    /// 仅读文件头元数据拿原始显示尺寸（含 EXIF 旋转校正），不把 48MP 大图解码成整张 RGBA。
+    nonisolated static func naturalSize(of data: Data) -> CGSize? {
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        if let source = CGImageSourceCreateWithData(data as CFData, options),
+           let info = imageProperties(from: source) {
+            // EXIF 方向 5~8 表示旋转 90°/270°，显示宽高需要互换
+            if info.orientation >= 5 && info.orientation <= 8 {
+                return CGSize(width: info.height, height: info.width)
+            }
+            return CGSize(width: info.width, height: info.height)
+        }
+        return UIImage(data: data)?.size
+    }
+
+    /// 后台解码并预备显示位图；contain 模式按像素面积预算下采样（不压扁长截图宽度），1:1 模式传 nil 保留原始分辨率。
+    nonisolated static func decode(data: Data, maxPixel: Int?) -> UIImage? {
+        if let maxPixel, maxPixel > 0 {
+            let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+            if let source = CGImageSourceCreateWithData(data as CFData, sourceOptions),
+               CGImageSourceGetCount(source) <= 1 {
+                let effectiveMaxPixel: Int?
+                if let info = imageProperties(from: source) {
+                    let area = info.width * info.height
+                    let longEdge = max(info.width, info.height)
+                    if area <= containMaxArea && longEdge <= Double(containMaxLongEdge) {
+                        // 面积和边长都在安全预算内（含常规手机长截图）：跳过有损缩小，直接预解码保清晰
+                        effectiveMaxPixel = nil
+                    } else {
+                        let scale = min(1.0, sqrt(containMaxArea / max(area, 1)))
+                        let targetEdge = Int(ceil(longEdge * scale))
+                        effectiveMaxPixel = min(containMaxLongEdge, max(maxPixel, targetEdge))
+                    }
+                } else {
+                    effectiveMaxPixel = maxPixel
+                }
+                if let limit = effectiveMaxPixel {
+                    let thumbOptions: [CFString: Any] = [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true,
+                        kCGImageSourceCreateThumbnailWithTransform: true,
+                        kCGImageSourceShouldCacheImmediately: true,
+                        kCGImageSourceThumbnailMaxPixelSize: limit,
+                    ]
+                    if let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions as CFDictionary) {
+                        let image = UIImage(cgImage: cgImage)
+                        return image.preparingForDisplay() ?? image
+                    }
+                }
+            }
+        }
+        guard let image = UIImage(data: data) else { return nil }
+        return image.preparingForDisplay() ?? image
+    }
+}
+
 /// 带加载/失败态的远程图（票据 URL 无需额外鉴权头）。
 /// 容器有界宽 → scaledToFit 即 contain；双向 ScrollView 无界提议 → 原始像素尺寸。
 struct RemoteImage: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let url: URL?
+    /// contain 预览默认按 2048px 上限下采样（足以覆盖 3x 屏幕宽度且大幅降内存）；1:1 缩放传 nil 走原图预解码。
+    var maxPixel: Int? = 2048
     @State private var image: UIImage?
     @State private var failed = false
     @State private var retryCount = 0
 
     private var loadKey: String {
-        "\(url?.absoluteString ?? "")#\(retryCount)|\(store.unlocked)|\(store.connected)"
+        "\(url?.absoluteString ?? "")#\(maxPixel ?? 0)#\(retryCount)|\(store.unlocked)|\(store.connected)"
     }
 
     var body: some View {
@@ -328,7 +404,12 @@ struct RemoteImage: View {
             do {
                 let data = try await PreviewMediaCache.shared.data(for: url, category: "图片预览下载")
                 try Task.checkCancellation()
-                guard let loaded = UIImage(data: data) else { throw URLError(.cannotDecodeContentData) }
+                let pixelLimit = maxPixel
+                let loaded = await Task.detached(priority: .userInitiated) {
+                    PreviewImageDecoder.decode(data: data, maxPixel: pixelLimit)
+                }.value
+                try Task.checkCancellation()
+                guard let loaded else { throw URLError(.cannotDecodeContentData) }
                 image = loaded
             } catch is CancellationError {
                 return

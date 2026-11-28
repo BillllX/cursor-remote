@@ -137,7 +137,7 @@ struct PhoneWorkbench: View {
                 adoptWorkbenchChatIfNeeded()
             }
         }
-        .onChange(of: store.chats.count) { _, _ in
+        .onChange(of: store.chatCount) { _, _ in
             if homeActive { adoptWorkbenchChatIfNeeded() }
         }
         .onChange(of: sceneSession?.workbenchChatId) { _, id in

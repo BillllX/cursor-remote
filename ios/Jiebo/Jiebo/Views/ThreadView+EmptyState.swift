@@ -3,11 +3,6 @@ import UIKit
 import ImageIO
 
 extension ThreadView {
-    /// ChatStore 每批正文变化只递增一次；避免每次 body 都序列化工具结果、拼一条 liveTail 大字符串。
-    var liveTail: UInt64 {
-        store.turnRenderRevisions[resolvedChatId, default: 0]
-    }
-
     var showThreadLoading: Bool {
         if !store.connected { return false }
         if chatId == nil, store.coldStartPlaceholder { return true }

@@ -327,6 +327,7 @@ extension ChatStore {
         }
         send(.deleteSession(chatId: id))
         deletedIds.insert(id)
+        clearDraftBox(for: id)
         imagesByChat[id] = nil
         dropChatState(id) // 在途分页随删除终止（迟到页由 .chatTurns 校验丢弃）
         forgetBodyCache(id)
@@ -370,6 +371,7 @@ extension ChatStore {
         }
         chats = rest
         if id == activeId, let first = rest.first {
+            draft = ""
             pendingImages = [] // 被删会话的待发图随会话丢弃（swapActive 会把空数组 flush 到已删 id）
             swapActive(to: first.id)
             applySession(chats.first { $0.id == activeId }) // swapActive 可能被 assistantOnly 改道，不能再用原始的 first
@@ -389,9 +391,14 @@ extension ChatStore {
     }
 
     func persistDraft() {
+        guard activeId != "boot",
+              !deletedIds.contains(activeId),
+              let existing = chats.first(where: { $0.id == activeId })
+        else { return }
+        setDraftBox(draft, for: activeId)
+        guard existing.model != self.model || existing.mode != self.mode else { return }
         patch(activeId) { chat in
             var next = chat
-            next.draft = self.draft
             next.model = self.model
             next.mode = self.mode
             return next

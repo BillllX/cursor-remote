@@ -40,9 +40,9 @@ extension ChatStore {
             }
         }
         if message.flushesAllStreamDeltaBuffers {
-            flushAllStreamDeltas()
-        } else if !message.keepsStreamDeltaBufferOpen {
-            flushStreamDeltas(chatId)
+            flushAllStreamDeltas(commitToChats: true)
+        } else if message.flushesChatStreamDeltaBuffer {
+            flushStreamDeltas(chatId, commitToChats: true)
         }
 
         switch message {
@@ -209,6 +209,7 @@ extension ChatStore {
                 let prior = chatRevs[id]
                 chatRevs[id] = chatRev
                 if let truncated {
+                    flushStreamDeltas(id, commitToChats: true)
                     settleTruncate(id, prior: prior, chatRev: chatRev, truncated: truncated)
                     continue
                 }
@@ -242,10 +243,12 @@ extension ChatStore {
                     scheduleBodyCache(id)
                 } else if bodyRevs[id] == base, prior == base, chatRev != base {
                     // 版本号前进了。不能把旧正文写成新版本，否则以后再也不去拉别端的新回合。
+                    flushStreamDeltas(id, commitToChats: true)
                     markNeedsRefresh(id, rev: bodyRevs[id])
                     if follow { ensureTurnsLoaded(id) }
                 } else if bodyRevs[id] != chatRev {
                     // 本地优先期间别处改过正文：现在不脏了，按新版本补齐
+                    flushStreamDeltas(id, commitToChats: true)
                     markNeedsRefresh(id, rev: bodyRevs[id] ?? Int.min)
                     if follow { ensureTurnsLoaded(id) }
                 }
@@ -260,7 +263,7 @@ extension ChatStore {
             serverSupportsP4 = true
             if let id = value.object?["id"]?.string { pendingChatLoads.remove(id) } // 解析失败也别白等安全网
             guard let remote = ChatSession.from(value), !deletedIds.contains(remote.id) else { break }
-            flushStreamDeltas(remote.id)
+            flushStreamDeltas(remote.id, commitToChats: true)
             pendingChatLoads.remove(remote.id)
             let priorRev = chatRevs[remote.id]
             if let rev { chatRevs[remote.id] = rev }
@@ -270,7 +273,6 @@ extension ChatStore {
                 cachedOnlyIds.remove(remote.id) // 服务端版本到了，不再是只读缓存行
                 if let index = chats.firstIndex(where: { $0.id == remote.id }) {
                     var mergedChat = remote
-                    mergedChat.draft = chats[index].draft.isEmpty ? remote.draft : chats[index].draft
                     // P8 slim：元数据壳（无 turns 键）不得清空已加载正文——只更新元数据；
                     // 全量到达则取消在途分页（迟到页由 loadingChatIds 校验丢弃）
                     var staleRev: Int?
@@ -1051,57 +1053,111 @@ extension ChatStore {
         }
     }
 
-    /// 一批事件只写一次 ChatSession；数组逐项应用，保留正文、思考、工具 stdout/stderr 的到达顺序。
-    func flushStreamDeltas(_ chatId: String) {
+    /// 一批流式事件只写单会话 ActiveTurnBox，不触发 chats 值数组写放大；
+    /// 遇到结构性事件、落盘、停止或断线时再通过 commitToChats 原子回写进 chats。
+    func flushStreamDeltas(_ chatId: String, commitToChats: Bool = false) {
         streamDeltaFlushTasks.removeValue(forKey: chatId)?.cancel()
-        guard let events = streamDeltaBuffers.removeValue(forKey: chatId), !events.isEmpty else { return }
-        let interval = workbenchStreamSignposter.beginInterval("Delta flush")
-        defer { workbenchStreamSignposter.endInterval("Delta flush", interval) }
-        patchRunning(chatId, streamDelta: true) { turn in
-            var next = turn
-            var touchedText = false
-            var touchedThinking = false
-            for event in events {
-                switch event {
-                case .text(let text):
-                    next.assistant += text
-                    touchedText = true
-                case .thinking(let text):
-                    next.thinking += text
-                    touchedThinking = true
-                case .toolOutput(let callId, let stream, let chunk, let stdout, let stderr):
-                    if let index = next.tools.firstIndex(where: { $0.callId == callId }) {
-                        next.tools[index].result = mergeOutput(
-                            next.tools[index].result,
-                            stream: stream,
-                            chunk: chunk,
-                            stdout: stdout,
-                            stderr: stderr
-                        )
-                    } else {
-                        next.tools.append(ToolCall(
-                            callId: callId,
-                            name: "shell",
-                            args: nil,
-                            result: mergeOutput(nil, stream: stream, chunk: chunk, stdout: stdout, stderr: stderr),
-                            status: "running",
-                            parentCallId: nil,
-                            agent: nil,
-                            model: nil,
-                            at: nil
-                        ))
-                    }
-                }
-            }
-            if touchedText { next.assistant = ReplyText.repair(next.assistant) }
-            if touchedThinking { next.thinking = ReplyText.repair(next.thinking) }
-            return next
+        if let events = streamDeltaBuffers.removeValue(forKey: chatId), !events.isEmpty {
+            let interval = workbenchStreamSignposter.beginInterval("Delta flush")
+            defer { workbenchStreamSignposter.endInterval("Delta flush", interval) }
+            applyStreamEventsToActiveBox(chatId, events: events)
+        }
+        if commitToChats {
+            commitActiveTurnBox(chatId, bumpRevision: true)
         }
     }
 
-    func flushAllStreamDeltas() {
-        for id in Array(streamDeltaBuffers.keys) {
-            flushStreamDeltas(id)
+    private func applyStreamEventsToActiveBox(_ chatId: String, events: [BufferedStreamEvent]) {
+        guard let chat = chats.first(where: { $0.id == chatId }),
+              let baseTurn = chat.turns.last(where: \.running)
+        else { return }
+        let box = activeTurnBox(for: chatId)
+        if box.turnId != baseTurn.id {
+            box.reset()
+            box.turnId = baseTurn.id
+            box.rawAssistant = baseTurn.assistant
+            box.rawThinking = baseTurn.thinking
+            box.assistant = baseTurn.assistant.isEmpty ? "" : ReplyText.repair(baseTurn.assistant)
+            box.thinking = baseTurn.thinking.isEmpty ? "" : ReplyText.repair(baseTurn.thinking)
+        }
+        var touchedText = false
+        var touchedThinking = false
+        var touchedTools = false
+        var addedExtraTool = false
+        for event in events {
+            switch event {
+            case .text(let text):
+                box.rawAssistant += text
+                touchedText = true
+            case .thinking(let text):
+                box.rawThinking += text
+                touchedThinking = true
+            case .toolOutput(let callId, let stream, let chunk, let stdout, let stderr):
+                touchedTools = true
+                if let baseTool = baseTurn.tools.first(where: { $0.callId == callId }) {
+                    let current = box.toolOutputs[callId] ?? baseTool.result
+                    box.toolOutputs[callId] = mergeOutput(
+                        current,
+                        stream: stream,
+                        chunk: chunk,
+                        stdout: stdout,
+                        stderr: stderr
+                    )
+                } else if let idx = box.extraTools.firstIndex(where: { $0.callId == callId }) {
+                    box.extraTools[idx].result = mergeOutput(
+                        box.extraTools[idx].result,
+                        stream: stream,
+                        chunk: chunk,
+                        stdout: stdout,
+                        stderr: stderr
+                    )
+                } else {
+                    box.extraTools.append(ToolCall(
+                        callId: callId,
+                        name: "shell",
+                        args: nil,
+                        result: mergeOutput(nil, stream: stream, chunk: chunk, stdout: stdout, stderr: stderr),
+                        status: "running",
+                        parentCallId: nil,
+                        agent: nil,
+                        model: nil,
+                        at: nil
+                    ))
+                    addedExtraTool = true
+                }
+            }
+        }
+        if touchedText {
+            box.touchedText = true
+            let repaired = ReplyText.repair(box.rawAssistant)
+            if box.assistant != repaired { box.assistant = repaired }
+        }
+        if touchedThinking {
+            box.touchedThinking = true
+            let repaired = ReplyText.repair(box.rawThinking)
+            if box.thinking != repaired { box.thinking = repaired }
+        }
+        if touchedTools {
+            box.touchedTools = true
+        }
+        if touchedText || touchedThinking || touchedTools {
+            if bodySegs[chatId] != nil { bodySegs[chatId] = nil }
+            box.streamRevision &+= 1
+        }
+        if addedExtraTool, chatId == assistantChatId {
+            syncAssistantAvatarTurnSnapshot()
+        }
+        // 兜底离线提交重连首包直接下发增量时输入栏切换到停止态；常态已忙碌 O(1) 零写入。
+        if !liveBusyIds.contains(chatId) { syncLiveBusy(chatId) }
+    }
+
+    func flushAllStreamDeltas(commitToChats: Bool = false) {
+        var ids = Set(streamDeltaBuffers.keys)
+        if commitToChats {
+            ids.formUnion(activeTurnBoxIdsWithOverlay())
+        }
+        for id in ids {
+            flushStreamDeltas(id, commitToChats: commitToChats)
         }
     }
 
@@ -1109,11 +1165,13 @@ extension ChatStore {
         if let chatId {
             streamDeltaFlushTasks.removeValue(forKey: chatId)?.cancel()
             streamDeltaBuffers[chatId] = nil
+            clearActiveTurnBox(for: chatId)
             return
         }
         for task in streamDeltaFlushTasks.values { task.cancel() }
         streamDeltaFlushTasks = [:]
         streamDeltaBuffers = [:]
+        clearAllActiveTurnBoxes()
     }
 
     /// 尾页已经确认停下：不在翻页、也不在增量补齐。这时新回复直接画出来，不再等整段历史翻完。
@@ -1127,9 +1185,13 @@ extension ChatStore {
 }
 
 extension ServerMessage {
-    fileprivate var keepsStreamDeltaBufferOpen: Bool {
+    /// 仅对涉及单个会话回合结构/终态的事件在入口提交该会话的 ActiveTurnBox；
+    /// 心跳 pong、IM 事件、助理全局投影、workspaces、loop 等无关帧不得击穿流式隔离层。
+    fileprivate var flushesChatStreamDeltaBuffer: Bool {
         switch self {
-        case .textDelta, .thinkingDelta, .toolOutput:
+        case .toolStarted, .toolCompleted, .task, .approval, .runMeta,
+             .status, .done, .error, .runSnapshot, .history, .chatTurns,
+             .session, .turnFiles, .chatTitle:
             return true
         default:
             return false

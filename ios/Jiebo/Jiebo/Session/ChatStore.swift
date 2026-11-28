@@ -3,6 +3,83 @@ import Observation
 import Photos
 import UIKit
 
+/// 按会话隔离的本机草稿盒：让输入框与顶栏只观察单个会话的草稿，不与 chats 数组互相放大重绘。
+@Observable
+@MainActor
+final class ChatDraftBox {
+    var text = ""
+}
+
+/// 按会话隔离的运行中回合流式增量盒：
+/// 仅承载高频流式增量（正文、思考与工具 stdout/stderr），让每 50ms 刷新不再写 chats 值数组，
+/// 不唤醒 ThreadView 历史树与其他会话；遇到结构性事件或落盘前原子回写进 chats。
+@Observable
+@MainActor
+final class ActiveTurnBox {
+    /// 非 nil 时表示当前叠加层绑定在该 running 回合上；TurnView(running) 读取它以建立观察依赖。
+    var turnId: String?
+    /// 已做 ReplyText.repair 的累计展示正文。
+    var assistant: String = ""
+    /// 已做 ReplyText.repair 的累计思考文本。
+    var thinking: String = ""
+    /// 仅记录流式 toolOutput 覆盖过的已知工具输出：callId -> result。
+    var toolOutputs: [String: JSONValue] = [:]
+    /// 流式期间先于 toolStarted 到达的动态 shell 工具。
+    var extraTools: [ToolCall] = []
+    /// 单会话流式版本号：仅由当前会话的滚底观察子视图与终端面板订阅。
+    var streamRevision: UInt64 = 0
+
+    @ObservationIgnored var rawAssistant: String = ""
+    @ObservationIgnored var rawThinking: String = ""
+    @ObservationIgnored var touchedText = false
+    @ObservationIgnored var touchedThinking = false
+    @ObservationIgnored var touchedTools = false
+
+    var hasPendingOverlay: Bool {
+        turnId != nil && (touchedText || touchedThinking || touchedTools)
+    }
+
+    func mergedTools(for turn: Turn) -> [ToolCall] {
+        guard turnId == turn.id, !toolOutputs.isEmpty || !extraTools.isEmpty else {
+            return turn.tools
+        }
+        var out = turn.tools
+        if !toolOutputs.isEmpty {
+            for index in out.indices {
+                if let result = toolOutputs[out[index].callId] {
+                    out[index].result = result
+                }
+            }
+        }
+        if !extraTools.isEmpty {
+            for extra in extraTools where !out.contains(where: { $0.callId == extra.callId }) {
+                out.append(extra)
+            }
+        }
+        return out
+    }
+
+    func apply(to turn: inout Turn) {
+        guard turnId == turn.id else { return }
+        if touchedText { turn.assistant = assistant }
+        if touchedThinking { turn.thinking = thinking }
+        if touchedTools { turn.tools = mergedTools(for: turn) }
+    }
+
+    func reset() {
+        rawAssistant = ""
+        rawThinking = ""
+        touchedText = false
+        touchedThinking = false
+        touchedTools = false
+        if turnId != nil { turnId = nil }
+        if !assistant.isEmpty { assistant = "" }
+        if !thinking.isEmpty { thinking = "" }
+        if !toolOutputs.isEmpty { toolOutputs = [:] }
+        if !extraTools.isEmpty { extraTools = [] }
+    }
+}
+
 /// 文件浮层左栏的筛选。搜索和 Git 不再另开滑层。
 enum FileBrowserPane: String, CaseIterable, Identifiable {
     case files, search, git
@@ -147,7 +224,20 @@ final class ChatStore {
         bannerError == Self.offlineImageTitle || bannerError == Self.uploadOfflineTitle
     }
     var tokenDraft = ""
-    var chats: [ChatSession] = [ChatSession.blank(id: "boot")]
+    var chats: [ChatSession] = [ChatSession.blank(id: "boot")] {
+        didSet { syncChatDerivedObservers() }
+    }
+    /// 与 chats 解耦的会话数与助理末轮状态快照：流式吐字写 chats 时，只要数量和末轮阶段不变就不广播。
+    private(set) var chatCount = 1
+    private(set) var assistantAvatarTurnSnapshot = AssistantTurnAvatarSnapshot.empty
+    /// 按 chatId 隔离的本机草稿盒：打字不触发 chats 写放大，流式写 chats 也不唤醒输入框。
+    @ObservationIgnored private var draftBoxes: [String: ChatDraftBox] = [:]
+    /// 仅在清空全部草稿盒（换租户/登出）时递增，确保在屏视图重绑最新盒子。
+    private(set) var draftBoxesEpoch = 0
+    /// 按 chatId 隔离的运行中回合流式增量盒：流式每 50ms 刷新不触发 chats 写放大。
+    @ObservationIgnored private var activeTurnBoxes: [String: ActiveTurnBox] = [:]
+    /// 仅在清空全部流式盒（换租户/登出）时递增，确保在屏视图重绑最新盒子。
+    private(set) var activeTurnBoxesEpoch = 0
     var activeId = "boot"
     var cwd = ""
     var workspaceRoot = ""
@@ -186,7 +276,9 @@ final class ChatStore {
     @ObservationIgnored var memoryCenterLastSearch: MemoryCenterSearchParams?
     @ObservationIgnored var memoryCenterExtrasStorage = MemoryCenterExtrasDataState.initial
     /// 租户唯一的助理会话（ready 下发，网关建在 stored chats 里）。按租户存一份，冷启动 ready 前也认得出
-    var assistantChatId: String?
+    var assistantChatId: String? {
+        didSet { syncAssistantAvatarTurnSnapshot() }
+    }
     /// 想打开助理会话时它还没同步到本机：记下意图，会话到了再切
     var pendingAssistantOpen = false
     /// iPhone 的 PhoneShell 出现时置 true：activeId 只允许是助理会话。iPad / 网页永远 false
@@ -253,11 +345,12 @@ final class ChatStore {
 
     func shellEntries(for preferredChatId: String?) -> [ShellEntry] {
         let chatId = terminalFocusChatId.isEmpty ? (preferredChatId?.nilIfEmpty ?? activeId) : terminalFocusChatId
-        let revision = turnRenderRevisions[chatId, default: 0]
+        let box = activeTurnBox(for: chatId)
+        let revision = turnRenderRevisions[chatId, default: 0] &+ box.streamRevision
         if let shellMemo, shellMemo.chatId == chatId, shellMemo.revision == revision {
             return shellMemo.rows
         }
-        let rows = buildShellEntries(chatId)
+        let rows = buildShellEntries(chatId, box: box)
         shellMemo = (chatId, revision, rows)
         return rows
     }
@@ -302,11 +395,123 @@ final class ChatStore {
         if shellMemo?.chatId == chatId { shellMemo = nil }
     }
 
-    private func buildShellEntries(_ chatId: String) -> [ShellEntry] {
+    func draftBox(for chatId: String) -> ChatDraftBox {
+        if let box = draftBoxes[chatId] { return box }
+        let box = ChatDraftBox()
+        draftBoxes[chatId] = box
+        return box
+    }
+
+    /// 内部非观察只读：不额外创建空盒，供冷启动缓存合并等逻辑读取。
+    func currentDraft(for chatId: String) -> String {
+        draftBoxes[chatId]?.text ?? ""
+    }
+
+    func setDraftBox(_ value: String, for chatId: String) {
+        guard !chatId.isEmpty else { return }
+        if value.isEmpty {
+            if let existing = draftBoxes[chatId], !existing.text.isEmpty {
+                existing.text = ""
+            }
+            return
+        }
+        let box = draftBox(for: chatId)
+        if box.text != value { box.text = value }
+    }
+
+    func clearDraftBox(for chatId: String) {
+        if let box = draftBoxes[chatId], !box.text.isEmpty {
+            box.text = ""
+        }
+    }
+
+    func clearAllDraftBoxes() {
+        for box in draftBoxes.values where !box.text.isEmpty {
+            box.text = ""
+        }
+        if !draftBoxes.isEmpty {
+            draftBoxes.removeAll()
+            draftBoxesEpoch &+= 1
+        }
+    }
+
+    func activeTurnBox(for chatId: String) -> ActiveTurnBox {
+        _ = activeTurnBoxesEpoch
+        if let box = activeTurnBoxes[chatId] { return box }
+        let box = ActiveTurnBox()
+        activeTurnBoxes[chatId] = box
+        return box
+    }
+
+    func existingActiveTurnBox(for chatId: String) -> ActiveTurnBox? {
+        activeTurnBoxes[chatId]
+    }
+
+    func activeTurnBoxIdsWithOverlay() -> [String] {
+        activeTurnBoxes.compactMap { $0.value.hasPendingOverlay ? $0.key : nil }
+    }
+
+    func clearActiveTurnBox(for chatId: String) {
+        activeTurnBoxes[chatId]?.reset()
+    }
+
+    func clearAllActiveTurnBoxes() {
+        for box in activeTurnBoxes.values {
+            box.reset()
+        }
+        if !activeTurnBoxes.isEmpty {
+            activeTurnBoxes.removeAll()
+            activeTurnBoxesEpoch &+= 1
+        }
+    }
+
+    /// 供回前台快照比对用：综合结构修订号与流式增量修订号，不在 ThreadView.body 同步求值中读取。
+    func liveTailRevision(for chatId: String) -> UInt64 {
+        turnRenderRevisions[chatId, default: 0] &+ (activeTurnBoxes[chatId]?.streamRevision ?? 0)
+    }
+
+    /// 旧网关全量 sync_state 前合入未落盘的流式增量，不改写 chats 数组。
+    func chatWithActiveOverlay(_ chat: ChatSession) -> ChatSession {
+        guard let box = activeTurnBoxes[chat.id],
+              box.hasPendingOverlay,
+              let turnId = box.turnId,
+              let index = chat.turns.lastIndex(where: { $0.id == turnId })
+        else { return chat }
+        var copy = chat
+        box.apply(to: &copy.turns[index])
+        return copy
+    }
+
+    private func syncChatDerivedObservers() {
+        if chatCount != chats.count { chatCount = chats.count }
+        syncAssistantAvatarTurnSnapshot()
+    }
+
+    func syncAssistantAvatarTurnSnapshot() {
+        var snap: AssistantTurnAvatarSnapshot
+        if let id = assistantChatId, !id.isEmpty,
+           let chat = chats.first(where: { $0.id == id }) {
+            snap = .from(turns: chat.turns)
+            if !snap.hasRunningTool,
+               let box = activeTurnBoxes[id],
+               box.turnId == chat.turns.last?.id,
+               box.extraTools.contains(where: { $0.status == "running" }) {
+                snap.hasRunningTool = true
+            }
+        } else {
+            snap = .empty
+        }
+        if assistantAvatarTurnSnapshot != snap {
+            assistantAvatarTurnSnapshot = snap
+        }
+    }
+
+    private func buildShellEntries(_ chatId: String, box: ActiveTurnBox) -> [ShellEntry] {
         guard let turns = chats.first(where: { $0.id == chatId })?.turns else { return [] }
         var rows: [ShellEntry] = []
         for turn in turns {
-            for tool in turn.tools where tool.kind == .shell {
+            let tools = box.mergedTools(for: turn)
+            for tool in tools where tool.kind == .shell {
                 let stdout = tool.result?.object?["stdout"]?.string ?? ""
                 let stderr = tool.result?.object?["stderr"]?.string ?? ""
                 var output = [stdout, stderr].filter { !$0.isEmpty }.joined(separator: "\n")

@@ -15,7 +15,9 @@ extension ChatStore {
     }
 
     func draft(for chatId: String) -> String {
-        chatSession(chatId)?.draft ?? ""
+        let _ = draftBoxesEpoch
+        guard !chatId.isEmpty else { return "" }
+        return draftBox(for: chatId).text
     }
 
     func mode(for chatId: String) -> AgentMode {

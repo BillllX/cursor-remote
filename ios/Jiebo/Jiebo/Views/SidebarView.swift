@@ -98,7 +98,7 @@ struct SidebarView: View {
                 adoptWorkbenchChatIfNeeded()
             }
         }
-        .onChange(of: store.chats.count) { _, _ in adoptWorkbenchChatIfNeeded() }
+        .onChange(of: store.chatCount) { _, _ in adoptWorkbenchChatIfNeeded() }
     }
 
     private var brandBar: some View {

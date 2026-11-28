@@ -50,11 +50,6 @@ struct ThreadView: View {
     @State var loadingEarlierBatch = false
     /// 网络 prepend 前最上方回合；新页到达后原位复锚，避免列表跳动。
     @State var earlierNetworkAnchorId: String?
-    @State var earlierAnchorMinY: CGFloat = 0
-    /// 顶部哨兵进视口只拉一页。离开视口后才允许下一次，避免停在顶部把整段历史连锁拉完。
-    @State var earlierMemoryArmed = true
-    @State var earlierNetworkArmed = true
-    @State var earlierDiskArmed = true
     @AppStorage(CalendarInvite.dismissedKey) var calendarInviteDismissed = false
 
     init(
@@ -144,7 +139,7 @@ struct ThreadView: View {
                 AppLaunchMetrics.event("PhoneThreadVisible")
             } else {
                 cancelStreamScroll()
-                followTask?.cancel()
+                scrollMetrics.followTask?.cancel()
             }
         }
         .onChange(of: sceneToken) { oldToken, _ in
@@ -444,28 +439,14 @@ struct ThreadView: View {
     @State var readingWindowStart: String?
     /// 钉顶时的可视高度，用来撑当前轮的最小高度。
     @State var viewportHeight: CGFloat = 0
-    /// 程序滚动期间，相位和 minY 变化不算用户上滑。
-    @State var scrollingProgrammatically = false
     /// 当前这一轮撑满一屏。新一轮钉上时清掉上一轮。iPhone 和 iPad 同一套。
     @State var pinnedTurnId: String?
     /// 钉住时的可视高度。键盘变矮不减小，变高可以增大。
     @State var pinnedMinHeight: CGFloat = 0
-    @State var pinnedContentHeight: CGFloat = 0
-    @State var pinHeightRevision: UInt64 = 0
     /// 内容列高度一旦超过 pinnedMinHeight 就闩住，不再用底锚点的视口坐标判断。
     @State var pinExceeded = false
-    @State var pinBaselineMinY: CGFloat?
-    @State var pinBaselineReady = false
-    /// 120Hz 滚动帧内的高频几何采样盒子（非 @Observable，写入不触发 SwiftUI 视图重算）。
+    /// 120Hz 滚动帧与流式期高频采样的内部状态机盒（非 @Observable，写入绝不标脏 ThreadView）。
     @State var scrollMetrics = ThreadScrollMetrics()
-    /// 程序滚动结束后的短窗口内，相位和 minY 变化不算用户上滑。
-    @State var pinScrollGuardUntil = Date.distantPast
-    /// 贴底滚动之后，下一次 minY 只用来重记基线，不拿去和旧的钉顶位置比。
-    @State var pinRecaptureBaseline = false
-    @State var followTask: Task<Void, Never>?
-    /// 同一帧内多次结构更新只发一次贴底请求；与结束后的二次排版 followTask 分开。
-    @State var streamScrollTask: Task<Void, Never>?
-    @State var streamScrollGeneration: UInt64 = 0
     /// showThreadLoading 持续超过 350ms 才亮的加载遮罩
     @State var loadingVisible = false
 
@@ -485,12 +466,25 @@ struct ThreadView: View {
     ]
 }
 
-/// 滚动期高频采样的几何与快照状态（不挂 @Observable，避免 120Hz 滚动每帧标脏 ThreadView）。
+/// 滚动期与流式期高频采样的内部状态机盒（不挂 @Observable，避免 120Hz 滚动与流式贴底反复标脏 ThreadView）。
 @MainActor
 final class ThreadScrollMetrics {
     var pinnedTurnMinY: CGFloat = 0
     var firstTurnId: String?
     var firstTurnMinY: CGFloat = 0
+    var pinnedContentHeight: CGFloat = 0
+    var pinHeightRevision: UInt64 = 0
+    var pinBaselineMinY: CGFloat?
+    var pinBaselineReady = false
+    var pinRecaptureBaseline = false
+    var pinScrollGuardUntil = Date.distantPast
+    var followTask: Task<Void, Never>?
+    var streamScrollTask: Task<Void, Never>?
+    var streamScrollGeneration: UInt64 = 0
+    var earlierAnchorMinY: CGFloat = 0
+    var earlierMemoryArmed = true
+    var earlierDiskArmed = true
+    var earlierNetworkArmed = true
     var lastActiveTurnId: String?
     var lastActiveLiveTail: UInt64 = 0
     var lastActiveHeightRevision: UInt64 = 0
@@ -500,6 +494,16 @@ final class ThreadScrollMetrics {
         pinnedTurnMinY = 0
         firstTurnId = nil
         firstTurnMinY = 0
+        pinnedContentHeight = 0
+        pinHeightRevision = 0
+        pinBaselineMinY = nil
+        pinBaselineReady = false
+        pinRecaptureBaseline = false
+        pinScrollGuardUntil = Date.distantPast
+        earlierAnchorMinY = 0
+        earlierMemoryArmed = true
+        earlierDiskArmed = true
+        earlierNetworkArmed = true
         lastActiveTurnId = nil
         lastActiveLiveTail = 0
         lastActiveHeightRevision = 0

@@ -36,16 +36,7 @@ struct ChatThreadView: View {
     var body: some View {
         let messages = im.visibleMessages(convId)
         let firstMessageId = messages.first?.id
-        let seqIndex: [Int: ImLocalMessage] = {
-            var map: [Int: ImLocalMessage] = [:]
-            if let all = im.timelines[convId] {
-                map.reserveCapacity(all.count)
-                for msg in all {
-                    if let seq = msg.seq { map[seq] = msg }
-                }
-            }
-            return map
-        }()
+        let seqIndex = im.timelineSeqIndex(for: convId)
         let person = im.user(peer)
         ScrollViewReader { proxy in
             ScrollView {
@@ -71,7 +62,7 @@ struct ChatThreadView: View {
             }
             .coordinateSpace(name: "imThreadScroll")
             .onGeometryChange(for: CGFloat.self) { proxy in
-                proxy.size.height
+                max(0, proxy.size.height - proxy.safeAreaInsets.bottom)
             } action: { height in
                 scrollMetrics.viewportHeight = height
             }
@@ -88,7 +79,7 @@ struct ChatThreadView: View {
                 }
             }
             .onChange(of: messages.first?.id) { old, _ in
-                // 往前翻了一页：核对采样锚点匹配后，等一帧以无动画原位复锚，避免跳动与 LazyVStack 落空。
+                // 往前翻了一页：先对齐 LazyVStack 直接子项确保该行物化，再按扣除底栏后的视口高度原位复锚。
                 guard let old, !atBottom else { return }
                 let matchedMinY = scrollMetrics.firstMessageId == old ? scrollMetrics.firstMessageMinY : nil
                 let vh = scrollMetrics.viewportHeight
@@ -97,12 +88,11 @@ struct ChatThreadView: View {
                     var tx = Transaction()
                     tx.disablesAnimations = true
                     withTransaction(tx) {
-                        if let minY = matchedMinY, vh > 2 {
+                        proxy.scrollTo(old, anchor: .top)
+                        if let minY = matchedMinY, minY > 1, vh > 2 {
                             let clamped = min(max(minY, 0), vh - 1)
                             let anchorY = clamped / (vh - 1)
                             proxy.scrollTo(Self.topAnchorId(old), anchor: UnitPoint(x: 0.5, y: anchorY))
-                        } else {
-                            proxy.scrollTo(old, anchor: .top)
                         }
                     }
                 }
@@ -556,7 +546,7 @@ struct ImMessageImage: View {
             }
             if message.state == .sending {
                 Color.black.opacity(0.32)
-                ImProgressRing(fraction: message.progress)
+                ImLiveProgressRing(clientId: message.clientId, fallback: message.progress)
                     .frame(width: 34, height: 34)
             }
         }
@@ -628,6 +618,17 @@ struct ImMessageImage: View {
                 kind: .imBodyImage
             )
         }
+    }
+}
+
+/// 隔离订阅单条消息上传进度：10Hz 上传回调只刷新这一个 34x34 进度环，不触发气泡与聊天页重算。
+private struct ImLiveProgressRing: View {
+    @Environment(ImStore.self) private var im
+    let clientId: String
+    let fallback: Double?
+
+    var body: some View {
+        ImProgressRing(fraction: im.uploadProgress(for: clientId) ?? fallback)
     }
 }
 

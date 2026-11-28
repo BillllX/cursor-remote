@@ -40,8 +40,9 @@ extension ChatStore {
                 // 冷启动缓存列表还挂着（服务端状态没到）同理：全量替换会拿缓存行盖掉服务端
                 guard cachedOnlyIds.isEmpty,
                       !chats.contains(where: { !$0.turnsComplete && $0.id != "boot" }) else { return }
+                flushAllStreamDeltas(commitToChats: true)
                 stateRev += 1
-                send(.syncState(chats: .array(chats.map { $0.json() }), rev: stateRev))
+                send(.syncState(chats: .array(chats.map { chatWithActiveOverlay($0).json() }), rev: stateRev))
                 return
             }
             let dirty = dirtyChatIds.subtracting(inflightChatIds)
@@ -73,6 +74,8 @@ extension ChatStore {
             ensureFollowedTurnsLoaded() // 断线丢失的在途分页在此重启（onClose 已清 loadingChatIds）
             return
         }
+        // HTTP /state 异步回包与 WS stored_state 共用此入口：修改 chats / markLive 前必须提交全部活跃流式增量。
+        flushAllStreamDeltas(commitToChats: true)
         deleted.filter { !isAssistantChat($0) }.forEach { deletedIds.insert($0) }
         appliedStore = true
         if let rev, rev > stateRev { stateRev = rev }
@@ -96,7 +99,7 @@ extension ChatStore {
             // 缓存行不标脏，这里只是把输入框里的字记到行上，随基线挂回
             if cachedOnlyIds.contains(activeId) { persistDraft() }
             for chat in chats where cachedOnlyIds.contains(chat.id) {
-                cachedBodies[chat.id] = (turns: chat.turns, draft: chat.draft)
+                cachedBodies[chat.id] = (turns: chat.turns, draft: currentDraft(for: chat.id))
                 dirtyChatIds.remove(chat.id)
                 dropChatState(chat.id)
             }
@@ -106,6 +109,7 @@ extension ChatStore {
             if !chats.contains(where: { $0.id == activeId }) {
                 if !chats.contains(where: { $0.id == "boot" }) { chats.insert(ChatSession.blank(id: "boot"), at: 0) }
                 activeId = "boot"
+                draft = ""
             }
         }
         let remote = rows.compactMap(ChatSession.from).filter { !deletedIds.contains($0.id) }
@@ -115,12 +119,16 @@ extension ChatStore {
             if kept.count != chats.count {
                 let keptIds = Set(kept.map(\.id))
                 for chat in chats where !keptIds.contains(chat.id) {
+                    clearDraftBox(for: chat.id)
                     dropChatState(chat.id)
                     forgetBodyCache(chat.id)
                 }
                 chats = kept
             }
-            for id in cachedBodies.keys { forgetBodyCache(id) }
+            for id in cachedBodies.keys {
+                clearDraftBox(for: id)
+                forgetBodyCache(id)
+            }
             scheduleListCache()
             restoreLastActiveIfNeeded() // P9：远端为空也先尝试恢复（本地脏会话可能就是上次活跃的）
             if !chats.contains(where: { $0.id == activeId }), let first = chats.first {
@@ -150,11 +158,13 @@ extension ChatStore {
         chats = merge(local: chats, remote: remote) + localOnlyDirty
         let keptIds = Set(chats.map(\.id))
         for id in preMergeIds where !keptIds.contains(id) { // 远端删除的会话清分页/暂存和本机缓存
+            clearDraftBox(for: id)
             dropChatState(id)
             forgetBodyCache(id)
         }
         for (id, cached) in cachedBodies {
             guard let index = chats.firstIndex(where: { $0.id == id }) else {
+                clearDraftBox(for: id)
                 forgetBodyCache(id) // 服务端已经没有这条：缓存的正文不能再复活
                 continue
             }
@@ -163,7 +173,9 @@ extension ChatStore {
             if chats[index].turns.isEmpty, bodyRevs[id] != nil || displayOnlyIds.contains(id) {
                 chats[index].turns = cached.turns
             }
-            if chats[index].draft.isEmpty { chats[index].draft = cached.draft }
+            if currentDraft(for: id).isEmpty, !cached.draft.isEmpty {
+                setDraftBox(cached.draft, for: id)
+            }
             invalidateTurnListMemo(id)
         }
         for chat in chats {
@@ -248,6 +260,7 @@ extension ChatStore {
         if kept.count != chats.count {
             let keptIds = Set(kept.map(\.id))
             for chat in chats where !keptIds.contains(chat.id) {
+                clearDraftBox(for: chat.id)
                 dropChatState(chat.id)
                 forgetBodyCache(chat.id)
             }

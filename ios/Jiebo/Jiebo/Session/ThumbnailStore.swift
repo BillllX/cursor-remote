@@ -40,6 +40,13 @@ enum ThumbState: Equatable {
     case failed
 }
 
+/// 单张缩略图的隔离观察盒：同屏多张文件卡各自只订阅自己的 entry，不再因其他卡片出图而整批重绘。
+@Observable
+@MainActor
+final class ThumbnailEntry {
+    var state: ThumbState = .none
+}
+
 /// 文件卡片缩略图：read_file 带 reqId 走旁路（不进页签/内容层），按类型渲染成图或几行文字。
 /// 键 tenant|chatId|path|sha；没有 sha 的是当前版本，会变，只放内存。
 /// 失败按 3 秒、10 秒退避各重试一次，之后显示图标。
@@ -51,7 +58,13 @@ enum ThumbState: Equatable {
 final class ThumbnailStore {
     static let shared = ThumbnailStore()
 
-    private(set) var states: [String: ThumbState] = [:]
+    /// 按 key 隔离的缩略图状态盒（不通过整张字典触发 SwiftUI 广播）
+    @ObservationIgnored private var entries: [String: ThumbnailEntry] = [:]
+    /// 仅在字典清理/换租户清空 entries 时递增，避免被删掉的 .none 空盒在后续加载时与卡片失联。
+    private(set) var entriesEpoch = 0
+    /// 在屏卡片对 key 的引用计数：淘汰与前台内存警告只回收离屏项，杜绝与 ThumbRequest 的「淘汰→重拉」死循环。
+    @ObservationIgnored private var visibleKeyCounts: [String: Int] = [:]
+    @ObservationIgnored private var memoryWarningObserver: NSObjectProtocol?
 
     private struct Pending {
         var key: String
@@ -85,8 +98,10 @@ final class ThumbnailStore {
     /// 正在查盘缓存的键 → 本次请求的 token
     @ObservationIgnored private var diskLoading: [String: UUID] = [:]
     @ObservationIgnored private var attempted: Set<String> = []
-    /// 成功结果的写入顺序，超过上限从旧的丢（只丢内存，盘上还在）
+    /// 成功结果的写入顺序，超过张数或像素字节上限从旧的丢（只丢内存，盘上还在）
     @ObservationIgnored private var order: [String] = []
+    @ObservationIgnored private var imageBytes: [String: Int] = [:]
+    @ObservationIgnored private var totalImageBytes = 0
     /// 换租户/登出 +1，在途结果作废
     @ObservationIgnored private var epoch = 0
     @ObservationIgnored private weak var chatStore: ChatStore?
@@ -94,10 +109,38 @@ final class ThumbnailStore {
     private let webGate = ThumbGate(limit: 2)
 
     private static let memoryLimit = 200
+    /// 内存位图总预算上限 64MB，避免大量高像素缩略图堆积触发系统回收抖动
+    private static let memoryBytesLimit = 64 * 1024 * 1024
+    private static let maxTrackedEntries = 512
     private static let maxInFlight = 3
     /// 只是兜底：可见卡片数本来就受 12 轮窗口限制
     private static let maxWaiting = 240
     private static let retryDelays: [Double] = [3, 10]
+
+    private init() {
+        memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.evictMemoryCache()
+            }
+        }
+    }
+
+    func retain(key: String) {
+        visibleKeyCounts[key, default: 0] += 1
+    }
+
+    func release(key: String) {
+        guard let count = visibleKeyCounts[key] else { return }
+        if count <= 1 {
+            visibleKeyCounts.removeValue(forKey: key)
+        } else {
+            visibleKeyCounts[key] = count - 1
+        }
+    }
 
     static func renderable(_ kind: PreviewKind) -> Bool {
         switch kind {
@@ -106,9 +149,63 @@ final class ThumbnailStore {
         }
     }
 
+    private func entry(for key: String) -> ThumbnailEntry {
+        if let existing = entries[key] { return existing }
+        let created = ThumbnailEntry()
+        entries[key] = created
+        return created
+    }
+
+    private func currentState(for key: String) -> ThumbState {
+        entries[key]?.state ?? .none
+    }
+
+    private func setState(_ state: ThumbState, for key: String) {
+        if state == .none {
+            if let existing = entries[key], existing.state != .none {
+                existing.state = .none
+            }
+            return
+        }
+        let target = entry(for: key)
+        if target.state != state {
+            target.state = state
+        }
+    }
+
+    private static func imageCost(_ state: ThumbState) -> Int {
+        guard case .image(let image) = state else { return 0 }
+        if let cg = image.cgImage {
+            return cg.bytesPerRow * cg.height
+        }
+        let pixels = max(1, Int(image.size.width * image.scale)) * max(1, Int(image.size.height * image.scale))
+        return pixels * 4
+    }
+
+    private func evictMemoryCache() {
+        let inBackground = UIApplication.shared.applicationState == .background
+        let keys = order
+        for key in keys where inBackground || visibleKeyCounts[key, default: 0] == 0 {
+            forget(key)
+        }
+        pruneIdleEntries()
+    }
+
+    private func pruneIdleEntries() {
+        guard entries.count > Self.maxTrackedEntries else { return }
+        var removedAny = false
+        for (key, box) in entries
+        where box.state == .none && !attempted.contains(key) && visibleKeyCounts[key, default: 0] == 0 {
+            entries.removeValue(forKey: key)
+            removedAny = true
+        }
+        if removedAny { entriesEpoch &+= 1 }
+    }
+
     func thumbnail(for file: TurnFile, chatId: String, store: ChatStore) -> ThumbState {
+        let _ = entriesEpoch
         guard Self.renderable(file.kind) else { return ThumbState.none }
-        return states[cacheKey(for: file, chatId: chatId, store: store).key] ?? ThumbState.none
+        return entry(for: cacheKey(for: file, chatId: chatId, store: store).key).state
     }
 
     func request(file: TurnFile, chatId: String, store: ChatStore, userInitiated: Bool = false) {
@@ -139,7 +236,7 @@ final class ThumbnailStore {
             canvasTheme: canvasTheme
         )
         // 读盘期间也算 loading：骨架要 0.3 秒后才淡入，命中缓存时看不到它
-        states[key] = .loading
+        setState(.loading, for: key)
         guard job.persist else {
             scheduleNetwork(job, userInitiated: userInitiated)
             return
@@ -163,7 +260,7 @@ final class ThumbnailStore {
     /// 用户点按延迟占位后，仅放行这一次，不改变持久策略。
     func loadOnce(file: TurnFile, chatId: String, store: ChatStore) {
         let key = cacheKey(for: file, chatId: chatId, store: store).key
-        guard states[key] == .delayed else { return }
+        guard currentState(for: key) == .delayed else { return }
         forget(key)
         request(file: file, chatId: chatId, store: store, userInitiated: true)
     }
@@ -171,7 +268,7 @@ final class ThumbnailStore {
     /// 用户手动重试（长按菜单「重新生成预览」）：清掉失败记录重新来
     func retry(file: TurnFile, chatId: String, store: ChatStore) {
         let key = cacheKey(for: file, chatId: chatId, store: store).key
-        guard states[key] == .failed else { return }
+        guard currentState(for: key) == .failed else { return }
         forget(key)
         request(file: file, chatId: chatId, store: store)
     }
@@ -197,7 +294,7 @@ final class ThumbnailStore {
     func invalidateCurrent(chatId: String, path: String, store: ChatStore) {
         let prefix = "\(store.tenantId)|\(chatId)|\(path)|size:"
         let keys = Set(
-            states.keys.filter { $0.hasPrefix(prefix) }
+            entries.keys.filter { $0.hasPrefix(prefix) }
                 + attempted.filter { $0.hasPrefix(prefix) }
                 + waiting.filter { $0.chatId == chatId && $0.path == path && $0.sha == nil }.map(\.key)
                 + pending.values.filter { $0.chatId == chatId && $0.path == path && $0.sha == nil }.map(\.key)
@@ -257,7 +354,14 @@ final class ThumbnailStore {
     /// 换账号/登出：内存全清；盘上按同一条串行队列删（tenant 空 = 登出，删所有租户的 thumbs）
     func reset(tenant: String) {
         epoch += 1
-        states = [:]
+        for box in entries.values where box.state != .none {
+            box.state = .none
+        }
+        if !entries.isEmpty {
+            entries.removeAll()
+            entriesEpoch &+= 1
+        }
+        visibleKeyCounts.removeAll()
         pending = [:]
         waiting = []
         delayed = [:]
@@ -265,6 +369,8 @@ final class ThumbnailStore {
         attempted = []
         failures = [:]
         order = []
+        imageBytes = [:]
+        totalImageBytes = 0
         ThumbDisk.clear(tenant: tenant, epoch: epoch)
     }
 
@@ -289,7 +395,7 @@ final class ThumbnailStore {
         waiting.append(job)
         while waiting.count > Self.maxWaiting {
             // 丢掉的是最早入队、最靠上的卡片；标失败，不让它重新入队把别人挤掉
-            states[waiting.removeFirst().key] = .failed
+            setState(.failed, for: waiting.removeFirst().key)
         }
         pump()
     }
@@ -302,7 +408,7 @@ final class ThumbnailStore {
             bytes: job.bytes
         )
         guard allowed else {
-            states[job.key] = .delayed
+            setState(.delayed, for: job.key)
             delayed[job.key] = job
             return
         }
@@ -316,7 +422,7 @@ final class ThumbnailStore {
               !store.client.networkCost.shouldReduceBackgroundTraffic
         else { return }
         let jobs = delayed.values.filter {
-            $0.tenant == store.tenantId && attempted.contains($0.key) && states[$0.key] == .delayed
+            $0.tenant == store.tenantId && attempted.contains($0.key) && currentState(for: $0.key) == .delayed
         }
         for job in jobs {
             delayed[job.key] = nil
@@ -327,7 +433,7 @@ final class ThumbnailStore {
             let epochAtStart = epoch
             let token = UUID()
             diskLoading[job.key] = token
-            states[job.key] = .loading
+            setState(.loading, for: job.key)
             Task {
                 let cached = await ThumbDisk.load(tenant: job.tenant, key: job.key)
                 guard self.epoch == epochAtStart, self.diskLoading[job.key] == token,
@@ -368,28 +474,44 @@ final class ThumbnailStore {
     }
 
     private func forget(_ key: String) {
-        states[key] = nil
+        setState(.none, for: key)
         delayed[key] = nil
         attempted.remove(key)
         failures[key] = nil
         order.removeAll { $0 == key }
+        if let bytes = imageBytes.removeValue(forKey: key) {
+            totalImageBytes = max(0, totalImageBytes - bytes)
+        }
     }
 
-    /// 超过上限从最早的丢（只丢内存）；被丢的卡片若还在屏上，状态回到 .none，ThumbRequest 会再请求一次（盘上有就直接读回）
+    /// 超过张数或像素字节上限从最早的丢（只丢内存）；被丢的卡片若还在屏上，状态回到 .none，ThumbRequest 会再请求一次（盘上有就直接读回）
     private func commit(_ state: ThumbState, for key: String) {
-        states[key] = state
+        setState(state, for: key)
+        if let previous = imageBytes.removeValue(forKey: key) {
+            totalImageBytes = max(0, totalImageBytes - previous)
+        }
+        let cost = Self.imageCost(state)
+        if cost > 0 {
+            imageBytes[key] = cost
+            totalImageBytes += cost
+        }
         order.removeAll { $0 == key }
         order.append(key)
-        while order.count > Self.memoryLimit {
-            forget(order.removeFirst())
+        while order.count > Self.memoryLimit || (totalImageBytes > Self.memoryBytesLimit && order.count > 1) {
+            // 只淘汰最旧的离屏项，不把当前仍在屏上的卡片置回 .none 引起重拉死循环
+            guard let victimIndex = order.firstIndex(where: { $0 != key && visibleKeyCounts[$0, default: 0] == 0 }) else {
+                break
+            }
+            forget(order.remove(at: victimIndex))
         }
+        pruneIdleEntries()
     }
 
     /// 失败先保持骨架，退避后自己重排；次数用完才落到 .failed（图标占位）
     private func fail(_ job: Pending) {
         let count = failures[job.key, default: 0]
         guard count < Self.retryDelays.count else {
-            states[job.key] = .failed
+            setState(.failed, for: job.key)
             return
         }
         failures[job.key] = count + 1
@@ -399,7 +521,7 @@ final class ThumbnailStore {
             try? await Task.sleep(for: .seconds(delay))
             // 期间被撤（卡片消失）或换了租户：不再重排
             guard self.epoch == epochAtStart, self.attempted.contains(job.key),
-                  self.states[job.key] == .loading
+                  self.currentState(for: job.key) == .loading
             else { return }
             self.enqueue(job)
         }
@@ -607,16 +729,30 @@ private final class ThumbWebJob: NSObject, WKNavigationDelegate, WKScriptMessage
         }
     }
 
-    /// 截图压到白底上存成不透明图：卡片里不透出底色，落盘走 JPEG
+    /// 截图压到白底上存成不透明图并规整到 640px 上限：与图片缩略图及磁盘回读分辨率对齐，避免 3x 下单张 5MB+ 占满内存
     private static func flattened(_ image: UIImage) -> UIImage {
+        let pixelWidth = image.size.width * image.scale
+        let pixelHeight = image.size.height * image.scale
+        let maxEdge = max(pixelWidth, pixelHeight)
+        let targetSize: CGSize
+        let targetScale: CGFloat
+        if maxEdge > 640 {
+            let ratio = 640.0 / maxEdge
+            targetSize = CGSize(width: max(1, floor(pixelWidth * ratio)), height: max(1, floor(pixelHeight * ratio)))
+            targetScale = 1
+        } else {
+            targetSize = image.size
+            targetScale = image.scale
+        }
         let format = UIGraphicsImageRendererFormat()
         format.opaque = true
-        format.scale = image.scale
-        return UIGraphicsImageRenderer(size: image.size, format: format).image { context in
+        format.scale = targetScale
+        let rendered = UIGraphicsImageRenderer(size: targetSize, format: format).image { _ in
             UIColor.white.setFill()
-            context.fill(CGRect(origin: .zero, size: image.size))
-            image.draw(at: .zero)
+            UIRectFill(CGRect(origin: .zero, size: targetSize))
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
         }
+        return rendered.preparingForDisplay() ?? rendered
     }
 
     private func finish(_ image: UIImage?) {
@@ -777,7 +913,11 @@ private enum ThumbRender {
         return String(data: data, encoding: .utf8)
     }
 
-    static func downsample(_ data: Data, maxPixel: Int) -> UIImage? {
+    nonisolated static func prepareForDisplay(_ image: UIImage) -> UIImage {
+        image.preparingForDisplay() ?? image
+    }
+
+    nonisolated static func downsample(_ data: Data, maxPixel: Int) -> UIImage? {
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else { return nil }
         let options = [
@@ -787,20 +927,20 @@ private enum ThumbRender {
             kCGImageSourceThumbnailMaxPixelSize: maxPixel,
         ] as CFDictionary
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else { return nil }
-        return UIImage(cgImage: image)
+        return prepareForDisplay(UIImage(cgImage: image))
     }
 
-    static func pdfThumbnail(_ data: Data) -> UIImage? {
+    nonisolated static func pdfThumbnail(_ data: Data) -> UIImage? {
         guard let page = PDFDocument(data: data)?.page(at: 0) else { return nil }
-        return page.thumbnail(of: CGSize(width: 640, height: 900), for: .mediaBox)
+        return prepareForDisplay(page.thumbnail(of: CGSize(width: 640, height: 900), for: .mediaBox))
     }
 
-    static func videoFrame(_ url: URL) async -> UIImage? {
+    nonisolated static func videoFrame(_ url: URL) async -> UIImage? {
         let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: 640, height: 640)
         guard let (image, _) = try? await generator.image(at: .zero) else { return nil }
-        return UIImage(cgImage: image)
+        return prepareForDisplay(UIImage(cgImage: image))
     }
 
     /// 前 6 行非空文本，去掉标题的 #、代码围栏和分隔线
@@ -918,7 +1058,9 @@ private enum ThumbDisk {
         let base = dir.appendingPathComponent(fileName(key))
         for ext in ["png", "jpg"] {
             let url = base.appendingPathExtension(ext)
-            if let data = try? Data(contentsOf: url), let image = UIImage(data: data) {
+            if let data = try? Data(contentsOf: url),
+               let image = ThumbRender.downsample(data, maxPixel: 640)
+                ?? UIImage(data: data).map(ThumbRender.prepareForDisplay) {
                 touch(url)
                 return .image(image)
             }

@@ -181,8 +181,8 @@ extension ChatStore {
         let untitled = chats.first { $0.id == chatId }?.isUntitled ?? true
         let targetModel = model(for: chatId)
         let targetMode = AgentMode.agent
-        // P11：第三方模型无状态——历史随 prompt 上行；须在本地 turn 追加前组装（否则把当前消息也装进去）
-        let history = ChatStore.externalHistory(model: targetModel, turns: session.turns)
+        // P11：第三方模型无状态——历史随 prompt 上行；须在本地 turn 追加前组装（含运行中流式叠加层）
+        let history = ChatStore.externalHistory(model: targetModel, turns: chatWithActiveOverlay(session).turns)
         // 对齐网页端：纯图时本地占位「（附图）」，prompt.text 留空由网关兜底
         var turn = Turn.blank(
             user: text.isEmpty ? "（附图）" : text,
@@ -195,6 +195,7 @@ extension ChatStore {
             if !draft.isEmpty { draft = "" }
             if !pendingImages.isEmpty { pendingImages = [] }
         }
+        setDraftBox("", for: chatId)
         if imagesByChat[chatId] != nil { imagesByChat[chatId] = nil }
         if mentionQueryByChat[chatId] != nil { mentionQueryByChat.removeValue(forKey: chatId) }
         mentionTasksByChat.removeValue(forKey: chatId)?.cancel()
@@ -205,7 +206,6 @@ extension ChatStore {
         if !notice.isEmpty { notice = "" }
         patch(chatId) { chat in
             var next = chat
-            next.draft = ""
             next.unread = false
             next.turns.append(turn)
             return next
@@ -281,7 +281,7 @@ extension ChatStore {
             }
             return next
         }
-        let existing = (targetId == activeId ? draft : chats.first { $0.id == targetId }?.draft) ?? ""
+        let existing = draft(for: targetId)
         let trimmed = turn.user.trimmingCharacters(in: .whitespacesAndNewlines)
         if existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            !trimmed.isEmpty, trimmed != "（附图）" {
@@ -307,9 +307,9 @@ extension ChatStore {
 
     func stop(chatId requestedId: String? = nil) {
         let targetId = requestedId ?? activeId
+        flushStreamDeltas(targetId, commitToChats: true)
         let localOnly = localOnlyWaitTurnIds(targetId)
         var droppedLocalQueued = Set<String>()
-        flushStreamDeltas(targetId)
         if let localOnly {
             let queuedIds = Set(
                 (chats.first { $0.id == targetId }?.turns ?? []).filter(\.queued).map(\.id)
@@ -353,7 +353,7 @@ extension ChatStore {
 
     /// 卡住后停下：输入框是空的，就把刚停掉的那一句放回去，方便再发。
     func restoreLastPromptIfDraftEmpty(chatId: String) {
-        let existing = (chatId == activeId ? draft : chats.first { $0.id == chatId }?.draft) ?? ""
+        let existing = draft(for: chatId)
         guard existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard let chat = chats.first(where: { $0.id == chatId }) else { return }
         guard let text = chat.turns.reversed().lazy.compactMap({ turn -> String? in
@@ -367,7 +367,7 @@ extension ChatStore {
 
     /// 执行失败后输入框是空的，就把最近一句放回去。不自动发送。
     func restoreFailedPromptIfDraftEmpty(chatId: String) {
-        let existing = (chatId == activeId ? draft : chats.first { $0.id == chatId }?.draft) ?? ""
+        let existing = draft(for: chatId)
         guard existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard let chat = chats.first(where: { $0.id == chatId }) else { return }
         guard let text = chat.turns.reversed().lazy.compactMap({ turn -> String? in

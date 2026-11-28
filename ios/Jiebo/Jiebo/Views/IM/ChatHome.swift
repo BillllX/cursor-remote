@@ -226,7 +226,11 @@ struct ChatListView: View {
             if !rows.chatted.isEmpty {
                 Section {
                     ForEach(rows.chatted) { row in
-                        conversationRow(row)
+                        ImConversationRow(
+                            row: row,
+                            selected: destination == .person(row.user.id),
+                            onSelect: { setDestination(.person(row.user.id)) }
+                        )
                     }
                 }
             }
@@ -340,7 +344,7 @@ struct ChatListView: View {
                     .frame(width: 48, height: 48)
                     .background(JieboColor.sidebar)
                     .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-                    .overlay(alignment: .topTrailing) { unreadMark(group).offset(x: 6, y: -6) }
+                    .overlay(alignment: .topTrailing) { ImUnreadMark(conv: group).offset(x: 6, y: -6) }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(group.title ?? "协作群")
                         .font(JieboFont.text(.body, weight: .medium))
@@ -361,16 +365,85 @@ struct ChatListView: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    private func conversationRow(_ row: ImDirectoryRow) -> some View {
-        let conv = row.conv
-        let selected = destination == .person(row.user.id)
-        return Button {
+    private func contactRow(_ row: ImDirectoryRow) -> some View {
+        Button {
             setDestination(.person(row.user.id))
         } label: {
             HStack(spacing: 12) {
+                ImAvatar(user: row.user, size: 40)
+                Text(row.user.nickname)
+                    .font(JieboFont.text(.body))
+                    .foregroundStyle(JieboColor.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(destination == .person(row.user.id) ? JieboColor.mist : JieboColor.paper)
+        .accessibilityLabel(row.user.nickname)
+    }
+
+
+    private var destination: ChatDestination? {
+        sceneSession?.chatDestination ?? store.chatHomeDestination
+    }
+
+    private func setDestination(_ destination: ChatDestination?) {
+        if let sceneSession {
+            sceneSession.chatDestination = destination
+        } else {
+            store.chatHomeDestination = destination
+        }
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        VStack(spacing: 10) {
+            Image(systemName: trimmed.isEmpty ? "person.2" : "magnifyingglass")
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(JieboColor.dim)
+            if !trimmed.isEmpty {
+                Text("没找到「\(trimmed)」")
+                    .font(JieboFont.text(.callout))
+                    .foregroundStyle(JieboColor.ink2)
+            } else if !im.contactsLoaded {
+                Text(im.online ? "正在加载…" : "连上服务器后，这里会列出平台上的人")
+                    .font(JieboFont.text(.callout))
+                    .foregroundStyle(JieboColor.ink2)
+                    .multilineTextAlignment(.center)
+            } else {
+                Text("平台上还没有别人")
+                    .font(JieboFont.text(.callout, weight: .medium))
+                    .foregroundStyle(JieboColor.ink2)
+                Text("等有人加入，就能在这里找到他们、发消息")
+                    .font(JieboFont.text(.footnote))
+                    .foregroundStyle(JieboColor.dim)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// 独立隔离的单条 IM 会话行：只订阅该会话自己的草稿盒与待发消息盒，不触发整张 ChatListView 重算。
+private struct ImConversationRow: View {
+    @Environment(ImStore.self) private var im
+    @Environment(ChatStore.self) private var store
+    let row: ImDirectoryRow
+    let selected: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        let conv = row.conv
+        Button(action: onSelect) {
+            HStack(spacing: 12) {
                 ImAvatar(user: row.user, size: 48)
                     .overlay(alignment: .topTrailing) {
-                        unreadMark(conv)
+                        ImUnreadMark(conv: conv)
                             .offset(x: 6, y: -6)
                     }
                 VStack(alignment: .leading, spacing: 4) {
@@ -435,65 +508,19 @@ struct ChatListView: View {
         }
     }
 
-    private func contactRow(_ row: ImDirectoryRow) -> some View {
-        Button {
-            setDestination(.person(row.user.id))
-        } label: {
-            HStack(spacing: 12) {
-                ImAvatar(user: row.user, size: 40)
-                Text(row.user.nickname)
-                    .font(JieboFont.text(.body))
-                    .foregroundStyle(JieboColor.ink)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(destination == .person(row.user.id) ? JieboColor.mist : JieboColor.paper)
-        .accessibilityLabel(row.user.nickname)
-    }
-
-
-    private var destination: ChatDestination? {
-        sceneSession?.chatDestination ?? store.chatHomeDestination
-    }
-
-    private func setDestination(_ destination: ChatDestination?) {
-        if let sceneSession {
-            sceneSession.chatDestination = destination
-        } else {
-            store.chatHomeDestination = destination
-        }
-    }
-
-    @ViewBuilder
-    private func unreadMark(_ conv: ImConvRow?) -> some View {
-        if let conv, conv.unread > 0 {
-            if conv.mute {
-                Circle()
-                    .fill(JieboColor.danger)
-                    .frame(width: 10, height: 10)
-                    .accessibilityHidden(true)
-            } else {
-                ImUnreadBadge(count: conv.unread)
-            }
-        }
-    }
-
     /// 草稿优先（红色「[草稿]」）；再看最后一条（含本机还没发出去的）
     private func previewLine(_ conv: ImConvRow?, peer: ImUser) -> Text {
         guard let conv else { return Text("") }
-        if destination != .person(peer.id),
-           let draft = im.drafts[conv.convId]?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !draft.isEmpty {
-            let draftText = draft.replacingOccurrences(of: "\n", with: " ")
-            return Text(
-                "\(Text("[草稿] ").foregroundStyle(JieboColor.danger))\(Text(draftText).foregroundStyle(JieboColor.dim))"
-            )
+        if !selected {
+            let draft = im.draft(for: conv.convId).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !draft.isEmpty {
+                let draftText = draft.replacingOccurrences(of: "\n", with: " ")
+                return Text(
+                    "\(Text("[草稿] ").foregroundStyle(JieboColor.danger))\(Text(draftText).foregroundStyle(JieboColor.dim))"
+                )
+            }
         }
-        let pending = im.timelines[conv.convId]?.last(where: { $0.seq == nil })
+        let pending = im.latestPendingMessage(for: conv.convId)
         let latest: ImLocalMessage?
         if let pending, pending.at >= (conv.last?.at ?? 0) {
             latest = pending
@@ -526,35 +553,22 @@ struct ChatListView: View {
         }
         return parts.joined(separator: "，")
     }
+}
 
-    @ViewBuilder
-    private var emptyState: some View {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        VStack(spacing: 10) {
-            Image(systemName: trimmed.isEmpty ? "person.2" : "magnifyingglass")
-                .font(.system(size: 34, weight: .light))
-                .foregroundStyle(JieboColor.dim)
-            if !trimmed.isEmpty {
-                Text("没找到「\(trimmed)」")
-                    .font(JieboFont.text(.callout))
-                    .foregroundStyle(JieboColor.ink2)
-            } else if !im.contactsLoaded {
-                Text(im.online ? "正在加载…" : "连上服务器后，这里会列出平台上的人")
-                    .font(JieboFont.text(.callout))
-                    .foregroundStyle(JieboColor.ink2)
-                    .multilineTextAlignment(.center)
+private struct ImUnreadMark: View {
+    let conv: ImConvRow?
+
+    var body: some View {
+        if let conv, conv.unread > 0 {
+            if conv.mute {
+                Circle()
+                    .fill(JieboColor.danger)
+                    .frame(width: 10, height: 10)
+                    .accessibilityHidden(true)
             } else {
-                Text("平台上还没有别人")
-                    .font(JieboFont.text(.callout, weight: .medium))
-                    .foregroundStyle(JieboColor.ink2)
-                Text("等有人加入，就能在这里找到他们、发消息")
-                    .font(JieboFont.text(.footnote))
-                    .foregroundStyle(JieboColor.dim)
-                    .multilineTextAlignment(.center)
+                ImUnreadBadge(count: conv.unread)
             }
         }
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

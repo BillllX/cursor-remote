@@ -6,12 +6,9 @@ import UIKit
 extension ChatStore {
     func saveDraft(_ value: String) {
         if draft != value { draft = value }
+        setDraftBox(value, for: activeId)
         if mentionQueryByChat[activeId] != nil || !(mentionSuggestionsByChat[activeId]?.isEmpty ?? true) || value.contains("@") {
             updateMentions(for: value)
-        }
-        guard let index = chats.firstIndex(where: { $0.id == activeId }) else { return }
-        if chats[index].draft != value {
-            chats[index].draft = value
         }
     }
 
@@ -21,8 +18,7 @@ extension ChatStore {
             saveDraft(value)
             return
         }
-        guard let index = chats.firstIndex(where: { $0.id == id }), chats[index].draft != value else { return }
-        chats[index].draft = value
+        setDraftBox(value, for: id)
     }
 
     /// 外部操作（@补全、文件引用、附件上传、历史消息编辑、空态快捷词）写入草稿并通知 ComposerView 同步缓冲区。
