@@ -184,6 +184,9 @@ final class AudioSessionCoordinator {
         sessionChain = next
     }
 
+    /// 串行后台音频会话队列（供 AudioSessionCoordinator 与 VoiceDictation 共享，避免双队列交叉改写 AVAudioSession）。
+    static let audioQueue = DispatchQueue(label: "ai.jiebo.audio-session.coordinator", qos: .userInitiated)
+
     private static func applySession(
         category: AVAudioSession.Category,
         mode: AVAudioSession.Mode,
@@ -192,7 +195,7 @@ final class AudioSessionCoordinator {
     ) async throws {
         let session = AVAudioSession.sharedInstance()
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            DispatchQueue.global(qos: .userInitiated).async {
+            audioQueue.async {
                 do {
                     try session.setCategory(category, mode: mode, options: options)
                     if let overrideSpeaker {
@@ -208,9 +211,12 @@ final class AudioSessionCoordinator {
     }
 
     private static func deactivateSystemSession() async {
-        await Task.detached(priority: .userInitiated) {
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        }.value
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            audioQueue.async {
+                try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+                continuation.resume()
+            }
+        }
     }
 }
 #endif

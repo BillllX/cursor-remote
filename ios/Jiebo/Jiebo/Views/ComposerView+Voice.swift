@@ -131,29 +131,44 @@ extension ComposerView {
     }
 
     var voicePanel: some View {
+        VoiceDictationPanel(
+            dictation: dictation,
+            voiceCancelArmed: voiceCancelArmed,
+            tapVoice: tapVoice,
+            onCancelTapVoice: cancelTapVoice
+        )
+    }
+}
+
+/// 独立观察 VoiceDictation 高频状态（level / transcript / phase），
+/// 避免录音时每秒 12+ 次音量回调和流式转写连带重绘整个 ComposerView 与 UITextView。
+private struct VoiceDictationPanel: View {
+    let dictation: VoiceDictation
+    let voiceCancelArmed: Bool
+    let tapVoice: Bool
+    let onCancelTapVoice: () -> Void
+
+    var body: some View {
         let finishing = dictation.phase == .finishing
         let tint = voiceCancelArmed ? JieboColor.danger : JieboColor.pine
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                VoiceLevelBars(level: dictation.level, tint: tint, live: dictation.phase == .recording)
+                LiveVoiceLevelBars(dictation: dictation, tint: tint)
+                    .accessibilityHidden(true)
                 Text(voiceHint(finishing: finishing))
                     .font(JieboFont.text(.caption, weight: .medium))
                     .foregroundStyle(voiceCancelArmed ? JieboColor.danger : JieboColor.ink2)
                 Spacer(minLength: 0)
                 if finishing { ProgressView().controlSize(.small) }
                 if tapVoice, !finishing {
-                    Button("取消", action: cancelTapVoice)
+                    Button("取消", action: onCancelTapVoice)
                         .buttonStyle(.plain)
                         .font(JieboFont.text(.caption, weight: .medium))
                         .foregroundStyle(JieboColor.ink2)
                         .hitTarget()
                 }
             }
-            Text(dictation.transcript.isEmpty ? "请说话…" : dictation.transcript)
-                .font(JieboFont.text(.subheadline))
-                .foregroundStyle(dictation.transcript.isEmpty ? JieboColor.dim : JieboColor.ink)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .lineLimit(6)
+            LiveVoiceTranscriptText(dictation: dictation)
         }
         .padding(10)
         .background(voiceCancelArmed ? JieboColor.dangerBg : JieboColor.pine.opacity(0.08))
@@ -171,6 +186,33 @@ extension ComposerView {
         if tapVoice { return dictation.stoppedEarly ? "已停止录音，点话筒填入输入框" : "再点话筒结束" }
         if voiceCancelArmed { return "松开取消" }
         return dictation.stoppedEarly ? "已停止录音，松开填入输入框" : "松开填入输入框 · 上滑取消"
+    }
+}
+
+/// 独立观察流式转写文字，避免每次 partial 更新连带重算 VoiceDictationPanel 头部布局。
+private struct LiveVoiceTranscriptText: View {
+    let dictation: VoiceDictation
+
+    var body: some View {
+        Text(dictation.transcript.isEmpty ? "请说话…" : dictation.transcript)
+            .font(JieboFont.text(.subheadline))
+            .foregroundStyle(dictation.transcript.isEmpty ? JieboColor.dim : JieboColor.ink)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .lineLimit(6)
+    }
+}
+
+/// 独立观察 dictation.level，将 12.5fps 音量柱动画与面板文字完全隔离。
+private struct LiveVoiceLevelBars: View {
+    let dictation: VoiceDictation
+    let tint: Color
+
+    var body: some View {
+        VoiceLevelBars(
+            level: dictation.level,
+            tint: tint,
+            live: dictation.phase == .recording
+        )
     }
 }
 
