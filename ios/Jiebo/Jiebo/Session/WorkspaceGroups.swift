@@ -6,7 +6,10 @@ import Foundation
 
 /// 反斜杠→斜杠、去尾部斜杠（对齐 web normPath）
 func normPath(_ path: String) -> String {
-    var p = path.replacingOccurrences(of: "\\", with: "/")
+    let hasBackslash = path.contains("\\")
+    let hasTrailingSlash = path.last == "/"
+    if !hasBackslash && !hasTrailingSlash { return path }
+    var p = hasBackslash ? path.replacingOccurrences(of: "\\", with: "/") : path
     while p.hasSuffix("/") { p.removeLast() }
     return p
 }
@@ -69,31 +72,34 @@ extension ChatStore {
     /// 注意 cwd 是 String? 且可能留下空串——必须 nilIfEmpty（对齐 web 的 `chat.cwd || root` 语义），
     /// 否则 cwd==nil 与 cwd=="" 会拆出两个幽灵组。
     var sidebarChats: [ChatSession] {
-        // 两遍：先标出「活跃空会话所在组」——同组里活跃空会话优先于先出现的非活跃空会话
-        //（单遍写法在 [非活跃空, 活跃空] 顺序下同组会留两条，GLM R2 MINOR）
-        let activeEmptyKeys: Set<String> = chats
-            .filter { $0.id == activeId && $0.title == "新对话" && $0.turnsComplete && $0.turns.isEmpty }
-            .map { normPath($0.cwd?.nilIfEmpty ?? groupRoot) }
-            .reduce(into: []) { $0.insert($1) }
-        var keep = Set<String>()
+        // 先找出活跃空会话所在组（activeId 唯一，最多命中 1 组）；同组里活跃空会话优先于先出现的非活跃空会话
+        let root = groupRoot
+        let activeEmptyKey: String? = {
+            guard let chat = chats.first(where: { $0.id == activeId }),
+                  !isAssistantChat(chat.id),
+                  chat.title == "新对话", chat.turnsComplete, chat.turns.isEmpty
+            else { return nil }
+            return normPath(chat.cwd?.nilIfEmpty ?? root)
+        }()
+        var result: [ChatSession] = []
+        result.reserveCapacity(chats.count)
         var seenEmpty = Set<String>()
         // 助理会话单独置顶，不进工作区分组
         for chat in chats where !isAssistantChat(chat.id) {
             // P8 slim：turnsComplete=false 的是「未加载」不是「真空」，不能参与空会话去重
             let empty = chat.title == "新对话" && chat.turnsComplete && chat.turns.isEmpty
             if !empty {
-                keep.insert(chat.id)
+                result.append(chat)
                 continue
             }
-            let key = normPath(chat.cwd?.nilIfEmpty ?? groupRoot)
-            if activeEmptyKeys.contains(key) {
-                if chat.id == activeId { keep.insert(chat.id) }
-            } else if !seenEmpty.contains(key) {
-                keep.insert(chat.id)
-                seenEmpty.insert(key)
+            let key = normPath(chat.cwd?.nilIfEmpty ?? root)
+            if key == activeEmptyKey {
+                if chat.id == activeId { result.append(chat) }
+            } else if seenEmpty.insert(key).inserted {
+                result.append(chat)
             }
         }
-        return chats.filter { keep.contains($0.id) }
+        return result
     }
 
     /// 会话按工作区分组（对齐 web workspaceGroups）：
@@ -175,9 +181,56 @@ extension ChatStore {
         return cwd == dir || cwd.hasPrefix(dir + "/")
     }
 
+    /// 一次快照同时返回：按最近活动排序的子工作区、各目录统计、以及各工作区（含子目录）对话数。
+    /// 避免 WorkspacePickerSheet 为每一行重复重算 sidebarChats 与 normPath。
+    func workspacePickerSnapshot() -> (items: [WorkspaceItem], stats: [String: WorkspaceStat], countsUnderByNormPath: [String: Int]) {
+        let root = groupRoot
+        let list = sidebarChats
+        var stats: [String: WorkspaceStat] = [:]
+        var normalizedCwds: [String] = []
+        normalizedCwds.reserveCapacity(list.count)
+        for chat in list {
+            let key = normPath(chat.cwd?.nilIfEmpty ?? root)
+            normalizedCwds.append(key)
+            var stat = stats[key] ?? WorkspaceStat()
+            stat.chats += 1
+            stat.touched = max(stat.touched, chat.touchedAt ?? 0)
+            stats[key] = stat
+        }
+        let subs = subWorkspaces
+        let sorted = subs.enumerated()
+            .sorted { lhs, rhs in
+                let a = stats[normPath(lhs.element.path)]?.touched ?? 0
+                let b = stats[normPath(rhs.element.path)]?.touched ?? 0
+                if a != b { return a > b }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
+        // 按唯一 normPath 统计含子目录的对话数，单次复用 normalizedCwds
+        var countsUnder: [String: Int] = [:]
+        countsUnder.reserveCapacity(sorted.count)
+        for item in sorted {
+            let dir = normPath(item.path)
+            if countsUnder[dir] != nil { continue }
+            let prefix = dir + "/"
+            var count = 0
+            for cwd in normalizedCwds where cwd == dir || cwd.hasPrefix(prefix) {
+                count += 1
+            }
+            countsUnder[dir] = count
+        }
+        return (sorted, stats, countsUnder)
+    }
+
     /// path 里（含子目录）有多少个对话
     func chatCountUnder(_ path: String) -> Int {
-        sidebarChats.filter { isChatUnder($0, path) }.count
+        let dir = normPath(path)
+        let prefix = dir + "/"
+        let root = groupRoot
+        return sidebarChats.reduce(0) { acc, chat in
+            let cwd = normPath(chat.cwd?.nilIfEmpty ?? root)
+            return acc + ((cwd == dir || cwd.hasPrefix(prefix)) ? 1 : 0)
+        }
     }
 
     /// 是不是根目录下的一级工作区：只有这些能改名、删除

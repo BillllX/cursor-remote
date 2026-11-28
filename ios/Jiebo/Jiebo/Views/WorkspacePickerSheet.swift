@@ -18,18 +18,35 @@ struct WorkspacePickerSheet: View {
 
     var body: some View {
         @Bindable var store = store
-        let all = store.recentSubWorkspaces
-        let stats = store.workspaceStatsByKey
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let items = all.filter { $0.name.lowercased().contains(needle) || $0.path.lowercased().contains(needle) }
+        // 单次快照复用 sidebarChats 与 normPath 统计，消除旧版 O(W × C) 的每行重复扫描
+        let snapshot = store.workspacePickerSnapshot()
+        let all = snapshot.items
+        let stats = snapshot.stats
+        let countsUnder = snapshot.countsUnderByNormPath
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let currentPath = store.workspacePath(anchoredTo: sceneSession?.workbenchChatId)
-        let recent = Array(all.filter {
-            (stats[normPath($0.path)]?.touched ?? 0) > 0
-                || sameCwd($0.path, currentPath)
-        }.prefix(5))
-        let recentPaths = Set(recent.map { normPath($0.path) })
-        let remaining = all.filter { !recentPaths.contains(normPath($0.path)) }
-        let duplicates = Set(Dictionary(grouping: all, by: \.name).filter { $0.value.count > 1 }.keys)
+        let currentNormPath = normPath(currentPath)
+        let items: [WorkspaceItem] = needle.isEmpty ? [] : all.filter {
+            $0.name.range(of: needle, options: .caseInsensitive) != nil
+                || $0.path.range(of: needle, options: .caseInsensitive) != nil
+        }
+        let sections: (recent: [WorkspaceItem], remaining: [WorkspaceItem], duplicates: Set<String>) = {
+            guard needle.isEmpty else { return ([], [], []) }
+            let recentList = Array(all.filter {
+                let key = normPath($0.path)
+                return (stats[key]?.touched ?? 0) > 0 || key == currentNormPath
+            }.prefix(5))
+            let recentPaths = Set(recentList.map { normPath($0.path) })
+            let remainingList = all.filter { !recentPaths.contains(normPath($0.path)) }
+            var nameCounts: [String: Int] = [:]
+            nameCounts.reserveCapacity(all.count)
+            for item in all { nameCounts[item.name, default: 0] += 1 }
+            let duplicateNames = Set(nameCounts.compactMap { $0.value > 1 ? $0.key : nil })
+            return (recentList, remainingList, duplicateNames)
+        }()
+        let recent = sections.recent
+        let remaining = sections.remaining
+        let duplicates = sections.duplicates
         NavigationStack {
             List {
                 if all.isEmpty {
@@ -62,7 +79,14 @@ struct WorkspacePickerSheet: View {
                 } else if !needle.isEmpty {
                     Section {
                         ForEach(items) { item in
-                            row(item, showPath: true, stat: stats[normPath(item.path)])
+                            let key = normPath(item.path)
+                            row(
+                                item,
+                                showPath: true,
+                                stat: stats[key],
+                                current: key == currentNormPath,
+                                chatCount: countsUnder[key] ?? 0
+                            )
                         }
                     } header: {
                         JieboListHeader("搜索结果")
@@ -72,7 +96,14 @@ struct WorkspacePickerSheet: View {
                     if !recent.isEmpty {
                         Section {
                             ForEach(recent) { item in
-                                row(item, showPath: duplicates.contains(item.name), stat: stats[normPath(item.path)])
+                                let key = normPath(item.path)
+                                row(
+                                    item,
+                                    showPath: duplicates.contains(item.name),
+                                    stat: stats[key],
+                                    current: key == currentNormPath,
+                                    chatCount: countsUnder[key] ?? 0
+                                )
                             }
                         } header: {
                             JieboListHeader("最近")
@@ -82,7 +113,14 @@ struct WorkspacePickerSheet: View {
                     if !remaining.isEmpty {
                         Section {
                             ForEach(remaining) { item in
-                                row(item, showPath: duplicates.contains(item.name), stat: stats[normPath(item.path)])
+                                let key = normPath(item.path)
+                                row(
+                                    item,
+                                    showPath: duplicates.contains(item.name),
+                                    stat: stats[key],
+                                    current: key == currentNormPath,
+                                    chatCount: countsUnder[key] ?? 0
+                                )
                             }
                         } header: {
                             JieboListHeader("其他文件夹")
@@ -93,7 +131,9 @@ struct WorkspacePickerSheet: View {
                     }
                 }
                 let sharedRows = store.workspaceSharing.items.filter {
-                    needle.isEmpty || $0.name.lowercased().contains(needle) || $0.ownerName.lowercased().contains(needle)
+                    needle.isEmpty
+                        || $0.name.range(of: needle, options: .caseInsensitive) != nil
+                        || $0.ownerName.range(of: needle, options: .caseInsensitive) != nil
                 }
                 if !sharedRows.isEmpty {
                     Section("共享给我") {
@@ -232,10 +272,8 @@ struct WorkspacePickerSheet: View {
         return when.isEmpty ? "\(stat.chats) 个对话" : "\(stat.chats) 个对话 · \(when)"
     }
 
-    private func row(_ item: WorkspaceItem, showPath: Bool, stat: WorkspaceStat?) -> some View {
-        let current = sameCwd(item.path, store.workspacePath(anchoredTo: sceneSession?.workbenchChatId))
+    private func row(_ item: WorkspaceItem, showPath: Bool, stat: WorkspaceStat?, current: Bool, chatCount: Int) -> some View {
         let manage = store.isTopLevelWorkspace(item.path)
-        let chatCount = store.chatCountUnder(item.path)
         return Button {
             openWorkspace(item)
         } label: {

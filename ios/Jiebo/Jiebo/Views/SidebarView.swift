@@ -17,10 +17,13 @@ struct SidebarView: View {
 
     var body: some View {
         @Bindable var store = store
+        let chats = workspaceChats
+        let currentTitle = workspaceTitle
+        let activeSelection = selectedChatId
         VStack(alignment: .leading, spacing: 0) {
             brandBar
 
-            workspaceCard
+            workspaceCard(title: currentTitle)
                 .padding(.horizontal, 12)
 
             workspacePrimaryActions
@@ -32,15 +35,15 @@ struct SidebarView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    if workspaceChats.isEmpty {
+                    if chats.isEmpty {
                         Text("这里还没有对话")
                             .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.dim)
                             .padding(.horizontal, 20)
                             .padding(.vertical, 10)
                     } else {
-                        ForEach(workspaceChats) { chat in
-                            chatRow(chat)
+                        ForEach(chats) { chat in
+                            chatRow(chat, selected: chat.id == activeSelection)
                         }
                     }
                 }
@@ -176,7 +179,7 @@ struct SidebarView: View {
         .accessibilityLabel("收起侧栏")
     }
 
-    private var workspaceCard: some View {
+    private func workspaceCard(title: String) -> some View {
         Button(action: store.openWorkspaceSwitcher) {
             HStack(spacing: 10) {
                 Image(systemName: NavigationIconId.workspace.symbol)
@@ -189,7 +192,7 @@ struct SidebarView: View {
                     Text("当前文件夹")
                         .font(JieboFont.text(.caption2))
                         .foregroundStyle(JieboColor.dim)
-                    Text(workspaceTitle)
+                    Text(title)
                         .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
@@ -213,7 +216,7 @@ struct SidebarView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressScaleButtonStyle())
-        .accessibilityLabel("当前文件夹，\(workspaceTitle)")
+        .accessibilityLabel("当前文件夹，\(title)")
         .accessibilityHint("换一个文件夹")
     }
 
@@ -315,8 +318,7 @@ struct SidebarView: View {
 
     // MARK: 会话行
 
-    private func chatRow(_ chat: ChatSession) -> some View {
-        let selected = chat.id == selectedChatId
+    private func chatRow(_ chat: ChatSession, selected: Bool) -> some View {
         let live = store.chatShowsRunning(chat)
         return Button {
             if let sceneSession {
@@ -326,54 +328,14 @@ struct SidebarView: View {
             store.activateWorkspaceChat(chat.id)
             store.ensureTurnsLoaded(chat.id)
         } label: {
-            HStack(spacing: 8) {
-                Capsule()
-                    .fill(selected && JieboTheme.shared.palette != .sticker ? JieboColor.pine : Color.clear)
-                    .frame(width: 3, height: 22)
-                    .accessibilityHidden(true)
-                Text(chat.title)
-                    .font(JieboFont.text(.subheadline, weight: chat.unread ? .semibold : .regular))
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                if selected {
-                    Text("当前")
-                        .font(JieboFont.text(.caption2, weight: .semibold))
-                        .foregroundStyle(JieboTheme.shared.palette == .sticker ? JieboColor.fillFg : JieboColor.pine)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(JieboTheme.shared.palette == .sticker ? JieboColor.pine : JieboColor.pine.opacity(0.12))
-                        .clipShape(Capsule())
-                        .accessibilityHidden(true)
-                } else if !live, let touched = chat.touchedAt {
-                    AgoLabel(epochMs: touched, font: JieboFont.text(.caption2))
-                }
-                if live {
-                    Text("跑")
-                        .font(JieboFont.text(.caption2, weight: .medium))
-                        .foregroundStyle(JieboColor.run)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(JieboColor.runBg)
-                        .clipShape(Capsule())
-                } else if chat.unread {
-                    Circle().fill(JieboColor.pine).frame(width: 6, height: 6)
-                }
-            }
-            .foregroundStyle(JieboColor.ink)
-            .padding(.horizontal, 12)
-            .frame(minHeight: 44)
-            .background(selected ? JieboColor.pine.opacity(0.1) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(selected ? (JieboTheme.shared.palette == .sticker ? JieboColor.line : JieboColor.pine.opacity(0.42)) : Color.clear, lineWidth: JieboStroke.outline)
+            SidebarChatRowContent(
+                title: chat.title,
+                unread: chat.unread,
+                touchedAt: chat.touchedAt,
+                selected: selected,
+                live: live
             )
-            .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .hoverEffect(.highlight)
-            .padding(.horizontal, 8)
-            .contentShape(Rectangle())
+            .equatable()
         }
         .buttonStyle(.plain)
         .accessibilityLabel([
@@ -408,5 +370,67 @@ struct SidebarView: View {
         guard let id = store.preferredWorkspaceChatId() else { return }
         sceneSession.workbenchChatId = id
         store.activateWorkspaceChat(id)
+    }
+}
+
+/// 侧栏会话行内容：Equatable（含主题与外观键），避免流式消息更新导致非活跃行重复布局。
+private struct SidebarChatRowContent: View, Equatable {
+    let title: String
+    let unread: Bool
+    let touchedAt: Double?
+    let selected: Bool
+    let live: Bool
+    var palette: JieboPalette = JieboTheme.shared.palette
+    var appearance: JieboAppearance = JieboTheme.shared.appearance
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Capsule()
+                .fill(selected && palette != .sticker ? JieboColor.pine : Color.clear)
+                .frame(width: 3, height: 22)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(JieboFont.text(.subheadline, weight: unread ? .semibold : .regular))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            if selected {
+                Text("当前")
+                    .font(JieboFont.text(.caption2, weight: .semibold))
+                    .foregroundStyle(palette == .sticker ? JieboColor.fillFg : JieboColor.pine)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(palette == .sticker ? JieboColor.pine : JieboColor.pine.opacity(0.12))
+                    .clipShape(Capsule())
+                    .accessibilityHidden(true)
+            } else if !live, let touched = touchedAt {
+                AgoLabel(epochMs: touched, font: JieboFont.text(.caption2))
+            }
+            if live {
+                Text("跑")
+                    .font(JieboFont.text(.caption2, weight: .medium))
+                    .foregroundStyle(JieboColor.run)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(JieboColor.runBg)
+                    .clipShape(Capsule())
+            } else if unread {
+                Circle().fill(JieboColor.pine).frame(width: 6, height: 6)
+            }
+        }
+        .foregroundStyle(JieboColor.ink)
+        .padding(.horizontal, 12)
+        .frame(minHeight: 44)
+        .background(selected ? JieboColor.pine.opacity(0.1) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(selected ? (palette == .sticker ? JieboColor.line : JieboColor.pine.opacity(0.42)) : Color.clear, lineWidth: JieboStroke.outline)
+        )
+        .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .hoverEffect(.highlight)
+        .padding(.horizontal, 8)
+        .contentShape(Rectangle())
     }
 }
