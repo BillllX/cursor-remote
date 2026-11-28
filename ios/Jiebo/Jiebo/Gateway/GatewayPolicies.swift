@@ -124,6 +124,8 @@ enum MobileDataMode: String, CaseIterable, Sendable {
 
     static let defaultsKey = "mobile-data-mode"
     static let appGroup = "group.ai.jiebo.ipad"
+    /// 复用 App Group UserDefaults，避免每次媒体策略判定都重复建立跨进程 suite 连接。
+    private static let sharedGroupDefaults = UserDefaults(suiteName: appGroup)
 
     var title: String {
         switch self {
@@ -133,14 +135,14 @@ enum MobileDataMode: String, CaseIterable, Sendable {
         }
     }
 
-    static func load(defaults: UserDefaults? = UserDefaults(suiteName: appGroup)) -> MobileDataMode {
+    static func load(defaults: UserDefaults? = MobileDataMode.sharedGroupDefaults) -> MobileDataMode {
         guard let raw = (defaults ?? .standard).string(forKey: defaultsKey),
               let value = MobileDataMode(rawValue: raw)
         else { return .standard }
         return value
     }
 
-    func save(defaults: UserDefaults? = UserDefaults(suiteName: Self.appGroup)) {
+    func save(defaults: UserDefaults? = MobileDataMode.sharedGroupDefaults) {
         (defaults ?? .standard).set(rawValue, forKey: Self.defaultsKey)
     }
 }
@@ -470,6 +472,15 @@ final class AppTrafficMeter: @unchecked Sendable {
     private let processID: String
     private var transport: GatewayNetworkTransport = .unavailable
     private var bucket: AppTrafficBucket
+    private var cachedEpoch: Epoch
+    private var lastEpochCheckAt: CFAbsoluteTime = 0
+    private var lastEpochStamp: EpochFileStamp?
+    private static let epochCheckInterval: CFAbsoluteTime = 2.0
+
+    private struct EpochFileStamp: Equatable {
+        let inode: UInt64
+        let mtime: Date?
+    }
     private var pendingWrite: DispatchWorkItem?
     private var notifyScheduled = false
     private let directory: URL?
@@ -488,6 +499,9 @@ final class AppTrafficMeter: @unchecked Sendable {
         self.directory = directory
         self.processID = processID
         let epoch = Self.loadOrCreateEpoch(directory: directory)
+        self.cachedEpoch = epoch
+        self.lastEpochCheckAt = CFAbsoluteTimeGetCurrent()
+        self.lastEpochStamp = Self.epochFileStamp(directory: directory)
         if let directory,
            let data = try? Data(contentsOf: Self.bucketURL(directory: directory, owner: processID, epoch: epoch.id)),
            let saved = try? JSONDecoder().decode(AppTrafficBucket.self, from: data),
@@ -526,9 +540,9 @@ final class AppTrafficMeter: @unchecked Sendable {
         let safeCategory = category.isEmpty ? "其他" : String(category.prefix(80))
         var staleBucket: AppTrafficBucket?
         lock.lock()
-        // epoch 读取与本进程桶切换放在同一临界区；否则 reset 发布新 epoch 后，
-        // 一个较早读到旧值、较晚拿到锁的 record 可能把桶切回旧 epoch。
-        let persistedEpoch = Self.loadOrCreateEpoch(directory: directory)
+        // epoch 校验与本进程桶切换保持在同一临界区；常规高频收发按 5s 节流 + mtime 比对，
+        // 避免流式每帧触发跨进程 NSFileCoordinator 写锁与重复读盘解码。
+        let persistedEpoch = refreshEpochIfNeededLocked()
         if AppTrafficEpochPolicy.needsSwitch(current: bucket.epoch, persisted: persistedEpoch.id) {
             staleBucket = bucket
             bucket = AppTrafficBucket(
@@ -582,12 +596,48 @@ final class AppTrafficMeter: @unchecked Sendable {
         lock.lock()
         // 与 record 的「读 epoch + 切桶」共用本进程锁；跨进程部分再交给文件协调器。
         Self.replaceEpoch(epoch, directory: directory)
+        cachedEpoch = epoch
+        lastEpochCheckAt = CFAbsoluteTimeGetCurrent()
+        lastEpochStamp = Self.epochFileStamp(directory: directory)
         pendingWrite?.cancel()
         pendingWrite = nil
         bucket = AppTrafficBucket(epoch: epoch.id, owner: processID, updatedAt: Date(), counts: [:])
         lock.unlock()
         flush()
         NotificationCenter.default.post(name: Self.changedNotification, object: nil)
+    }
+
+    /// 必须在 lock 内调用：2 秒内直接返回内存缓存；满 2 秒核对 inode + mtime，
+    /// atomicWrite 替换文件必然更换 inode，彻底规避同秒时间戳精度碰撞且免去高频 NSFileCoordinator 写锁。
+    private func refreshEpochIfNeededLocked() -> Epoch {
+        let now = CFAbsoluteTimeGetCurrent()
+        guard now - lastEpochCheckAt >= Self.epochCheckInterval else { return cachedEpoch }
+        lastEpochCheckAt = now
+        guard let directory else { return cachedEpoch }
+        let stamp = Self.epochFileStamp(directory: directory)
+        if let stamp, stamp == lastEpochStamp {
+            return cachedEpoch
+        }
+        let epochURL = directory.appendingPathComponent("epoch.json")
+        if let data = try? Data(contentsOf: epochURL),
+           let decoded = try? JSONDecoder().decode(Epoch.self, from: data) {
+            cachedEpoch = decoded
+            lastEpochStamp = stamp ?? Self.epochFileStamp(directory: directory)
+            return decoded
+        }
+        let created = Self.loadOrCreateEpoch(directory: directory)
+        cachedEpoch = created
+        lastEpochStamp = Self.epochFileStamp(directory: directory)
+        return created
+    }
+
+    private static func epochFileStamp(directory: URL?) -> EpochFileStamp? {
+        guard let directory else { return nil }
+        let path = directory.appendingPathComponent("epoch.json").path
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let fileNumber = (attrs[.systemFileNumber] as? NSNumber)?.uint64Value
+        else { return nil }
+        return EpochFileStamp(inode: fileNumber, mtime: attrs[.modificationDate] as? Date)
     }
 
     /// 立即把当前计数落盘；调用方只能触发写入，无法取得或修改桶内容。
@@ -724,41 +774,165 @@ final class AppTrafficMeter: @unchecked Sendable {
     #endif
 }
 
-/// 每个 async 调用持有独立 delegate/session，直到 task 完成后才恢复 continuation。
-/// transport 固化为任务创建时的 NWPath；URLSessionTaskMetrics 没有稳定公开的逐接口字节拆分，
-/// 因此切网中的单个 task 只能归到开始时网络，不能伪装成逐包精确。
-private final class AppTrafficTaskDelegate: NSObject, URLSessionDataDelegate, URLSessionDownloadDelegate, @unchecked Sendable {
+/// 共享单实例 URLSession + 串行 delegateQueue：复用底层 HTTP/2 多路复用与 TLS 连接池，
+/// 按 taskIdentifier 路由每个请求的缓冲、指标、进度与完成回调，同时支持 Swift Task 取消穿透到底层 task。
+private final class AppTrafficHTTPSession: NSObject, URLSessionDataDelegate, URLSessionDownloadDelegate, @unchecked Sendable {
     typealias DataResult = Result<(Data, URLResponse), Error>
     typealias DownloadResult = Result<(URL, URLResponse), Error>
 
-    private let category: String
-    private let transport: GatewayNetworkTransport
-    private let progressDelegate: URLSessionTaskDelegate?
-    private var data = Data()
-    private var downloadedFile: URL?
-    private var fileError: Error?
-    private var metrics: URLSessionTaskMetrics?
-    private var dataCompletion: ((DataResult) -> Void)?
-    private var downloadCompletion: ((DownloadResult) -> Void)?
-    private var completed = false
-    var session: URLSession?
+    static let shared = AppTrafficHTTPSession()
 
-    init(
+    private final class TaskEntry {
+        let category: String
+        let transport: GatewayNetworkTransport
+        let progressDelegate: URLSessionTaskDelegate?
+        var data = Data()
+        var downloadedFile: URL?
+        var fileError: Error?
+        var metrics: URLSessionTaskMetrics?
+        var dataCompletion: ((DataResult) -> Void)?
+        var downloadCompletion: ((DownloadResult) -> Void)?
+
+        init(
+            category: String,
+            transport: GatewayNetworkTransport,
+            progressDelegate: URLSessionTaskDelegate? = nil,
+            dataCompletion: ((DataResult) -> Void)? = nil,
+            downloadCompletion: ((DownloadResult) -> Void)? = nil
+        ) {
+            self.category = category
+            self.transport = transport
+            self.progressDelegate = progressDelegate
+            self.dataCompletion = dataCompletion
+            self.downloadCompletion = downloadCompletion
+        }
+    }
+
+    private final class CancelBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var task: URLSessionTask?
+        private var cancelled = false
+
+        func attach(_ task: URLSessionTask) {
+            lock.lock()
+            let shouldCancel = cancelled
+            self.task = task
+            lock.unlock()
+            if shouldCancel { task.cancel() }
+        }
+
+        func cancel() {
+            lock.lock()
+            cancelled = true
+            let current = task
+            lock.unlock()
+            current?.cancel()
+        }
+    }
+
+    private let lock = NSLock()
+    private var entries: [Int: TaskEntry] = [:]
+    private let queue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "ai.jiebo.traffic-http"
+        q.maxConcurrentOperationCount = 1
+        return q
+    }()
+    /// 在 init 内一次性初始化并由 static let shared 安全发布，避免多线程首次访问 lazy var 发生数据竞争。
+    private var session: URLSession!
+
+    private override init() {
+        super.init()
+        self.session = URLSession(
+            configuration: .default,
+            delegate: self,
+            delegateQueue: queue
+        )
+    }
+
+    func data(for request: URLRequest, category: String) async throws -> (Data, URLResponse) {
+        let cancelBox = CancelBox()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let task = session.dataTask(with: request)
+                let entry = TaskEntry(
+                    category: category,
+                    transport: AppTrafficMeter.shared.currentTransport(),
+                    dataCompletion: { continuation.resume(with: $0) }
+                )
+                lock.lock()
+                entries[task.taskIdentifier] = entry
+                lock.unlock()
+                cancelBox.attach(task)
+                task.resume()
+            }
+        } onCancel: {
+            cancelBox.cancel()
+        }
+    }
+
+    func upload(
+        for request: URLRequest,
+        fromFile file: URL,
         category: String,
-        transport: GatewayNetworkTransport,
-        progressDelegate: URLSessionTaskDelegate? = nil,
-        dataCompletion: ((DataResult) -> Void)? = nil,
-        downloadCompletion: ((DownloadResult) -> Void)? = nil
-    ) {
-        self.category = category
-        self.transport = transport
-        self.progressDelegate = progressDelegate
-        self.dataCompletion = dataCompletion
-        self.downloadCompletion = downloadCompletion
+        delegate progressDelegate: URLSessionTaskDelegate?
+    ) async throws -> (Data, URLResponse) {
+        let cancelBox = CancelBox()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let task = session.uploadTask(with: request, fromFile: file)
+                let entry = TaskEntry(
+                    category: category,
+                    transport: AppTrafficMeter.shared.currentTransport(),
+                    progressDelegate: progressDelegate,
+                    dataCompletion: { continuation.resume(with: $0) }
+                )
+                lock.lock()
+                entries[task.taskIdentifier] = entry
+                lock.unlock()
+                cancelBox.attach(task)
+                task.resume()
+            }
+        } onCancel: {
+            cancelBox.cancel()
+        }
+    }
+
+    func download(from url: URL, category: String) async throws -> (URL, URLResponse) {
+        let cancelBox = CancelBox()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let task = session.downloadTask(with: URLRequest(url: url))
+                let entry = TaskEntry(
+                    category: category,
+                    transport: AppTrafficMeter.shared.currentTransport(),
+                    downloadCompletion: { continuation.resume(with: $0) }
+                )
+                lock.lock()
+                entries[task.taskIdentifier] = entry
+                lock.unlock()
+                cancelBox.attach(task)
+                task.resume()
+            }
+        } onCancel: {
+            cancelBox.cancel()
+        }
+    }
+
+    private func entry(for task: URLSessionTask) -> TaskEntry? {
+        lock.lock()
+        defer { lock.unlock() }
+        return entries[task.taskIdentifier]
+    }
+
+    private func takeEntry(for task: URLSessionTask) -> TaskEntry? {
+        lock.lock()
+        defer { lock.unlock() }
+        return entries.removeValue(forKey: task.taskIdentifier)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        self.data.append(data)
+        entry(for: dataTask)?.data.append(data)
     }
 
     func urlSession(
@@ -766,13 +940,14 @@ private final class AppTrafficTaskDelegate: NSObject, URLSessionDataDelegate, UR
         downloadTask: URLSessionDownloadTask,
         didFinishDownloadingTo location: URL
     ) {
+        guard let entry = entry(for: downloadTask) else { return }
         let target = FileManager.default.temporaryDirectory
             .appendingPathComponent("jiebo-traffic-\(UUID().uuidString)")
         do {
             try FileManager.default.moveItem(at: location, to: target)
-            downloadedFile = target
+            entry.downloadedFile = target
         } catch {
-            fileError = error
+            entry.fileError = error
         }
     }
 
@@ -783,7 +958,7 @@ private final class AppTrafficTaskDelegate: NSObject, URLSessionDataDelegate, UR
         totalBytesSent: Int64,
         totalBytesExpectedToSend: Int64
     ) {
-        progressDelegate?.urlSession?(
+        entry(for: task)?.progressDelegate?.urlSession?(
             session,
             task: task,
             didSendBodyData: bytesSent,
@@ -797,71 +972,63 @@ private final class AppTrafficTaskDelegate: NSObject, URLSessionDataDelegate, UR
         task: URLSessionTask,
         didFinishCollecting metrics: URLSessionTaskMetrics
     ) {
-        self.metrics = metrics
+        entry(for: task)?.metrics = metrics
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard !completed else { return }
-        completed = true
+        guard let entry = takeEntry(for: task) else { return }
 
         // metrics 明确全部来自本地缓存时不算网络流量；其余情况以 task 的实际成功/失败字节计数。
-        let transactions = metrics?.transactionMetrics ?? []
+        let transactions = entry.metrics?.transactionMetrics ?? []
         let localCacheOnly = !transactions.isEmpty
             && transactions.allSatisfy { $0.resourceFetchType == .localCache }
         if !localCacheOnly {
             AppTrafficMeter.shared.record(
                 direction: .outbound,
                 bytes: Int(clamping: task.countOfBytesSent),
-                category: category,
-                transport: transport
+                category: entry.category,
+                transport: entry.transport
             )
             AppTrafficMeter.shared.record(
                 direction: .inbound,
                 bytes: Int(clamping: task.countOfBytesReceived),
-                category: category,
-                transport: transport
+                category: entry.category,
+                transport: entry.transport
             )
         }
 
         let response = task.response
-        let finalError = error ?? fileError
+        let finalError = error ?? entry.fileError
         if let finalError {
-            dataCompletion?(.failure(finalError))
-            downloadCompletion?(.failure(finalError))
+            if let file = entry.downloadedFile {
+                try? FileManager.default.removeItem(at: file)
+            }
+            entry.dataCompletion?(.failure(finalError))
+            entry.downloadCompletion?(.failure(finalError))
         } else if let response {
-            dataCompletion?(.success((data, response)))
-            if let downloadedFile {
-                downloadCompletion?(.success((downloadedFile, response)))
-            } else if downloadCompletion != nil {
-                downloadCompletion?(.failure(URLError(.cannotCreateFile)))
+            entry.dataCompletion?(.success((entry.data, response)))
+            if let downloadedFile = entry.downloadedFile {
+                entry.downloadCompletion?(.success((downloadedFile, response)))
+            } else if entry.downloadCompletion != nil {
+                entry.downloadCompletion?(.failure(URLError(.cannotCreateFile)))
             }
         } else {
+            if let file = entry.downloadedFile {
+                try? FileManager.default.removeItem(at: file)
+            }
             let missing = URLError(.badServerResponse)
-            dataCompletion?(.failure(missing))
-            downloadCompletion?(.failure(missing))
+            entry.dataCompletion?(.failure(missing))
+            entry.downloadCompletion?(.failure(missing))
         }
-        dataCompletion = nil
-        downloadCompletion = nil
-        session.finishTasksAndInvalidate()
-        self.session = nil
+        entry.dataCompletion = nil
+        entry.downloadCompletion = nil
     }
 }
 
-/// URLSession payload 的统一计量入口；重试、重定向及失败均在 task 完成时只计一次实际字节。
+/// URLSession payload 的统一计量入口；复用连接池并在 task 完成时只计一次实际字节。
 enum AppTrafficHTTP {
     static func data(for request: URLRequest, category: String) async throws -> (Data, URLResponse) {
-        try await withCheckedThrowingContinuation { continuation in
-            let delegate = AppTrafficTaskDelegate(
-                category: category,
-                transport: AppTrafficMeter.shared.currentTransport(),
-                dataCompletion: { continuation.resume(with: $0) }
-            )
-            let queue = OperationQueue()
-            queue.maxConcurrentOperationCount = 1
-            let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: queue)
-            delegate.session = session
-            session.dataTask(with: request).resume()
-        }
+        try await AppTrafficHTTPSession.shared.data(for: request, category: category)
     }
 
     static func data(from url: URL, category: String) async throws -> (Data, URLResponse) {
@@ -874,34 +1041,16 @@ enum AppTrafficHTTP {
         category: String,
         delegate progressDelegate: URLSessionTaskDelegate? = nil
     ) async throws -> (Data, URLResponse) {
-        try await withCheckedThrowingContinuation { continuation in
-            let delegate = AppTrafficTaskDelegate(
-                category: category,
-                transport: AppTrafficMeter.shared.currentTransport(),
-                progressDelegate: progressDelegate,
-                dataCompletion: { continuation.resume(with: $0) }
-            )
-            let queue = OperationQueue()
-            queue.maxConcurrentOperationCount = 1
-            let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: queue)
-            delegate.session = session
-            session.uploadTask(with: request, fromFile: file).resume()
-        }
+        try await AppTrafficHTTPSession.shared.upload(
+            for: request,
+            fromFile: file,
+            category: category,
+            delegate: progressDelegate
+        )
     }
 
     static func download(from url: URL, category: String) async throws -> (URL, URLResponse) {
-        try await withCheckedThrowingContinuation { continuation in
-            let delegate = AppTrafficTaskDelegate(
-                category: category,
-                transport: AppTrafficMeter.shared.currentTransport(),
-                downloadCompletion: { continuation.resume(with: $0) }
-            )
-            let queue = OperationQueue()
-            queue.maxConcurrentOperationCount = 1
-            let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: queue)
-            delegate.session = session
-            session.downloadTask(with: URLRequest(url: url)).resume()
-        }
+        try await AppTrafficHTTPSession.shared.download(from: url, category: category)
     }
 }
 #else

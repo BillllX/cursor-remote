@@ -121,9 +121,13 @@ enum ImagePrep {
         let original = { PendingImage(data: data, mimeType: mime, base64: data.base64EncodedString()) }
         // GIF 可能是动图，转 jpeg 只剩第一帧
         if mime == "image/gif", data.count <= perImageLimit { return original() }
+        // 仅构造一次 CGImageSource 复用多档降采样，避免超限重试时重复解析原图头
+        let source = CGImageSourceCreateWithData(data as CFData, nil)
         var edge = profile.maxPixel
         var quality = CGFloat(profile.jpegQuality)
-        while edge >= 512, let out = MediaShrink.jpeg(from: data, maxEdge: edge, quality: quality, keepAlpha: false) {
+        while edge >= 512,
+              let source,
+              let out = MediaShrink.jpeg(from: source, maxEdge: edge, quality: quality, keepAlpha: false) {
             if out.count <= perImageLimit {
                 if preserveExistingQuality, passthrough, data.count <= out.count { return original() }
                 return PendingImage(data: out, mimeType: "image/jpeg", base64: out.base64EncodedString())
@@ -212,7 +216,7 @@ enum MediaShrink {
     }
 
     /// ImageIO 直接按目标尺寸解码（不先解全尺寸），顺带按 EXIF 摆正；重新编码不带原图元数据（含 GPS）
-    private static func jpeg(from source: CGImageSource, maxEdge: Int, quality: CGFloat, keepAlpha: Bool) -> Data? {
+    static func jpeg(from source: CGImageSource, maxEdge: Int, quality: CGFloat, keepAlpha: Bool) -> Data? {
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -237,18 +241,27 @@ enum MediaShrink {
     private static func hasTransparentPixels(_ image: CGImage) -> Bool {
         let width = image.width
         let height = image.height
-        var pixels = [UInt8](repeating: 255, count: width * height * 4)
+        let byteCount = width * height * 4
+        guard byteCount > 0 else { return true }
+        // 零初始化已满足全透明底，无需再调用 context.clear 整块覆写一遍数 MB 缓冲
+        var pixels = [UInt8](repeating: 0, count: byteCount)
         let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
             guard let context = CGContext(
                 data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
                 space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
             ) else { return false }
-            context.clear(CGRect(x: 0, y: 0, width: width, height: height))
             context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
             return true
         }
         guard drawn else { return true }
-        return stride(from: 3, to: pixels.count, by: 4).contains { pixels[$0] < 255 }
+        return pixels.withUnsafeBufferPointer { buffer in
+            var index = 3
+            while index < buffer.count {
+                if buffer[index] < 255 { return true }
+                index += 4
+            }
+            return false
+        }
     }
 
     private static func flattenOnWhite(_ image: CGImage) -> CGImage? {
