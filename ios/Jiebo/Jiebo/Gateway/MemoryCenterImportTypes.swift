@@ -40,6 +40,7 @@ struct MemoryCenterImportChangeRow: Sendable, Hashable, Identifiable {
     static func rows(from value: JSONValue?) -> [MemoryCenterImportChangeRow]? {
         guard let list = value?.object?["changes"]?.array else { return [] }
         var out: [MemoryCenterImportChangeRow] = []
+        out.reserveCapacity(list.count)
         for item in list {
             guard let o = item.object,
                   let changeId = o["changeId"]?.string,
@@ -47,7 +48,6 @@ struct MemoryCenterImportChangeRow: Sendable, Hashable, Identifiable {
                   let action = o["action"]?.string,
                   let allowedArr = o["allowedResolutions"]?.array
             else { return nil }
-            let allowed = allowedArr.compactMap { $0.string }
             out.append(
                 MemoryCenterImportChangeRow(
                     changeId: changeId,
@@ -55,7 +55,7 @@ struct MemoryCenterImportChangeRow: Sendable, Hashable, Identifiable {
                     action: action,
                     scope: o["scope"]?.string,
                     itemId: o["id"]?.string,
-                    allowsDuplicate: allowed.contains("duplicate")
+                    allowsDuplicate: allowedArr.contains { $0.string == "duplicate" }
                 )
             )
         }
@@ -80,10 +80,12 @@ struct MemoryCenterImportPreviewData: Sendable, Hashable {
               o["changes"]?.array != nil,
               let warningsArr = o["warnings"]?.array
         else { return nil }
+        var warnings: [String] = []
+        warnings.reserveCapacity(warningsArr.count)
         for w in warningsArr {
-            guard let wo = w.object, wo["code"]?.string != nil, wo["message"]?.string != nil else { return nil }
+            guard let wo = w.object, wo["code"]?.string != nil, let msg = wo["message"]?.string else { return nil }
+            warnings.append(msg)
         }
-        let warnings = warningsArr.compactMap { $0.object?["message"]?.string }
         guard let changes = MemoryCenterImportChangeRow.rows(from: value) else { return nil }
         return MemoryCenterImportPreviewData(
             planId: planId,

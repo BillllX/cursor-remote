@@ -46,11 +46,20 @@ extension ChatStore {
         memoryCenterCancelSearchDebounce()
         memoryCenterLastSearch = nil
         memoryCenterData = .initial
+        memoryCenterExtrasStorage = .initial
     }
 
     /// WebSocket 断开：取消在途请求状态，保留已解码缓存
     func memoryCenterOnDisconnect() {
         memoryCenterCancelSearchDebounce()
+        guard !memoryCenterData.pending.isEmpty
+            || memoryCenterData.loadingOverview
+            || memoryCenterData.loadingScope
+            || memoryCenterData.loadingSearch
+            || memoryCenterData.activeOverviewReqId != nil
+            || memoryCenterData.activeScopeReqId != nil
+            || memoryCenterData.activeSearchReqId != nil
+        else { return }
         memoryCenterData = MemoryCenterReducer.flushInFlight(memoryCenterData)
     }
 
@@ -198,6 +207,10 @@ extension ChatStore {
         data: JSONValue?
     ) -> Bool {
         guard op == "memory_center_get" || op == "memory_center_search" || op == "memory_center_mutate" else {
+            return false
+        }
+        // 先核验在途请求，已取消或迟到的 reqId 立即短路，避免主线程白白深层解码整份记忆 payload。
+        guard MemoryCenterReducer.findPending(memoryCenterData, reqId: reqId) != nil else {
             return false
         }
         var failureCode: String?

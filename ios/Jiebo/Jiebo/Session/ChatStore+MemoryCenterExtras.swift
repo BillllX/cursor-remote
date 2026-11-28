@@ -183,16 +183,20 @@ extension ChatStore {
         guard let reqId else { return false }
         switch op {
         case "memory_center_activity":
-            let parsed = ok ? MemoryCenterActivityData.from(data) : nil
-            if let next = MemoryCenterExtrasReducer.applyActivity(
-                memoryCenterExtrasStorage,
-                reqId: reqId,
-                generation: memoryCenterExtrasStorage.pendingActivityReqIds[reqId] ?? memoryCenterExtrasStorage.activityGeneration,
-                append: false,
-                cursor: nil,
-                data: parsed
-            ) {
-                memoryCenterExtrasStorage = next
+            let isCurrentActivityReq = reqId == memoryCenterExtrasStorage.activityLoadReqId
+                && memoryCenterExtrasStorage.pendingActivityReqIds[reqId] != nil
+            if isCurrentActivityReq {
+                let parsed = ok ? MemoryCenterActivityData.from(data) : nil
+                if let next = MemoryCenterExtrasReducer.applyActivity(
+                    memoryCenterExtrasStorage,
+                    reqId: reqId,
+                    generation: memoryCenterExtrasStorage.pendingActivityReqIds[reqId] ?? memoryCenterExtrasStorage.activityGeneration,
+                    append: false,
+                    cursor: nil,
+                    data: parsed
+                ) {
+                    memoryCenterExtrasStorage = next
+                }
             } else if memoryCenterExtrasStorage.pendingActivityReqIds[reqId] != nil {
                 var stale = memoryCenterExtrasStorage
                 stale.pendingActivityReqIds.removeValue(forKey: reqId)
@@ -221,14 +225,18 @@ extension ChatStore {
             }
             return true
         case "memory_center_suggestions_get":
-            let parsed = ok ? MemoryCenterSuggestionsData.from(data) : nil
-            if let next = MemoryCenterExtrasReducer.applySuggestions(
-                memoryCenterExtrasStorage,
-                reqId: reqId,
-                generation: memoryCenterExtrasStorage.pendingSuggestionsReqIds[reqId] ?? memoryCenterExtrasStorage.suggestionsGeneration,
-                data: parsed
-            ) {
-                memoryCenterExtrasStorage = next
+            let isCurrentSuggestionsReq = reqId == memoryCenterExtrasStorage.suggestionsLoadReqId
+                && memoryCenterExtrasStorage.pendingSuggestionsReqIds[reqId] != nil
+            if isCurrentSuggestionsReq {
+                let parsed = ok ? MemoryCenterSuggestionsData.from(data) : nil
+                if let next = MemoryCenterExtrasReducer.applySuggestions(
+                    memoryCenterExtrasStorage,
+                    reqId: reqId,
+                    generation: memoryCenterExtrasStorage.pendingSuggestionsReqIds[reqId] ?? memoryCenterExtrasStorage.suggestionsGeneration,
+                    data: parsed
+                ) {
+                    memoryCenterExtrasStorage = next
+                }
             } else if memoryCenterExtrasStorage.pendingSuggestionsReqIds[reqId] != nil {
                 var stale = memoryCenterExtrasStorage
                 stale.pendingSuggestionsReqIds.removeValue(forKey: reqId)
@@ -332,7 +340,9 @@ extension ChatStore {
             return true
         case "skill_proposal_decide", "skill_update_meta", "skill_edit_approved":
             var next = memoryCenterExtrasStorage
-            next.skillsDecideReqById = next.skillsDecideReqById.filter { $0.value != reqId }
+            if !next.skillsDecideReqById.isEmpty {
+                next.skillsDecideReqById = next.skillsDecideReqById.filter { $0.value != reqId }
+            }
             if ok, let parsed = SkillFactoryStatusData.from(data) {
                 next.skillRows = parsed.skills
                 next.skillProposals = parsed.proposals

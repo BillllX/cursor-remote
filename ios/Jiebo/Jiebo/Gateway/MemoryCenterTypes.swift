@@ -430,8 +430,7 @@ struct MemoryCenterSearchHit: Sendable, Hashable, Identifiable {
               let reasons = mcReqStringList(row["reasons"]),
               let score = mcReqDouble(row, "score")
         else { return nil }
-        let validReasons: Set<String> = ["text", "section", "ref", "scope", "state", "pinned", "related"]
-        guard reasons.allSatisfy({ validReasons.contains($0) }) else { return nil }
+        guard reasons.allSatisfy(Self.isValidReason) else { return nil }
         guard case let .some(idValue) = mcReqStringOrNull(row, "id"),
               case let .some(sectionValue) = mcOptNonNullString(row, "section"),
               case let .some(stateValue) = mcOptNullableString(row, "state"),
@@ -452,6 +451,15 @@ struct MemoryCenterSearchHit: Sendable, Hashable, Identifiable {
             reasons: reasons,
             score: score
         )
+    }
+
+    private static func isValidReason(_ reason: String) -> Bool {
+        switch reason {
+        case "text", "section", "ref", "scope", "state", "pinned", "related":
+            return true
+        default:
+            return false
+        }
     }
 }
 
@@ -537,8 +545,7 @@ struct MemoryCenterActivityEntry: Sendable, Hashable, Identifiable {
               let at = mcReqString(row, "at"),
               let canRestore = mcReqBool(row, "canRestore")
         else { return nil }
-        let actions: Set<String> = ["create", "update", "set_state", "set_pinned", "delete", "restore"]
-        guard actions.contains(action), actor == "user" || actor == "maintenance" else { return nil }
+        guard Self.isValidAction(action), actor == "user" || actor == "maintenance" else { return nil }
         let before: MemoryCenterActivitySnapshotSummary?
         if row["before"] == nil || row["before"] == .null {
             before = nil
@@ -572,6 +579,15 @@ struct MemoryCenterActivityEntry: Sendable, Hashable, Identifiable {
             restoreBlockedReason: restoreBlockedReason?.nilIfEmpty,
             degraded: degraded
         )
+    }
+
+    private static func isValidAction(_ action: String) -> Bool {
+        switch action {
+        case "create", "update", "set_state", "set_pinned", "delete", "restore":
+            return true
+        default:
+            return false
+        }
     }
 }
 
@@ -608,8 +624,12 @@ struct MemoryCenterSuggestionProposedAction: Sendable, Hashable {
 
     static func from(_ value: JSONValue?) -> MemoryCenterSuggestionProposedAction? {
         guard let row = value?.object, let kind = mcReqString(row, "kind") else { return nil }
-        let allowed: Set<String> = ["dismiss", "mark_handled", "set_state", "mark_done"]
-        guard allowed.contains(kind) else { return nil }
+        switch kind {
+        case "dismiss", "mark_handled", "set_state", "mark_done":
+            break
+        default:
+            return nil
+        }
         let state = mcOptNonNullString(row, "state")?.flatMap { $0 }
         let targetId = mcOptNonNullString(row, "targetId")?.flatMap { $0 }
         let keepId = mcOptNonNullString(row, "keepId")?.flatMap { $0 }
@@ -640,8 +660,13 @@ struct MemoryCenterSuggestionEntry: Sendable, Hashable, Identifiable {
               let revisions = mcReqStringList(row["revisions"]),
               let proposedAction = MemoryCenterSuggestionProposedAction.from(row["proposedAction"])
         else { return nil }
-        let kinds: Set<String> = ["missing_ref", "stale_hot", "duplicate", "budget_pressure", "stale_ongoing"]
-        guard kinds.contains(kind), risk == "low" || risk == "medium" else { return nil }
+        switch kind {
+        case "missing_ref", "stale_hot", "duplicate", "budget_pressure", "stale_ongoing":
+            break
+        default:
+            return nil
+        }
+        guard risk == "low" || risk == "medium" else { return nil }
         return MemoryCenterSuggestionEntry(
             id: id,
             scope: scope,
@@ -709,9 +734,17 @@ struct MemoryCenterActivityRow: Identifiable, Hashable, Sendable {
     var blocked: String?
 
     static func from(_ entry: MemoryCenterActivityEntry) -> MemoryCenterActivityRow {
-        let before = entry.before?.text
-        let after = entry.after?.text
-        let summary = [before, after].compactMap { $0 }.joined(separator: " → ")
+        let summary: String
+        switch (entry.before?.text, entry.after?.text) {
+        case let (before?, after?):
+            summary = "\(before) → \(after)"
+        case let (before?, nil):
+            summary = before
+        case let (nil, after?):
+            summary = after
+        case (nil, nil):
+            summary = ""
+        }
         return MemoryCenterActivityRow(
             auditId: entry.auditId,
             scope: entry.scope,
@@ -977,6 +1010,7 @@ private func mcReqStringList(_ value: JSONValue?) -> [String]? {
     guard let value else { return nil }
     guard let array = value.array else { return nil }
     var out: [String] = []
+    out.reserveCapacity(array.count)
     for element in array {
         guard let text = element.string else { return nil }
         out.append(text)
@@ -988,6 +1022,7 @@ private func mcDecodeArray<T>(_ value: JSONValue?, _ decode: (JSONValue) -> T?) 
     guard let value else { return nil }
     guard let array = value.array else { return nil }
     var out: [T] = []
+    out.reserveCapacity(array.count)
     for element in array {
         guard let item = decode(element) else { return nil }
         out.append(item)
