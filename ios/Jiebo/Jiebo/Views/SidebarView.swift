@@ -1,8 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// iPad 工作台侧栏只放工作区：当前工作区（切换、工具、这个工作区的对话）→ 底部设置。
-/// 小驳是独立的域，不从工作台进入。多出来的只有收起按钮；点对话不收起侧栏。
+/// iPad 工作台侧栏展示当前工作区、项目对话和空间切换入口。
 struct SidebarView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.sceneSessionState) private var sceneSession
@@ -51,6 +50,7 @@ struct SidebarView: View {
             }
 
             footer
+            WorkbenchReturnToAssistantButton()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(JieboColor.sidebar.ignoresSafeArea())
@@ -370,6 +370,34 @@ struct SidebarView: View {
         guard let id = store.preferredWorkspaceChatId() else { return }
         sceneSession.workbenchChatId = id
         store.activateWorkspaceChat(id)
+    }
+}
+
+/// 常宽 iPad 侧栏、窄窗和 iPhone 抽屉共用返回入口。
+struct WorkbenchReturnToAssistantButton: View {
+    @Environment(\.switchPhoneSpace) private var switchPhoneSpace
+    @Environment(\.openPadDomain) private var openPadDomain
+    var onReturn: () -> Void = {}
+
+    var body: some View {
+        if switchPhoneSpace != nil || openPadDomain != nil {
+            Button {
+                onReturn()
+                if let switchPhoneSpace {
+                    switchPhoneSpace(.assistant)
+                } else {
+                    openPadDomain?(.assistant)
+                }
+            } label: {
+                Label("返回小驳", systemImage: NavigationIconId.assistant.symbol)
+                    .font(JieboFont.text(.subheadline, weight: .medium))
+                    .foregroundStyle(JieboColor.ink)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
     }
 }
 

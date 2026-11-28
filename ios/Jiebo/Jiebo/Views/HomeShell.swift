@@ -103,17 +103,7 @@ struct HomeShell: View {
                 }
             }
             // 当前域才挂载：工作台、聊天和小驳各留一个 Composer。
-            // 底栏单独占一行，输入区和侧栏底部留在它上方。
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if router.domain == .workbench {
-                Button {
-                    router.openDomain(.assistant)
-                } label: {
-                    Label("返回小驳", systemImage: NavigationIconId.assistant.symbol)
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                }
-                .background(JieboColor.paper)
-            }
         }
         .environment(router)
         .environment(\.openDelegation, { padRouter.openDelegation($0) })

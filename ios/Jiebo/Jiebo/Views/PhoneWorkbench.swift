@@ -251,6 +251,7 @@ private struct PhoneDrawer: View {
             }
 
             footer
+            WorkbenchReturnToAssistantButton(onReturn: close)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(JieboColor.sidebar.ignoresSafeArea())
