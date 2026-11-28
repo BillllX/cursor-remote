@@ -87,6 +87,8 @@ final class ThumbnailStore {
 
     /// reqId → 已发出、等回包的请求
     @ObservationIgnored private var pending: [String: Pending] = [:]
+    /// reqId → 对应超时清理任务，回包或重置时立刻取消，避免大量 20s 定时任务堆积
+    @ObservationIgnored private var pendingTimeouts: [String: Task<Void, Never>] = [:]
     /// 还没发出的请求（从尾部取）
     @ObservationIgnored private var waiting: [Pending] = []
     /// 费用策略延后的可见卡片；卡片消失会从这里撤销，恢复时只处理这批已持有 job。
@@ -287,6 +289,16 @@ final class ThumbnailStore {
             forget(key)
         } else if delayed.removeValue(forKey: key) != nil {
             forget(key)
+        } else {
+            let reqIds = pending.compactMap { $0.value.key == key ? $0.key : nil }
+            if !reqIds.isEmpty {
+                for reqId in reqIds {
+                    pending[reqId] = nil
+                    pendingTimeouts.removeValue(forKey: reqId)?.cancel()
+                }
+                forget(key)
+                pump()
+            }
         }
     }
 
@@ -301,13 +313,17 @@ final class ThumbnailStore {
         )
         waiting.removeAll { keys.contains($0.key) }
         let reqIds = pending.compactMap { keys.contains($0.value.key) ? $0.key : nil }
-        for reqId in reqIds { pending[reqId] = nil }
+        for reqId in reqIds {
+            pending[reqId] = nil
+            pendingTimeouts.removeValue(forKey: reqId)?.cancel()
+        }
         for key in keys { forget(key) }
         pump()
     }
 
     /// ChatStore 收到 reqId 以 thumb: 开头的 file_content 时转交
     func handleReply(reqId: String, path: String, kind: String?, content: String?, url: String?, media: MediaTicket?, error: String?) {
+        pendingTimeouts.removeValue(forKey: reqId)?.cancel()
         guard let job = pending.removeValue(forKey: reqId) else { return }
         if error != nil {
             fail(job)
@@ -362,6 +378,8 @@ final class ThumbnailStore {
             entriesEpoch &+= 1
         }
         visibleKeyCounts.removeAll()
+        for task in pendingTimeouts.values { task.cancel() }
+        pendingTimeouts = [:]
         pending = [:]
         waiting = []
         delayed = [:]
@@ -465,9 +483,11 @@ final class ThumbnailStore {
         pending[reqId] = job
         store.sendThumbnailRead(path: job.path, chatId: job.chatId, sha: job.sha, reqId: reqId)
         let epochAtStart = epoch
-        Task {
+        pendingTimeouts[reqId] = Task { [weak self] in
             try? await Task.sleep(for: .seconds(20))
-            guard self.epoch == epochAtStart, self.pending.removeValue(forKey: reqId) != nil else { return }
+            guard let self, !Task.isCancelled, self.epoch == epochAtStart else { return }
+            self.pendingTimeouts[reqId] = nil
+            guard self.pending.removeValue(forKey: reqId) != nil else { return }
             self.fail(job)
             self.pump()
         }
@@ -542,18 +562,24 @@ final class ThumbnailStore {
             guard let url, let image = await ThumbRender.videoFrame(url) else { return .done(nil) }
             return .done(.image(image))
         case .markdown:
-            guard let text = await ThumbRender.text(content: content, url: url),
-                  let preview = ThumbRender.markdownPreview(text)
-            else { return .done(nil) }
+            guard let text = await ThumbRender.text(content: content, url: url) else { return .done(nil) }
+            let preview = await Task.detached(priority: .utility) {
+                ThumbRender.markdownPreview(text)
+            }.value
+            guard let preview else { return .done(nil) }
             return .done(.text(preview))
         case .html:
             guard let text = await ThumbRender.text(content: content, url: url) else { return .done(nil) }
             let chatId = job.chatId
-            // 与 HTMLFileView 相同：rewriteHtml（CSP + 资源票据）→ loadHTMLString，不直接 load 票据地址
-            let html = rewriteHtml(source: text, fromFile: job.path) { resolved in
-                mediaSrc(path: resolved, chatId: chatId, media: media)
-                    .flatMap { GatewayConfig.resolveHTTP($0)?.absoluteString } ?? ""
-            }
+            let path = job.path
+            // 后台一次性完成 rewriteHtml 与 lockDown，既不阻塞主线程也不占用离屏 WebView 的 3s 渲染预算
+            let html = await Task.detached(priority: .utility) {
+                let rewritten = rewriteHtml(source: text, fromFile: path) { resolved in
+                    mediaSrc(path: resolved, chatId: chatId, media: media)
+                        .flatMap { GatewayConfig.resolveHTTP($0)?.absoluteString } ?? ""
+                }
+                return ThumbRender.lockDown(rewritten)
+            }.value
             return .web(.html(html))
         case .svg:
             let data: Data?
@@ -566,7 +592,7 @@ final class ThumbnailStore {
             }
             guard let data, !data.isEmpty else { return .done(nil) }
             let html = await Task.detached(priority: .utility) {
-                ThumbRender.svgDocument(data: data)
+                ThumbRender.lockDown(ThumbRender.svgDocument(data: data))
             }.value
             return .web(.html(html))
         case .canvas:
@@ -698,7 +724,8 @@ private final class ThumbWebJob: NSObject, WKNavigationDelegate, WKScriptMessage
 
         switch source {
         case .html(let html):
-            webView.loadHTMLString(Self.lockDown(html), baseURL: nil)
+            // prepare 阶段已在后台完成 lockDown，这里直接交由 WebView 渲染并完整保留 3s 超时预算
+            webView.loadHTMLString(html, baseURL: nil)
             schedule(after: 3) { [weak self] in self?.finish(nil) }
         case .canvas:
             if let runtimeURL { webView.load(URLRequest(url: runtimeURL)) }
@@ -724,13 +751,25 @@ private final class ThumbWebJob: NSObject, WKNavigationDelegate, WKScriptMessage
             config.snapshotWidth = NSNumber(value: Self.size.width)
             config.afterScreenUpdates = true
             webView.takeSnapshot(with: config) { [weak self] image, _ in
-                self?.finish(image.map(Self.flattened))
+                guard let self else { return }
+                guard let image else {
+                    self.finish(nil)
+                    return
+                }
+                // 压平白底与 preparingForDisplay 放后台线程执行，避免截图完成瞬间卡主线程
+                self.timers.append(Task { @MainActor [weak self] in
+                    let processed = await Task.detached(priority: .utility) {
+                        Self.flattened(image)
+                    }.value
+                    guard let self, !Task.isCancelled else { return }
+                    self.finish(processed)
+                })
             }
         }
     }
 
     /// 截图压到白底上存成不透明图并规整到 640px 上限：与图片缩略图及磁盘回读分辨率对齐，避免 3x 下单张 5MB+ 占满内存
-    private static func flattened(_ image: UIImage) -> UIImage {
+    nonisolated private static func flattened(_ image: UIImage) -> UIImage {
         let pixelWidth = image.size.width * image.scale
         let pixelHeight = image.size.height * image.scale
         let maxEdge = max(pixelWidth, pixelHeight)
@@ -860,24 +899,7 @@ private final class ThumbWebJob: NSObject, WKNavigationDelegate, WKScriptMessage
         finish(nil)
     }
 
-    /// 在 rewriteHtml 的 CSP 之外再叠一条：多条 CSP 同时生效取交集。
-    /// 禁脚本、联网、子框架和插件；img/style/font 不限，静态渲染照常
-    private static let lockDownMeta = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'\">"
-
-    private static func lockDown(_ html: String) -> String {
-        var result = html
-        if let range = result.range(of: #"<head(?:\s[^>]*)?>"#, options: [.regularExpression, .caseInsensitive]) {
-            result.insert(contentsOf: lockDownMeta, at: range.upperBound)
-            return result
-        }
-        if let range = result.range(of: #"<html[^>]*>"#, options: [.regularExpression, .caseInsensitive]) {
-            result.insert(contentsOf: "<head>\(lockDownMeta)</head>", at: range.upperBound)
-            return result
-        }
-        return "<!doctype html><html><head><meta charset=\"utf-8\">\(lockDownMeta)</head><body>\(result)</body></html>"
-    }
-
-    fileprivate static var hostWindow: UIWindow? {
+    private static var hostWindow: UIWindow? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let windows = scenes.flatMap { $0.windows }
         return windows.first(where: { $0.isKeyWindow }) ?? windows.first
@@ -943,17 +965,23 @@ private enum ThumbRender {
         return prepareForDisplay(UIImage(cgImage: image))
     }
 
-    /// 前 6 行非空文本，去掉标题的 #、代码围栏和分隔线
-    static func markdownPreview(_ text: String) -> String? {
+    /// 前 6 行非空文本，去掉标题的 #、代码围栏和分隔线；单遍按行早停，避免大 Markdown 全量 split 分配
+    nonisolated static func markdownPreview(_ text: String) -> String? {
         var lines: [String] = []
-        for raw in text.split(whereSeparator: \.isNewline) {
-            var line = raw.trimmingCharacters(in: .whitespaces)
+        lines.reserveCapacity(6)
+        var index = text.startIndex
+        while index < text.endIndex && lines.count < 6 {
+            var lineEnd = index
+            while lineEnd < text.endIndex && !text[lineEnd].isNewline {
+                lineEnd = text.index(after: lineEnd)
+            }
+            var line = text[index ..< lineEnd].trimmingCharacters(in: .whitespaces)
+            index = lineEnd < text.endIndex ? text.index(after: lineEnd) : text.endIndex
             if line.hasPrefix("```") || line.hasPrefix("~~~") || line == "---" || line == "***" { continue }
             while line.hasPrefix("#") { line.removeFirst() }
             line = line.trimmingCharacters(in: .whitespaces)
             if line.isEmpty { continue }
             lines.append(String(line.prefix(160)))
-            if lines.count >= 6 { break }
         }
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
@@ -970,6 +998,28 @@ private enum ThumbRender {
         img{max-width:100%;max-height:100%;object-fit:contain}</style></head>
         <body><img src="data:image/svg+xml;base64,\(b64)"></body></html>
         """
+    }
+
+    /// 在 rewriteHtml 的 CSP 之外再叠一条：多条 CSP 同时生效取交集。
+    /// 禁脚本、联网、子框架和插件；img/style/font 不限，静态渲染照常
+    private static let lockDownMeta = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'\">"
+    private static let headTagRegex = try! NSRegularExpression(pattern: #"<head(?:\s[^>]*)?>"#, options: [.caseInsensitive])
+    private static let htmlTagRegex = try! NSRegularExpression(pattern: #"<html[^>]*>"#, options: [.caseInsensitive])
+
+    nonisolated static func lockDown(_ html: String) -> String {
+        var result = html
+        let nsRange = NSRange(result.startIndex ..< result.endIndex, in: result)
+        if let match = headTagRegex.firstMatch(in: result, options: [], range: nsRange),
+           let range = Range(match.range, in: result) {
+            result.insert(contentsOf: lockDownMeta, at: range.upperBound)
+            return result
+        }
+        if let match = htmlTagRegex.firstMatch(in: result, options: [], range: nsRange),
+           let range = Range(match.range, in: result) {
+            result.insert(contentsOf: "<head>\(lockDownMeta)</head>", at: range.upperBound)
+            return result
+        }
+        return "<!doctype html><html><head><meta charset=\"utf-8\">\(lockDownMeta)</head><body>\(result)</body></html>"
     }
 }
 
@@ -1121,8 +1171,18 @@ private enum ThumbDisk {
     }
 
     private static func safeName(_ raw: String) -> String {
-        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
-        let kept = String(raw.map { allowed.contains($0) ? $0 : "_" }.prefix(80))
+        var kept = String()
+        kept.reserveCapacity(min(raw.utf8.count, 80))
+        var count = 0
+        for ch in raw {
+            if count >= 80 { break }
+            if ch.isASCII && (ch.isLetter || ch.isNumber || ch == "-" || ch == "_") {
+                kept.append(ch)
+            } else {
+                kept.append("_")
+            }
+            count += 1
+        }
         if kept == raw { return raw }
         return kept + "-" + fnv1a(Data(raw.utf8))
     }

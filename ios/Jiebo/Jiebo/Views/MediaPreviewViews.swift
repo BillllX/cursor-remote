@@ -532,7 +532,12 @@ private struct MeasuredSVGImage: View {
             do {
                 let data = try await PreviewMediaCache.shared.data(for: url, category: "SVG 预览下载")
                 try Task.checkCancellation()
-                html = Self.imgDocument(data)
+                // 后台完成 SVG base64 编码，避免大 SVG 阻塞主线程
+                let rendered = await Task.detached(priority: .userInitiated) {
+                    Self.imgDocument(data)
+                }.value
+                try Task.checkCancellation()
+                html = rendered
             } catch is CancellationError {
                 return
             } catch {
@@ -542,7 +547,7 @@ private struct MeasuredSVGImage: View {
     }
 
     /// data URL 只来自本地已下载字节；SVG 脚本处于 img 语境，不会执行。
-    private static func imgDocument(_ data: Data) -> String {
+    nonisolated private static func imgDocument(_ data: Data) -> String {
         let src = "data:image/svg+xml;base64,\(data.base64EncodedString())"
         return """
         <!doctype html><html><head><meta charset="utf-8">
@@ -566,10 +571,11 @@ struct SandboxWebView: UIViewRepresentable {
     /// 不透明底防加载闪黑。颜色跟当前配色的明暗。
     var opaque: Bool = true
 
-    private static var pageColor: UIColor {
+    /// 按指定 palette/appearance 构造动态背景色：只在 makeUIView 或主题参数变化时调用，
+    /// 既避免 updateUIView 每次重绘重复创建闭包，又确保 App 内切换 palette 时 UIKit 必定刷新背景。
+    private static func makePageColor(palette: JieboPalette, appearance: JieboAppearance) -> UIColor {
         UIColor { traits in
-            let palette = JieboTheme.shared.palette
-            let dark: Bool = switch JieboTheme.shared.appearance {
+            let dark: Bool = switch appearance {
             case .light: false
             case .dark: true
             case .system: traits.userInterfaceStyle == .dark
@@ -589,26 +595,43 @@ struct SandboxWebView: UIViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.isOpaque = false
-        webView.backgroundColor = opaque ? Self.pageColor : .clear
-        webView.scrollView.backgroundColor = opaque ? Self.pageColor : .clear
-        webView.underPageBackgroundColor = opaque ? Self.pageColor : .clear
-        webView.overrideUserInterfaceStyle = Self.interfaceStyle
+        let palette = JieboTheme.shared.palette
+        let appearance = JieboTheme.shared.appearance
+        let bg: UIColor = opaque ? Self.makePageColor(palette: palette, appearance: appearance) : .clear
+        webView.backgroundColor = bg
+        webView.scrollView.backgroundColor = bg
+        webView.underPageBackgroundColor = bg
+        let style = Self.interfaceStyle
+        webView.overrideUserInterfaceStyle = style
+        context.coordinator.appliedPalette = palette
+        context.coordinator.appliedAppearance = appearance
+        context.coordinator.appliedOpaque = opaque
         context.coordinator.onFail = onFail
         load(into: webView, coordinator: context.coordinator)
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        webView.overrideUserInterfaceStyle = Self.interfaceStyle
-        if opaque {
-            webView.backgroundColor = Self.pageColor
-            webView.scrollView.backgroundColor = Self.pageColor
-            webView.underPageBackgroundColor = Self.pageColor
+        let palette = JieboTheme.shared.palette
+        let appearance = JieboTheme.shared.appearance
+        let style = Self.interfaceStyle
+        if webView.overrideUserInterfaceStyle != style {
+            webView.overrideUserInterfaceStyle = style
+        }
+        if context.coordinator.appliedPalette != palette
+            || context.coordinator.appliedAppearance != appearance
+            || context.coordinator.appliedOpaque != opaque {
+            let bg: UIColor = opaque ? Self.makePageColor(palette: palette, appearance: appearance) : .clear
+            webView.backgroundColor = bg
+            webView.scrollView.backgroundColor = bg
+            webView.underPageBackgroundColor = bg
+            context.coordinator.appliedPalette = palette
+            context.coordinator.appliedAppearance = appearance
+            context.coordinator.appliedOpaque = opaque
         }
         context.coordinator.onFail = onFail
-        // 内容随页签切换可能变化；Coordinator 记录已加载标识避免重复加载（html 用整串当 key，不赌 hash）
-        let key = html.map { "html:\($0)" } ?? ""
-        guard context.coordinator.loadedKey != key else { return }
+        // 内容随页签切换可能变化；直接比对已加载 HTML，避免每次 updateUIView 拼接大字符串
+        guard context.coordinator.loadedHTML != html else { return }
         load(into: webView, coordinator: context.coordinator)
     }
 
@@ -621,7 +644,7 @@ struct SandboxWebView: UIViewRepresentable {
     }
 
     private func load(into webView: WKWebView, coordinator: Coordinator) {
-        coordinator.loadedKey = html.map { "html:\($0)" } ?? ""
+        coordinator.loadedHTML = html
         coordinator.committed = false // 新文档：首屏导航策略重新放开一次
         if let html {
             webView.loadHTMLString(html, baseURL: nil)
@@ -629,7 +652,10 @@ struct SandboxWebView: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
-        var loadedKey = ""
+        var loadedHTML: String?
+        var appliedPalette: JieboPalette?
+        var appliedAppearance: JieboAppearance?
+        var appliedOpaque: Bool?
         var onFail: ((String) -> Void)?
         /// 首屏是否已 commit：commit 后 about:blank 也拒（JS 自白屏），失败上报只认首屏
         var committed = false
@@ -826,13 +852,15 @@ private struct PDFContent: View {
         }
     }
 
-    /// 复用统一计量缓存并交给 PDFDocument（memory-map，不整包进内存）；超 32MB 拒载。
-    private static func load(url: URL) async -> (PDFDocument, URL)? {
+    /// 复用统一计量缓存并在后台线程打开 PDFDocument（memory-map，不阻塞主线程）；超 32MB 拒载。
+    nonisolated private static func load(url: URL) async -> (PDFDocument, URL)? {
         do {
             let local = try await PreviewMediaCache.shared.file(for: url, category: "PDF 预览下载")
-            let size = (try? local.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            guard size > 0, size <= 32 * 1024 * 1024, let doc = PDFDocument(url: local) else { return nil }
-            return (doc, local)
+            return await Task.detached(priority: .userInitiated) {
+                let size = (try? local.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                guard size > 0, size <= 32 * 1024 * 1024, let doc = PDFDocument(url: local) else { return nil }
+                return (doc, local)
+            }.value
         } catch {
             return nil
         }
