@@ -18,28 +18,25 @@ struct ToolRunSummaryView: View, Equatable {
             && lhs.appearance == rhs.appearance
     }
 
-    private var runningToolId: String? {
-        tools.last(where: { $0.status == "running" })?.callId
-    }
-
-    private var summaryLine: String {
+    private func resolveSummary() -> (line: String, hasRunningTool: Bool) {
         let count = tools.count
         if turnRunning {
-            // 跑的时候说清楚正在做哪一步
+            // 跑的时候说清楚正在做哪一步；单次扫描同时提供文案与运行态标记
             if let index = tools.lastIndex(where: { $0.status == "running" }) {
-                return "第 \(index + 1) 步 · \(ToolCardView.chineseVerb(tools[index]))"
+                return ("第 \(index + 1) 步 · \(ToolCardView.chineseVerb(tools[index]))", true)
             }
-            return "已执行 \(count) 个步骤"
+            return ("已执行 \(count) 个步骤", false)
         }
-        let failed = tools.filter { $0.status == "error" }.count
+        let failed = tools.reduce(0) { $0 + ($1.status == "error" ? 1 : 0) }
         let head = failed > 0 ? "执行了 \(count) 个步骤，\(failed) 个失败" : "执行了 \(count) 个步骤"
         if let duration = formatDuration(durationMs).nilIfEmpty {
-            return "\(head) · \(duration)"
+            return ("\(head) · \(duration)", false)
         }
-        return head
+        return (head, false)
     }
 
     var body: some View {
+        let summary = resolveSummary()
         VStack(alignment: .leading, spacing: 6) {
             Button {
                 withAnimation(JieboMotion.snappy(reduceMotion)) {
@@ -51,11 +48,11 @@ struct ToolRunSummaryView: View, Equatable {
                         .font(JieboFont.text(.caption2, weight: .semibold))
                         .foregroundStyle(turnRunning ? JieboColor.run : JieboColor.ink2)
                         .rotationEffect(.degrees(detailOpen ? 90 : 0))
-                    if turnRunning, runningToolId != nil {
-                        ShimmerText(text: summaryLine, font: JieboFont.text(.footnote, weight: .medium))
+                    if turnRunning, summary.hasRunningTool {
+                        ShimmerText(text: summary.line, font: JieboFont.text(.footnote, weight: .medium))
                             .lineLimit(2)
                     } else {
-                        Text(summaryLine)
+                        Text(summary.line)
                             .font(JieboFont.text(.footnote, weight: .medium))
                             .foregroundStyle(JieboColor.ink2)
                             .lineLimit(2)
@@ -74,7 +71,7 @@ struct ToolRunSummaryView: View, Equatable {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(summaryLine)
+            .accessibilityLabel(summary.line)
             .accessibilityValue((turnRunning ? "进行中，" : "") + (detailOpen ? "已展开" : "已收起"))
             .accessibilityHint(detailOpen ? "轻点两下收起步骤" : "轻点两下展开步骤")
 

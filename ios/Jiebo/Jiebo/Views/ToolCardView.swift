@@ -33,6 +33,17 @@ struct ToolCardView: View, Equatable {
     }
 
     var body: some View {
+        let verb = Self.chineseVerb(tool)
+        let rawToolPath = ChatStore.toolPath(args: tool.args, result: tool.result)
+        let isImage = Self.isImageTool(tool)
+        let resolvedImagePath: String? = {
+            guard let trimmed = rawToolPath?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+                return nil
+            }
+            if isImage { return trimmed }
+            let kind = previewKind(of: trimmed)
+            return (kind == .image || kind == .svg) ? trimmed : nil
+        }()
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 // 展开/收起做成独立 Button：容器挂 onTapGesture 会和内部按钮抢手势（P5a 页签同款坑）
@@ -52,11 +63,11 @@ struct ToolCardView: View, Equatable {
                             .foregroundStyle(statusColor)
                             .frame(width: 16)
                             .alignmentGuide(.firstTextBaseline) { d in d[.bottom] * 0.78 }
-                        Text(Self.chineseVerb(tool))
+                        Text(verb)
                             .font(JieboFont.text(.footnote, weight: .medium))
                             .foregroundStyle(JieboColor.ink)
                             .layoutPriority(1)
-                        Text(titleLine)
+                        Text(titleLine(verb: verb))
                             .font(JieboFont.monoText(.caption))
                             .foregroundStyle(JieboColor.dim)
                             .lineLimit(1)
@@ -71,15 +82,14 @@ struct ToolCardView: View, Equatable {
                 .accessibilityValue(statusSpoken + (expanded ? "，已展开" : "，已收起"))
                 .accessibilityHint(expanded ? "轻点两下收起结果" : "轻点两下展开结果")
                 // P5b：edit/write 工具给文件入口——按类型路由（diff 页签/原文页签/Quick Look）
-                if Self.isImageTool(tool) || Self.imagePath(tool) != nil {
-                    let imagePath = Self.imagePath(tool)
+                if isImage || resolvedImagePath != nil {
                     Button {
-                        if let imagePath {
-                            store.openPreview(imagePath, chatId: chatId)
+                        if let resolvedImagePath {
+                            store.openPreview(resolvedImagePath, chatId: chatId)
                             sceneSession?.presentPreview(from: store)
                         }
                     } label: {
-                        Label(imagePath == nil ? "正在生成图片" : "预览图片", systemImage: "photo")
+                        Label(resolvedImagePath == nil ? "正在生成图片" : "预览图片", systemImage: "photo")
                             .font(JieboFont.text(.caption, weight: .medium))
                             .foregroundStyle(JieboColor.ink)
                             .padding(.horizontal, 10)
@@ -89,11 +99,11 @@ struct ToolCardView: View, Equatable {
                             .hitTarget()
                     }
                     .buttonStyle(.plain)
-                    .disabled(imagePath == nil)
-                    .accessibilityLabel(imagePath == nil ? "正在生成图片" : "预览 \(imagePath ?? "")")
+                    .disabled(resolvedImagePath == nil)
+                    .accessibilityLabel(resolvedImagePath == nil ? "正在生成图片" : "预览 \(resolvedImagePath ?? "")")
                 } else if tool.kind.isMutating,
-                   let path = ChatStore.toolPath(args: tool.args, result: tool.result),
-                   !path.isEmpty
+                          let path = rawToolPath,
+                          !path.isEmpty
                 {
                     Button {
                         store.openToolFile(path, chatId: chatId)
@@ -154,12 +164,12 @@ struct ToolCardView: View, Equatable {
         }
     }
 
-    private var titleLine: String {
+    private func titleLine(verb: String) -> String {
         if AssistantToolText.isSkillTool(tool.name) {
             return AssistantToolText.skillTitle(for: tool)
         }
         // 不认识的工具动词统一写「调用工具」，原始工具名挪到这里当说明
-        let summary = tool.summary.nilIfEmpty ?? (Self.isGeneric(tool) ? tool.name : "")
+        let summary = tool.summary.nilIfEmpty ?? (verb == "调用工具" ? tool.name : "")
         guard let model = tool.model?.nilIfEmpty else { return summary }
         let name = ModelCatalog.label(for: model)
         return summary.isEmpty ? name : "\(summary) · \(name)"
@@ -353,6 +363,10 @@ private struct ToolDetail: View {
     }
 
     private static func extractDiff(_ tool: ToolCall) -> DiffBits {
+        // 先拦截非编辑/写入工具，避免对 read/search/shell/other 工具白跑字典查找与正则匹配
+        guard tool.kind == .edit || tool.kind == .write else {
+            return DiffBits(before: "", after: "", unified: "")
+        }
         let before = tool.args?.string(in: "old_string", "oldString", "oldText").nilIfEmpty
             ?? tool.result?.string(in: "old_string", "oldString", "before", "original")
             ?? ""
@@ -362,31 +376,40 @@ private struct ToolDetail: View {
         var unified = tool.args?.string(in: "diff", "patch").nilIfEmpty
             ?? tool.result?.string(in: "diff", "patch")
             ?? ""
-        if unified.isEmpty, case .string(let raw) = tool.result, raw.range(of: #"^(diff |@@ |\+|-)"#, options: .regularExpression) != nil {
+        if unified.isEmpty, case .string(let raw) = tool.result,
+           raw.hasPrefix("diff ") || raw.hasPrefix("@@ ") || raw.hasPrefix("+") || raw.hasPrefix("-")
+        {
             unified = raw
-        }
-        if tool.kind != .edit && tool.kind != .write {
-            return DiffBits(before: "", after: "", unified: "")
         }
         return DiffBits(before: before, after: after, unified: unified)
     }
 
     private static func unifiedLines(_ text: String) -> [(kind: String, text: String)] {
-        text.split(separator: "\n", omittingEmptySubsequences: false).map { line in
+        // DiffLines 最多展示 200 行，只拆前 200 行避免数千行大 diff 全量堆分配
+        let rawLines = text.split(maxSplits: 200, omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" })
+        let limit = min(rawLines.count, 200)
+        var rows: [(kind: String, text: String)] = []
+        rows.reserveCapacity(limit)
+        for index in 0..<limit {
+            let line = rawLines[index]
             let row = String(line)
-            if row.hasPrefix("+"), !row.hasPrefix("+++") { return ("add", row) }
-            if row.hasPrefix("-"), !row.hasPrefix("---") { return ("del", row) }
-            return ("same", row)
+            if line.hasPrefix("+"), !line.hasPrefix("+++") { rows.append(("add", row)) }
+            else if line.hasPrefix("-"), !line.hasPrefix("---") { rows.append(("del", row)) }
+            else { rows.append(("same", row)) }
         }
+        return rows
     }
 
     private static func pairLines(before: String, after: String) -> [(kind: String, text: String)] {
-        let old = before.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        let new = after.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let cap = 80
+        // maxSplits: cap 最多切出 cap + 1 段，判断是否超长且避免对超大文件内容全量拆行
+        let old = before.split(maxSplits: cap, omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" })
+        let new = after.split(maxSplits: cap, omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" })
         var rows: [(kind: String, text: String)] = []
         let count = max(old.count, new.count)
-        let cap = min(count, 80)
-        for index in 0..<cap {
+        let limit = min(count, cap)
+        rows.reserveCapacity(limit + 1)
+        for index in 0..<limit {
             let a = index < old.count ? old[index] : nil
             let b = index < new.count ? new[index] : nil
             if a == b, let a { rows.append(("same", " \(a)")) }
@@ -436,8 +459,9 @@ struct AskedForm: Hashable {
     var questions: [AskedQuestion]
 
     static func parse(_ tool: ToolCall) -> AskedForm? {
-        let name = tool.name.lowercased()
-        guard name.contains("ask"), name.contains("question") else { return nil }
+        guard tool.name.range(of: "ask", options: .caseInsensitive) != nil,
+              tool.name.range(of: "question", options: .caseInsensitive) != nil
+        else { return nil }
         guard let rows = tool.args?["questions"]?.array, !rows.isEmpty else { return nil }
         var questions: [AskedQuestion] = []
         for (index, row) in rows.enumerated() {

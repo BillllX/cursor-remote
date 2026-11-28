@@ -59,7 +59,16 @@ enum TurnFileStyle {
     }
 
     static func filename(_ file: TurnFile) -> String {
-        (file.path as NSString).lastPathComponent
+        // 零 NSString 桥接提取末段文件名，末尾含 '/' 时先裁除保持与 NSString.lastPathComponent 一致
+        var slice = file.path[...]
+        while slice.count > 1, slice.last == "/" {
+            slice = slice.dropLast()
+        }
+        if let slash = slice.lastIndex(of: "/") {
+            let next = slice.index(after: slash)
+            if next < slice.endIndex { return String(slice[next...]) }
+        }
+        return String(slice)
     }
 
     static func caption(_ file: TurnFile) -> String {
@@ -278,6 +287,8 @@ private struct ThumbRequest: ViewModifier {
     private func noteVisibility(_ frame: CGRect) {
         guard frame.width > 1, frame.height > 1 else { return }
         let visible = frame.maxY > -80 && frame.minY < 1600
+        guard visible != onScreen else { return }
+        // 仅在真正跨越进/出视口边界时更新状态并触发请求，消除滚动期间 120Hz 每帧重复计算 cacheKey
         onScreen = visible
         guard visible else { return }
         request()
@@ -310,6 +321,7 @@ private struct ThumbRequest: ViewModifier {
                 request()
             }
             .onDisappear {
+                onScreen = false
                 for key in requestedKeys {
                     ThumbnailStore.shared.release(key: key)
                     ThumbnailStore.shared.cancel(key: key)
@@ -534,7 +546,7 @@ private struct TurnFileThumbnail: View {
                     .transition(.opacity)
             case .text(let text):
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(Array(text.split(separator: "\n").enumerated()), id: \.offset) { index, line in
+                    ForEach(Array(text.split(whereSeparator: { $0 == "\n" || $0 == "\r\n" }).enumerated()), id: \.offset) { index, line in
                         Text(String(line))
                             .font(index == 0 ? JieboFont.text(.footnote, weight: .semibold) : JieboFont.text(.caption))
                             .foregroundStyle(index == 0 ? JieboColor.ink : JieboColor.ink2)
