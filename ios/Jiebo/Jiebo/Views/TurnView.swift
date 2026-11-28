@@ -272,9 +272,10 @@ struct TurnView: View, Equatable {
                 if let asked = AskedForm.parse(tool) {
                     QuestionCardView(asked: asked, canAnswer: canAnswer)
                 } else if embedded, let text = AssistantToolText.friendly(tool) {
-                    let id = AssistantToolText.resultObject(tool.result)?["id"]?.string
-                    if AssistantToolText.baseName(tool.name) != "delegate" || !delegations.contains(where: { $0.id == id }) {
-                        AssistantActionRow(tool: tool, text: text)
+                    let isDelegate = AssistantToolText.baseName(tool.name) == "delegate"
+                    let delegateId = isDelegate ? AssistantToolText.resultObject(tool.result)?["id"]?.string?.nilIfEmpty : nil
+                    if !isDelegate || delegateId == nil || !delegations.contains(where: { $0.id == delegateId }) {
+                        AssistantActionRow(tool: tool, text: text, precomputedDelegationId: delegateId)
                     }
                 }
             }
@@ -335,7 +336,7 @@ struct TurnView: View, Equatable {
             if !captured.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(captured) { receipt in
-                        TodoReceiptRow(receipt: receipt)
+                        TodoReceiptRow(receipt: receipt).equatable()
                     }
                     if let calendarInvite, !turn.running {
                         CalendarInviteCard(calendar: calendarInvite, compact: true)
