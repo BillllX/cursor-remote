@@ -241,7 +241,7 @@ struct PadAssistantShell: View {
             router.dismissInspector()
         }
         .inspector(isPresented: $router.inspectorPresented) {
-            PadUnifiedInspector()
+            PadUnifiedInspector(projection: projection)
                 .inspectorColumnWidth(
                     min: router.layoutMode.inspectorWidth.minimum,
                     ideal: router.layoutMode.inspectorWidth.ideal,

@@ -120,6 +120,7 @@ private struct PadTodayTimeline: View {
     }
 
     var body: some View {
+        let events = self.events
         ScrollView(.horizontal, showsIndicators: false) {
             LazyHStack(spacing: 10) {
                 Button {
@@ -209,69 +210,88 @@ struct PadInboxExperience: View {
     let projection: PadAssistantProjection
     @State private var filter = Filter.all
 
-    private var draftCards: [DraftCard] {
-        let needle = router.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !needle.isEmpty else { return projection.draftCards }
-        return projection.draftCards.filter {
-            $0.preview.title.localizedCaseInsensitiveContains(needle)
-                || $0.preview.summary.localizedCaseInsensitiveContains(needle)
-        }
+    private struct PadInboxSnapshot {
+        let draftCards: [DraftCard]
+        let approvals: [AssistantApproval]
+        let inbox: [AssistantInboxItem]
+        let hasPending: Bool
+        let visibleContentIsEmpty: Bool
     }
 
-    private var approvals: [AssistantApproval] {
+    private func buildInboxSnapshot() -> PadInboxSnapshot {
         let needle = router.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (store.assistantState?.approvals ?? [])
+        let matchedDrafts: [DraftCard] = needle.isEmpty
+            ? projection.draftCards
+            : projection.draftCards.filter {
+                $0.preview.title.localizedCaseInsensitiveContains(needle)
+                    || $0.preview.summary.localizedCaseInsensitiveContains(needle)
+            }
+        let matchedApprovals = (store.assistantState?.approvals ?? [])
             .filter {
                 needle.isEmpty
                     || $0.tool.localizedCaseInsensitiveContains(needle)
                     || $0.summary.localizedCaseInsensitiveContains(needle)
             }
             .sorted { $0.createdAt > $1.createdAt }
-    }
-
-    private var inbox: [AssistantInboxItem] {
         let approvalIds = Set(projection.draftCards.flatMap { draft in
             draft.sources.filter { $0.kind == "approval" }.map(\.id)
         })
-        return (store.assistantState?.inbox ?? [])
+        var approvalByDelegation: [String: AssistantApproval] = [:]
+        var approvalByChat: [String: AssistantApproval] = [:]
+        for approval in matchedApprovals {
+            if let delegationId = approval.delegationId { approvalByDelegation[delegationId] = approval }
+            if let chatId = approval.chatId { approvalByChat[chatId] = approval }
+        }
+        let matchedInbox = (store.assistantState?.inbox ?? [])
             .filter { item in
+                if filter == .unread, item.read { return false }
                 if item.kind == "approval" {
                     if approvalIds.contains(item.id) { return false }
-                    if approvals.contains(where: { approval in
-                        (item.delegationId != nil && item.delegationId == approval.delegationId)
-                            || (item.chatId != nil && item.chatId == approval.chatId)
-                    }) {
-                        return false
-                    }
+                    if let delegationId = item.delegationId,
+                       let approval = approvalByDelegation[delegationId],
+                       item.delegationId == approval.delegationId
+                    { return false }
+                    if let chatId = item.chatId,
+                       let approval = approvalByChat[chatId],
+                       item.chatId == approval.chatId
+                    { return false }
                 }
-                let needle = router.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-                let matches = needle.isEmpty
+                return needle.isEmpty
                     || item.title.localizedCaseInsensitiveContains(needle)
                     || item.body.localizedCaseInsensitiveContains(needle)
-                return matches && (filter != .unread || !item.read)
             }
             .sorted { $0.createdAt > $1.createdAt }
-    }
-
-    private var hasPending: Bool {
-        projection.draftCardsAvailable ? !draftCards.isEmpty : !approvals.isEmpty
-    }
-
-    private var visibleContentIsEmpty: Bool {
+        let hasPending = projection.draftCardsAvailable ? !matchedDrafts.isEmpty : !matchedApprovals.isEmpty
+        let empty: Bool
         switch filter {
-        case .all: return !hasPending && inbox.isEmpty
-        case .pending: return !hasPending
-        case .unread: return inbox.isEmpty
+        case .all: empty = !hasPending && matchedInbox.isEmpty
+        case .pending: empty = !hasPending
+        case .unread: empty = matchedInbox.isEmpty
         }
+        return PadInboxSnapshot(
+            draftCards: matchedDrafts,
+            approvals: matchedApprovals,
+            inbox: matchedInbox,
+            hasPending: hasPending,
+            visibleContentIsEmpty: empty
+        )
+    }
+
+    /// 兼容静态契约：按当前筛选判断可视内容是否为空。
+    private var visibleContentIsEmpty: Bool {
+        buildInboxSnapshot().visibleContentIsEmpty
     }
 
     var body: some View {
+        // 单次快照复用过滤与排序结果，消除旧版 O(I × A) 嵌套重排与重复 searchQuery trim
+        let snapshot = buildInboxSnapshot()
+        let hasPending = snapshot.hasPending
         List {
             if filter != .unread {
                 if hasPending {
                     Section(projection.draftCardsAvailable ? "行动卡" : "待确认（兼容模式）") {
                         if projection.draftCardsAvailable {
-                            ForEach(draftCards) { draft in
+                            ForEach(snapshot.draftCards) { draft in
                                 PadInboxRow(
                                     title: draft.preview.title.nilIfEmpty ?? "待确认操作",
                                     detail: draft.preview.summary,
@@ -286,7 +306,7 @@ struct PadInboxExperience: View {
                                 }
                             }
                         } else {
-                            ForEach(approvals) { approval in
+                            ForEach(snapshot.approvals) { approval in
                                 PadInboxRow(
                                     title: "待批准：\(approval.tool)",
                                     detail: approval.summary,
@@ -301,9 +321,9 @@ struct PadInboxExperience: View {
             }
 
             if filter != .pending {
-                if !inbox.isEmpty {
+                if !snapshot.inbox.isEmpty {
                     Section("通知") {
-                        ForEach(inbox) { item in
+                        ForEach(snapshot.inbox) { item in
                             PadInboxRow(
                                 title: item.title.nilIfEmpty ?? "小驳消息",
                                 detail: item.body,
@@ -335,7 +355,7 @@ struct PadInboxExperience: View {
             .background(JieboColor.paper)
         }
         .overlay {
-            if visibleContentIsEmpty {
+            if snapshot.visibleContentIsEmpty {
                 ContentUnavailableView(
                     filter == .unread ? "没有未读消息" : "没有待处理事项",
                     systemImage: "tray",
@@ -447,22 +467,36 @@ struct PadTaskExperience: View {
 
     private let phases = ["needs_me", "in_progress", "planned", "completed"]
 
-    private var tasks: [PersonalTask] {
-        let rows = projection.personalTasks.filter { AssistantWorkColumn.matching($0.kind) == column }
-        let needle = router.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !needle.isEmpty else { return rows }
-        return rows.filter {
-            $0.title.localizedCaseInsensitiveContains(needle)
-                || ($0.detail?.localizedCaseInsensitiveContains(needle) == true)
-        }
+    private struct PadTaskSnapshot {
+        let isEmpty: Bool
+        let visiblePhases: [String]
+        let byPhase: [String: [PersonalTask]]
     }
 
-    private var visiblePhases: [String] {
+    private func buildTaskSnapshot() -> PadTaskSnapshot {
+        let needle = router.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        var tasks: [PersonalTask] = []
+        var byPhase: [String: [PersonalTask]] = [:]
+        for task in projection.personalTasks where AssistantWorkColumn.matching(task.kind) == column {
+            if !needle.isEmpty,
+               !task.title.localizedCaseInsensitiveContains(needle),
+               task.detail?.localizedCaseInsensitiveContains(needle) != true
+            {
+                continue
+            }
+            tasks.append(task)
+            byPhase[task.phase, default: []].append(task)
+        }
         let unknown = Set(tasks.map(\.phase)).subtracting(phases)
-        return phases + unknown.sorted()
+        return PadTaskSnapshot(
+            isEmpty: tasks.isEmpty,
+            visiblePhases: phases + unknown.sorted(),
+            byPhase: byPhase
+        )
     }
 
     var body: some View {
+        let snapshot = buildTaskSnapshot()
         VStack(spacing: 0) {
             List {
                 if !projection.personalTasksAvailable, !projection.personalTasks.isEmpty {
@@ -473,8 +507,8 @@ struct PadTaskExperience: View {
                     }
                     .listRowBackground(JieboColor.white)
                 }
-                ForEach(visiblePhases, id: \.self) { phase in
-                    let rows = tasks.filter { $0.phase == phase }
+                ForEach(snapshot.visiblePhases, id: \.self) { phase in
+                    let rows = snapshot.byPhase[phase] ?? []
                     if !rows.isEmpty {
                         Section(padTaskPhaseTitle(phase)) {
                             ForEach(rows) { task in
@@ -515,7 +549,7 @@ struct PadTaskExperience: View {
             .scrollContentBackground(.hidden)
             .background(JieboColor.paper)
             .overlay {
-                if tasks.isEmpty {
+                if snapshot.isEmpty {
                     ContentUnavailableView(
                         (!projection.personalTasksAvailable && projection.personalTasks.isEmpty) ? "\(column.title)暂时不可用" : "还没有\(column.title)",
                         systemImage: column.symbol,
@@ -562,34 +596,32 @@ struct PadArtifactExperience: View {
     @State private var grouping = Grouping.recent
     @State private var kind = Kind.all
 
-    private var artifacts: [Artifact] {
+    private func buildArtifactGroups() -> (isEmpty: Bool, groups: [(String, [Artifact])]) {
         let needle = router.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        return projection.artifacts
-            .filter { kind == .all || $0.kind == kind.rawValue }
+        let filtered = projection.artifacts
             .filter {
-                needle.isEmpty
-                    || $0.title.localizedCaseInsensitiveContains(needle)
-                    || ($0.path?.localizedCaseInsensitiveContains(needle) == true)
+                (kind == .all || $0.kind == kind.rawValue)
+                    && (needle.isEmpty
+                        || $0.title.localizedCaseInsensitiveContains(needle)
+                        || ($0.path?.localizedCaseInsensitiveContains(needle) == true))
             }
             .sorted { $0.createdAt > $1.createdAt }
-    }
-
-    private var groups: [(String, [Artifact])] {
-        let grouped: [String: [Artifact]]
         switch grouping {
         case .recent:
-            return [("最近", artifacts)]
+            return (filtered.isEmpty, [("最近", filtered)])
         case .kind:
-            grouped = Dictionary(grouping: artifacts) { padArtifactKindTitle($0.kind) }
+            let grouped = Dictionary(grouping: filtered) { padArtifactKindTitle($0.kind) }
+            return (filtered.isEmpty, grouped.keys.sorted().map { ($0, grouped[$0] ?? []) })
         case .source:
-            grouped = Dictionary(grouping: artifacts) { padArtifactSourceTitle($0) }
+            let grouped = Dictionary(grouping: filtered) { padArtifactSourceTitle($0) }
+            return (filtered.isEmpty, grouped.keys.sorted().map { ($0, grouped[$0] ?? []) })
         }
-        return grouped.keys.sorted().map { ($0, grouped[$0] ?? []) }
     }
 
     var body: some View {
+        let snapshot = buildArtifactGroups()
         List {
-            ForEach(Array(groups.enumerated()), id: \.offset) { _, group in
+            ForEach(Array(snapshot.groups.enumerated()), id: \.offset) { _, group in
                 Section(group.0) {
                     ForEach(group.1) { artifact in
                         Button {
@@ -645,7 +677,7 @@ struct PadArtifactExperience: View {
             .padding(.vertical, 6)
         }
         .overlay {
-            if artifacts.isEmpty {
+            if snapshot.isEmpty {
                 ContentUnavailableView(
                     projection.artifactsAvailable ? "没有符合条件的产物" : "产物中心不可用",
                     systemImage: "square.stack.3d.up",
@@ -687,6 +719,7 @@ struct PadUnifiedInspector: View {
     @Environment(PadRouter.self) private var router
     @Environment(\.sceneSessionState) private var sceneSession
     @Environment(\.horizontalSizeClass) private var sizeClass
+    let projection: PadAssistantProjection
 
     /// 预览模式开着，页签却还不在。不要写成正在打开。
     private var previewMissingTitle: String {
@@ -748,7 +781,7 @@ struct PadUnifiedInspector: View {
             case .detail:
                 NavigationStack {
                     ScrollView {
-                        PadInspectorDetail()
+                        PadInspectorDetail(projection: projection)
                             .padding(16)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -777,10 +810,7 @@ struct PadUnifiedInspector: View {
 private struct PadInspectorDetail: View {
     @Environment(ChatStore.self) private var store
     @Environment(PadRouter.self) private var router
-
-    private var projection: PadAssistantProjection {
-        PadAssistantProjection(state: store.assistantState)
-    }
+    let projection: PadAssistantProjection
 
     @ViewBuilder
     var body: some View {
