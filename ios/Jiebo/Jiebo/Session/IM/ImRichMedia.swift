@@ -59,22 +59,31 @@ enum ImLinkMetadata {
         var iconFile: String?
         if let provider = metadata.iconProvider,
            let image = await provider.imImage(),
-           let data = image.imIconPNG(),
-           data.count <= 512 * 1024,
            let dir = ImCache.outboxDir(tenant: tenant) {
-            let name = "icon-\(UUID().uuidString.lowercased()).png"
-            let target = dir.appendingPathComponent(name)
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            if (try? data.write(to: target, options: .atomic)) != nil { iconFile = name }
+            iconFile = await Task.detached(priority: .utility) { () -> String? in
+                guard let data = image.imIconPNG(), data.count <= 512 * 1024 else { return nil }
+                let name = "icon-\(UUID().uuidString.lowercased()).png"
+                let target = dir.appendingPathComponent(name)
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                return (try? data.write(to: target, options: .atomic)) != nil ? name : nil
+            }.value
         }
         return (metadata.title?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty, nil, iconFile)
     }
 
     static func recognized(_ text: String) -> URL? {
+        // 文本气泡每次渲染都会调用：99% 普通聊天消息不以 http(s):// 开头，零分配前置短路
+        guard text.utf8.count >= 8 else { return nil }
+        guard let first = text.first(where: { !$0.isWhitespace }), first == "h" || first == "H" else {
+            return nil
+        }
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.contains(where: \.isWhitespace),
+        guard !value.contains(where: \.isWhitespace) else { return nil }
+        let prefix = value.prefix(8)
+        guard prefix.lowercased().hasPrefix("http://") || prefix.lowercased().hasPrefix("https://"),
               let url = URL(string: value),
-              ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
               url.host != nil
         else { return nil }
         return url

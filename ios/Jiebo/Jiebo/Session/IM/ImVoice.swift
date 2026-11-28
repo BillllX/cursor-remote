@@ -21,9 +21,12 @@ final class ImVoiceRecorder {
     private var startedAt = Date()
     private var file: URL?
     private var leaseToken: AudioSessionLeaseToken?
+    private var starting = false
 
     func start() async -> String? {
-        guard !recording else { return nil }
+        guard !recording, !starting else { return nil }
+        starting = true
+        defer { starting = false }
         switch AudioSessionCoordinator.shared.acquire(for: .shortRecording) {
         case .granted(let token):
             leaseToken = token
@@ -42,21 +45,28 @@ final class ImVoiceRecorder {
             return "没有麦克风权限，到「设置 › 接驳」里打开"
         }
         do {
-            let session = AVAudioSession.sharedInstance()
-            // spokenAudio 是播放语音模式；录音使用 measurement，避免真机上出现类别/模式不兼容。
-            try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
-            try session.setActive(true)
+            // AVAudioSession 激活与录音器初始化放到后台，避免按住说话瞬间阻塞主线程 50~300ms
             let target = FileManager.default.temporaryDirectory.appendingPathComponent("im-voice-\(UUID().uuidString.lowercased()).m4a")
-            let settings: [String: Any] = [
-                AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: 24_000,
-                AVNumberOfChannelsKey: 1,
-                AVEncoderBitRateKey: 32_000,
-                AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
-            ]
-            let recorder = try AVAudioRecorder(url: target, settings: settings)
-            recorder.isMeteringEnabled = true
-            guard recorder.record(forDuration: 60) else { throw CocoaError(.fileWriteUnknown) }
+            let recorder = try await Task.detached(priority: .userInitiated) { () throws -> AVAudioRecorder in
+                let session = AVAudioSession.sharedInstance()
+                // spokenAudio 是播放语音模式；录音使用 measurement，避免真机上出现类别/模式不兼容。
+                try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
+                try session.setActive(true)
+                let settings: [String: Any] = [
+                    AVFormatIDKey: kAudioFormatMPEG4AAC,
+                    AVSampleRateKey: 24_000,
+                    AVNumberOfChannelsKey: 1,
+                    AVEncoderBitRateKey: 32_000,
+                    AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
+                ]
+                let recorder = try AVAudioRecorder(url: target, settings: settings)
+                recorder.isMeteringEnabled = true
+                guard recorder.record(forDuration: 60) else {
+                    try? FileManager.default.removeItem(at: target)
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                return recorder
+            }.value
             self.recorder = recorder
             file = target
             startedAt = Date()
@@ -108,7 +118,9 @@ final class ImVoiceRecorder {
         let waveform = Self.reduce(samples, count: 64)
         reset()
         if shouldKeep { return (file, Int(duration * 1000), waveform) }
-        try? FileManager.default.removeItem(at: file)
+        Task.detached(priority: .utility) {
+            try? FileManager.default.removeItem(at: file)
+        }
         return nil
     }
 
@@ -216,8 +228,7 @@ final class ImVoicePlayer: NSObject, AVAudioPlayerDelegate {
         if let proximityObserver { NotificationCenter.default.removeObserver(proximityObserver) }
         proximityObserver = nil
         UIDevice.current.isProximityMonitoringEnabled = false
-        try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
-        deactivateSession()
+        deactivateSession(resetOutputPort: true)
     }
 
     /// 等 stop() 排进去的停用做完，再去开麦克风。
@@ -225,8 +236,8 @@ final class ImVoicePlayer: NSObject, AVAudioPlayerDelegate {
         await sessionOps?.value
     }
 
-    fileprivate func deactivateSession() {
-        enqueueSession { await Self.releaseSession() }
+    fileprivate func deactivateSession(resetOutputPort: Bool = false) {
+        enqueueSession { await Self.releaseSession(resetOutputPort: resetOutputPort) }
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
@@ -285,27 +296,30 @@ final class ImVoicePlayer: NSObject, AVAudioPlayerDelegate {
     }
 
     private func configureRoute() async {
-        await enqueueSession { [weak self] in
-            self?.applyRoute()
+        let proximity = UIDevice.current.proximityState
+        await enqueueSession {
+            await Self.applyRoute(proximity: proximity)
         }.value
     }
 
-    private func applyRoute() {
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(
-                .playAndRecord, mode: .voiceChat,
-                options: [.defaultToSpeaker, .allowBluetoothHFP]
-            )
-            if UIDevice.current.proximityState {
-                try session.overrideOutputAudioPort(.none)
-            } else {
-                try session.overrideOutputAudioPort(.speaker)
+    private static func applyRoute(proximity: Bool) async {
+        await Task.detached(priority: .userInitiated) {
+            let session = AVAudioSession.sharedInstance()
+            do {
+                try session.setCategory(
+                    .playAndRecord, mode: .voiceChat,
+                    options: [.defaultToSpeaker, .allowBluetoothHFP]
+                )
+                if proximity {
+                    try session.overrideOutputAudioPort(.none)
+                } else {
+                    try session.overrideOutputAudioPort(.speaker)
+                }
+                try session.setActive(true)
+            } catch {
+                // 路由切换失败时系统当前输出仍可继续播放。
             }
-            try session.setActive(true)
-        } catch {
-            // 路由切换失败时系统当前输出仍可继续播放。
-        }
+        }.value
     }
 
     @discardableResult
@@ -319,8 +333,13 @@ final class ImVoicePlayer: NSObject, AVAudioPlayerDelegate {
         return task
     }
 
-    /// 同步 setActive(false) 会堵住主线程。iOS 27 走异步停用；更早的系统放到后台线程做。
-    private static func releaseSession() async {
+    /// 同步 setActive(false) / overrideOutputAudioPort 会堵住主线程，统一放后台并串行在 sessionOps 内。
+    private static func releaseSession(resetOutputPort: Bool) async {
+        if resetOutputPort {
+            await Task.detached(priority: .userInitiated) {
+                try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
+            }.value
+        }
         if #available(iOS 27.0, *) {
             await withCheckedContinuation { continuation in
                 AVAudioSession.sharedInstance().deactivate(options: .notifyOthersOnDeactivation) { _, _ in
@@ -375,7 +394,10 @@ final class ImVoicePlayer: NSObject, AVAudioPlayerDelegate {
     private func voiceFile(_ item: ImLocalMessage, store: ImStore) async -> URL? {
         if let upload = item.upload, let outbox = ImCache.outboxDir(tenant: store.tenant) {
             let local = outbox.appendingPathComponent(upload.file)
-            if FileManager.default.fileExists(atPath: local.path) { return local }
+            let exists = await Task.detached(priority: .userInitiated) {
+                FileManager.default.fileExists(atPath: local.path)
+            }.value
+            if exists { return local }
         }
         guard case .voice(let blob, _, _)? = item.body else { return nil }
         return await ImAttachmentCache.file(

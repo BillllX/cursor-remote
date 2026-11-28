@@ -121,7 +121,9 @@ final class ImImageCache {
         cache.totalCostLimit = 96 * 1024 * 1024
         return cache
     }()
-    private var inflight: [String: Task<UIImage?, Never>] = [:]
+    private var inflight: [String: (id: UInt64, task: Task<UIImage?, Never>)] = [:]
+    private var inflightSeed: UInt64 = 0
+    private var cacheEpoch: UInt64 = 0
 
     func cached(_ key: String, maxPixel: Int) -> UIImage? {
         memory.object(forKey: "\(key)@\(maxPixel)" as NSString)
@@ -145,14 +147,16 @@ final class ImImageCache {
         )
         if userInitiated {
             let cacheKey = "\(blob)@\(maxPixel)"
-            inflight.removeValue(forKey: cacheKey)?.cancel()
+            inflight.removeValue(forKey: cacheKey)?.task.cancel()
         }
         return await load(key: blob, maxPixel: maxPixel) {
+            guard !Task.isCancelled else { return nil }
             if FileManager.default.fileExists(atPath: file.path) {
                 ImCache.noteUse(file)
             } else {
                 guard allowsNetwork, let remote, await Self.download(remote, to: file) else { return nil }
             }
+            guard !Task.isCancelled else { return nil }
             return ImImageDecode.image(at: file, maxPixel: maxPixel)
         }
     }
@@ -187,20 +191,26 @@ final class ImImageCache {
     }
 
     func removeAll() {
+        cacheEpoch &+= 1
         memory.removeAllObjects()
-        for task in inflight.values { task.cancel() }
+        for entry in inflight.values { entry.task.cancel() }
         inflight = [:]
     }
 
     private func load(key: String, maxPixel: Int, work: @escaping @Sendable () async -> UIImage?) async -> UIImage? {
         let cacheKey = "\(key)@\(maxPixel)"
         if let hit = memory.object(forKey: cacheKey as NSString) { return hit }
-        if let running = inflight[cacheKey] { return await running.value }
+        if let running = inflight[cacheKey] { return await running.task.value }
+        inflightSeed &+= 1
+        let id = inflightSeed
+        let epoch = cacheEpoch
         let task = Task.detached(priority: .userInitiated, operation: work)
-        inflight[cacheKey] = task
+        inflight[cacheKey] = (id, task)
         let image = await task.value
-        inflight[cacheKey] = nil
-        if let image {
+        if inflight[cacheKey]?.id == id {
+            inflight[cacheKey] = nil
+        }
+        if let image, epoch == cacheEpoch {
             let cost = Int(image.size.width * image.scale * image.size.height * image.scale * 4)
             memory.setObject(image, forKey: cacheKey as NSString, cost: cost)
         }
@@ -453,7 +463,10 @@ enum ImPickTemp {
     }
 
     static func remove(_ files: [URL]) {
-        for file in files { try? FileManager.default.removeItem(at: file) }
+        guard !files.isEmpty else { return }
+        DispatchQueue.global(qos: .utility).async {
+            for file in files { try? FileManager.default.removeItem(at: file) }
+        }
     }
 
     /// 启动时清掉上次没走完流程（闪退、被杀）留下的临时文件
@@ -504,37 +517,60 @@ enum ImPhotoSaver {
 // MARK: 通用附件下载
 
 enum ImAttachmentCache {
-    /// 语音、文件和链接图标共用 media/<blob>；下载写临时文件后原子搬入。
+    @MainActor
+    private static var inflight: [String: (id: UInt64, allowsNetwork: Bool, task: Task<URL?, Never>)] = [:]
+    @MainActor
+    private static var inflightSeed: UInt64 = 0
+
+    /// 语音、文件和链接图标共用 media/<blob>；磁盘检查、下载与搬运全在后台执行并按路径去重。
     @MainActor
     static func file(blob: String, tenant: String, remote: URL?, userInitiated: Bool = false) async -> URL? {
         guard ImCache.isBlob(blob), let dir = ImCache.mediaDir(tenant: tenant) else { return nil }
         let target = dir.appendingPathComponent(blob)
-        if FileManager.default.fileExists(atPath: target.path) {
-            ImCache.noteUse(target)
-            return target
-        }
-        guard userInitiated || MobileMediaPolicy.allowsAutomaticDownload(
+        let key = target.path
+        let allowsNetwork = userInitiated || MobileMediaPolicy.allowsAutomaticDownload(
             mode: MobileDataRuntime.mode,
             cost: MobileDataRuntime.networkCost,
             kind: .attachment
-        ) else { return nil }
-        guard let remote else { return nil }
-        do {
-            let (temp, response) = try await AppTrafficHTTP.download(from: remote, category: "IM 附件下载")
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                try? FileManager.default.removeItem(at: temp)
-                return nil
+        )
+        if let running = inflight[key] {
+            if !allowsNetwork || running.allowsNetwork {
+                return await running.task.value
             }
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            if FileManager.default.fileExists(atPath: target.path) {
-                try? FileManager.default.removeItem(at: temp)
-            } else {
-                try FileManager.default.moveItem(at: temp, to: target)
-                ImCache.noteDownloaded(target)
-            }
-            return target
-        } catch {
-            return FileManager.default.fileExists(atPath: target.path) ? target : nil
+            inflight.removeValue(forKey: key)?.task.cancel()
         }
+        inflightSeed &+= 1
+        let id = inflightSeed
+        let task = Task.detached(priority: .userInitiated) { () -> URL? in
+            guard !Task.isCancelled else { return nil }
+            if FileManager.default.fileExists(atPath: target.path) {
+                ImCache.noteUse(target)
+                return target
+            }
+            guard allowsNetwork, let remote, !Task.isCancelled else { return nil }
+            do {
+                let (temp, response) = try await AppTrafficHTTP.download(from: remote, category: "IM 附件下载")
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                    try? FileManager.default.removeItem(at: temp)
+                    return nil
+                }
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                if FileManager.default.fileExists(atPath: target.path) {
+                    try? FileManager.default.removeItem(at: temp)
+                } else {
+                    try FileManager.default.moveItem(at: temp, to: target)
+                    ImCache.noteDownloaded(target)
+                }
+                return target
+            } catch {
+                return FileManager.default.fileExists(atPath: target.path) ? target : nil
+            }
+        }
+        inflight[key] = (id, allowsNetwork, task)
+        let result = await task.value
+        if inflight[key]?.id == id {
+            inflight[key] = nil
+        }
+        return result
     }
 }
