@@ -19,8 +19,17 @@ enum RecordingOutbox {
         let sha256: String
     }
 
+    private static let rootCacheLock = NSLock()
+    private static var rootCache: [String: URL] = [:]
+
     static func root(tenant: String) throws -> URL {
         let scope = GatewayConfig.recordingsUploadBaseURL.absoluteString + "|" + tenant
+        rootCacheLock.lock()
+        let cached = rootCache[scope]
+        rootCacheLock.unlock()
+        if let cached, FileManager.default.fileExists(atPath: cached.path) {
+            return cached
+        }
         let key = SHA256.hash(data: Data(scope.utf8)).map { String(format: "%02x", $0) }.joined()
         let base = try FileManager.default.url(
             for: .applicationSupportDirectory,
@@ -37,6 +46,9 @@ enum RecordingOutbox {
         var flags = URLResourceValues()
         flags.isExcludedFromBackup = true
         try url.setResourceValues(flags)
+        rootCacheLock.lock()
+        rootCache[scope] = url
+        rootCacheLock.unlock()
         return url
     }
 
@@ -228,130 +240,158 @@ enum RecordingOutbox {
             throw RecordingProblem("录音服务未返回策略校验值")
         }
 
-        // 组装端侧逐字稿分段（若存在）
-        var offset = 0
-        var segments = [[String: Any]]()
-        for (i, piece) in pieces.enumerated() {
-            let trimmed = piece.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                segments.append([
-                    "segmentId": "s-\(i)",
-                    "startFrame": offset,
-                    "endFrame": offset + piece.frames,
-                    "text": trimmed,
-                ])
+        // 后台完成分段音频 SHA-256 计算、逐字稿与 manifest 序列化落盘，避免长录音大文件 I/O 阻塞主线程
+        struct PreparedUpload: Sendable {
+            let localChunks: [LocalChunkInfo]
+            let transcriptFile: URL?
+            let manifestFile: URL
+        }
+        let prepared: PreparedUpload = try await Task.detached(priority: .utility) {
+            var offset = 0
+            var segments = [[String: Any]]()
+            for (i, piece) in pieces.enumerated() {
+                let trimmed = piece.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    segments.append([
+                        "segmentId": "s-\(i)",
+                        "startFrame": offset,
+                        "endFrame": offset + piece.frames,
+                        "text": trimmed,
+                    ])
+                }
+                offset += piece.frames
             }
-            offset += piece.frames
-        }
 
-        // 组装原音分段元数据（当用户开启原音同步时）
-        var localChunks: [LocalChunkInfo] = []
-        var chunkDecls = [[String: Any]]()
-        var totalAudioBytes = 0
-        if meta.syncAudio {
-            let audioURLs = try Self.pieces(folder)
-            var frameCursor = 0
-            for (seq, url) in audioURLs.enumerated() {
-                let (sha, bytes) = try sha256Hex(of: url)
-                let frames = max(1, (seq < pieces.count ? pieces[seq].frames : canonicalFrames(of: url)))
-                localChunks.append(LocalChunkInfo(
-                    seq: seq,
-                    url: url,
-                    startFrame: frameCursor,
-                    frames: frames,
-                    bytes: bytes,
-                    sha256: sha
-                ))
-                chunkDecls.append([
-                    "seq": seq,
-                    "epochId": "epoch-0",
-                    "captureStartFrame": frameCursor,
-                    "validFrameCount": frames,
-                    "encoderDelayFrames": 0,
-                    "paddingFrames": 0,
-                    "bytes": bytes,
-                    "sha256": sha,
-                    "format": [
-                        "codec": "aac_lc",
-                        "container": "m4a",
-                        "sampleRate": 24_000,
-                        "channels": 1,
-                        "bitrate": 64_000,
-                    ] as [String: Any],
-                ])
-                totalAudioBytes += bytes
-                frameCursor += frames
+            var localChunks: [LocalChunkInfo] = []
+            var chunkDecls = [[String: Any]]()
+            var totalAudioBytes = 0
+            if meta.syncAudio {
+                let audioURLs = try Self.pieces(folder)
+                var frameCursor = 0
+                for (seq, url) in audioURLs.enumerated() {
+                    let (sha, bytes) = try sha256Hex(of: url)
+                    let frames = max(1, (seq < pieces.count ? pieces[seq].frames : canonicalFrames(of: url)))
+                    localChunks.append(LocalChunkInfo(
+                        seq: seq,
+                        url: url,
+                        startFrame: frameCursor,
+                        frames: frames,
+                        bytes: bytes,
+                        sha256: sha
+                    ))
+                    chunkDecls.append([
+                        "seq": seq,
+                        "epochId": "epoch-0",
+                        "captureStartFrame": frameCursor,
+                        "validFrameCount": frames,
+                        "encoderDelayFrames": 0,
+                        "paddingFrames": 0,
+                        "bytes": bytes,
+                        "sha256": sha,
+                        "format": [
+                            "codec": "aac_lc",
+                            "container": "m4a",
+                            "sampleRate": 24_000,
+                            "channels": 1,
+                            "bitrate": 64_000,
+                        ] as [String: Any],
+                    ])
+                    totalAudioBytes += bytes
+                    frameCursor += frames
+                }
+                if offset == 0 { offset = frameCursor }
             }
-            if offset == 0 { offset = frameCursor }
-        }
 
-        let hasTranscript = !segments.isEmpty
-        if !hasTranscript && !(meta.syncAudio && meta.asrPolicy == .serverAllowed && !localChunks.isEmpty) {
-            throw RecordingProblem("没有识别出可整理的文字，原音已保存在本机")
-        }
+            let hasTranscript = !segments.isEmpty
+            if !hasTranscript && !(meta.syncAudio && meta.asrPolicy == .serverAllowed && !localChunks.isEmpty) {
+                throw RecordingProblem("没有识别出可整理的文字，原音已保存在本机")
+            }
+
+            let marker = folder.appendingPathComponent("stopped")
+            let stopDate = (try? marker.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
+
+            let timelineEvents: [[String: Any]] = meta.events.map { evt in
+                var dict: [String: Any] = [
+                    "eventId": evt.eventId,
+                    "type": evt.type,
+                    "startWallTime": evt.startWallTime,
+                    "canonicalFrame": evt.canonicalFrame,
+                ]
+                if let end = evt.endWallTime { dict["endWallTime"] = end }
+                if let reason = evt.reason { dict["reason"] = reason }
+                return dict
+            }
+
+            let missingRanges: [[String: Any]] = meta.missingRanges.map { range in
+                [
+                    "startFrame": range.startFrame,
+                    "endFrame": range.endFrame,
+                    "reason": range.reason,
+                ]
+            }
+
+            var manifest: [String: Any] = [
+                "manifestVersion": 1,
+                "sessionId": id,
+                "generation": 1,
+                "policyHash": hash,
+                "startedAt": meta.startedAt,
+                "stoppedAt": meta.stoppedAt ?? RecordingFormatting.isoString(from: stopDate),
+                "completeCapture": !partial,
+                "audioUploaded": meta.syncAudio,
+                "expectedTotalFrames": offset,
+                "expectedTotalBytes": meta.syncAudio ? totalAudioBytes : 0,
+                "chunks": meta.syncAudio ? chunkDecls : [],
+                "epochs": [],
+                "timelineEvents": timelineEvents,
+                "missingRanges": missingRanges,
+            ]
+            if !meta.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                manifest["title"] = meta.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            // 记录本次提交期望完成的全部文件名，供后台回调精准判断 accepted
+            var expectedFiles: [String] = []
+            if meta.syncAudio {
+                expectedFiles.append(contentsOf: localChunks.map { $0.url.lastPathComponent })
+            }
+            if hasTranscript {
+                expectedFiles.append("transcript.body")
+            }
+            expectedFiles.append("manifest.body")
+            let expectedURL = folder.appendingPathComponent("expected_uploads.json")
+            try JSONEncoder().encode(expectedFiles).write(to: expectedURL, options: .atomic)
+            setTransferError(nil, in: folder)
+
+            var transcriptTarget: URL?
+            if hasTranscript {
+                let transcript: [String: Any] = [
+                    "transcriptVersion": 1,
+                    "source": "on_device_speech_analyzer",
+                    "locale": "zh-CN",
+                    "timestampGranularity": "coarse",
+                    "segments": segments,
+                ]
+                let target = folder.appendingPathComponent("transcript.body")
+                if !FileManager.default.fileExists(atPath: target.path) {
+                    try JSONSerialization.data(withJSONObject: transcript).write(to: target, options: .atomic)
+                }
+                transcriptTarget = target
+            }
+
+            let manifestTarget = folder.appendingPathComponent("manifest.body")
+            if !FileManager.default.fileExists(atPath: manifestTarget.path) {
+                try JSONSerialization.data(withJSONObject: manifest).write(to: manifestTarget, options: .atomic)
+            }
+            return PreparedUpload(localChunks: localChunks, transcriptFile: transcriptTarget, manifestFile: manifestTarget)
+        }.value
 
         let sessionURL = endpoint.appendingPathComponent(id)
-        let marker = folder.appendingPathComponent("stopped")
-        let stopDate = (try? marker.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
-
-        let timelineEvents: [[String: Any]] = meta.events.map { evt in
-            var dict: [String: Any] = [
-                "eventId": evt.eventId,
-                "type": evt.type,
-                "startWallTime": evt.startWallTime,
-                "canonicalFrame": evt.canonicalFrame,
-            ]
-            if let end = evt.endWallTime { dict["endWallTime"] = end }
-            if let reason = evt.reason { dict["reason"] = reason }
-            return dict
-        }
-
-        let missingRanges: [[String: Any]] = meta.missingRanges.map { range in
-            [
-                "startFrame": range.startFrame,
-                "endFrame": range.endFrame,
-                "reason": range.reason,
-            ]
-        }
-
-        var manifest: [String: Any] = [
-            "manifestVersion": 1,
-            "sessionId": id,
-            "generation": 1,
-            "policyHash": hash,
-            "startedAt": meta.startedAt,
-            "stoppedAt": meta.stoppedAt ?? RecordingFormatting.isoString(from: stopDate),
-            "completeCapture": !partial,
-            "audioUploaded": meta.syncAudio,
-            "expectedTotalFrames": offset,
-            "expectedTotalBytes": meta.syncAudio ? totalAudioBytes : 0,
-            "chunks": meta.syncAudio ? chunkDecls : [],
-            "epochs": [],
-            "timelineEvents": timelineEvents,
-            "missingRanges": missingRanges,
-        ]
-        if !meta.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            manifest["title"] = meta.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-
-        // 记录本次提交期望完成的全部文件名，供后台回调精准判断 accepted
-        var expectedFiles: [String] = []
-        if meta.syncAudio {
-            expectedFiles.append(contentsOf: localChunks.map { $0.url.lastPathComponent })
-        }
-        if hasTranscript {
-            expectedFiles.append("transcript.body")
-        }
-        expectedFiles.append("manifest.body")
-        let expectedURL = folder.appendingPathComponent("expected_uploads.json")
-        try JSONEncoder().encode(expectedFiles).write(to: expectedURL, options: .atomic)
-        setTransferError(nil, in: folder)
-
         let allowsCellular = meta.networkPolicy.allowsCellular
 
         // 1. 若开启原音同步，排队所有音频分片
         if meta.syncAudio {
-            for chunk in localChunks {
+            for chunk in prepared.localChunks {
                 let headers: [String: String] = [
                     "Content-Type": "audio/mp4",
                     "X-Recording-Generation": "1",
@@ -371,19 +411,8 @@ enum RecordingOutbox {
             }
         }
 
-        // 2. 若有端侧逐字稿，写文件并排队
-        if hasTranscript {
-            let transcript: [String: Any] = [
-                "transcriptVersion": 1,
-                "source": "on_device_speech_analyzer",
-                "locale": "zh-CN",
-                "timestampGranularity": "coarse",
-                "segments": segments,
-            ]
-            let target = folder.appendingPathComponent("transcript.body")
-            if !FileManager.default.fileExists(atPath: target.path) {
-                try JSONSerialization.data(withJSONObject: transcript).write(to: target, options: .atomic)
-            }
+        // 2. 若有端侧逐字稿，排队上传
+        if let target = prepared.transcriptFile {
             await RecordingTransfers.shared.enqueue(
                 file: target,
                 url: sessionURL.appendingPathComponent("transcript"),
@@ -396,13 +425,9 @@ enum RecordingOutbox {
             )
         }
 
-        // 3. 写不可变清单并排队
-        let manifestTarget = folder.appendingPathComponent("manifest.body")
-        if !FileManager.default.fileExists(atPath: manifestTarget.path) {
-            try JSONSerialization.data(withJSONObject: manifest).write(to: manifestTarget, options: .atomic)
-        }
+        // 3. 排队上传不可变清单
         await RecordingTransfers.shared.enqueue(
-            file: manifestTarget,
+            file: prepared.manifestFile,
             url: sessionURL.appendingPathComponent("manifest"),
             grant: grant,
             headers: ["Content-Type": "application/json"],
@@ -424,11 +449,20 @@ final class RecordingTransfers: NSObject, URLSessionTaskDelegate, URLSessionData
     private let bufferLock = NSLock()
     private var responseBuffers: [Int: Data] = [:]
 
-    private lazy var session: URLSession = {
+    private let delegateQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "ai.jiebo.personal-recordings.delegate"
+        queue.maxConcurrentOperationCount = 1
+        queue.qualityOfService = .utility
+        return queue
+    }()
+
+    @MainActor private lazy var session: URLSession = {
         let config = URLSessionConfiguration.background(withIdentifier: Self.identifier)
         config.waitsForConnectivity = true
         config.httpMaximumConnectionsPerHost = 2
-        return URLSession(configuration: config, delegate: self, delegateQueue: .main)
+        // 回调走独立串行后台队列，避免写入 .ok/accepted 和读 expected_uploads.json 阻塞主线程
+        return URLSession(configuration: config, delegate: self, delegateQueue: delegateQueue)
     }()
 
     @MainActor func attach(_ callback: @escaping () -> Void) {

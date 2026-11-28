@@ -145,38 +145,50 @@ private final class RecordingSegmentWriter: @unchecked Sendable {
         index += 1
     }
 
-    /// 停止采集后同步冲刷队列并封口当前段，避免截断尾音。
-    func finish() throws {
+    /// 停止采集后异步冲刷队列并封口当前段，避免截断尾音且不阻塞主线程。
+    func finishAsync() async throws {
         lock.lock()
         closed = true
         lock.unlock()
 
-        var finishError: Error?
-        writeQueue.sync {
-            while true {
-                lock.lock()
-                if failed || queuedBuffers.isEmpty {
-                    queuedBuffers.removeAll(keepingCapacity: false)
-                    draining = false
-                    lock.unlock()
-                    break
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            writeQueue.async {
+                var finishError: Error?
+                while true {
+                    self.lock.lock()
+                    if self.failed || self.queuedBuffers.isEmpty {
+                        self.queuedBuffers.removeAll(keepingCapacity: false)
+                        self.draining = false
+                        self.lock.unlock()
+                        break
+                    }
+                    let next = self.queuedBuffers.removeFirst()
+                    self.lock.unlock()
+                    do {
+                        try self.writeOneBuffer(next)
+                    } catch {
+                        finishError = error
+                        // 写入失败立即置 failed 并清空剩余缓冲，防止后续排队 drainLoop 重新打开 open.m4a
+                        self.lock.lock()
+                        self.failed = true
+                        self.queuedBuffers.removeAll(keepingCapacity: false)
+                        self.draining = false
+                        self.lock.unlock()
+                        break
+                    }
                 }
-                let next = queuedBuffers.removeFirst()
-                lock.unlock()
                 do {
-                    try writeOneBuffer(next)
+                    try self.sealOnWriteQueue()
                 } catch {
-                    finishError = error
-                    break
+                    if finishError == nil { finishError = error }
                 }
-            }
-            do {
-                try sealOnWriteQueue()
-            } catch {
-                if finishError == nil { finishError = error }
+                if let finishError {
+                    continuation.resume(throwing: finishError)
+                } else {
+                    continuation.resume()
+                }
             }
         }
-        if let finishError { throw finishError }
     }
 
     var writtenCanonicalFrames: Int {
@@ -265,12 +277,16 @@ final class RecordingAudioPlayer: NSObject, AVAudioPlayerDelegate {
     @ObservationIgnored private var timeline: [(seq: Int, url: URL, startFrame: Int, frames: Int)] = []
     @ObservationIgnored private var currentPieceIndex: Int = 0
     @ObservationIgnored private var progressTask: Task<Void, Never>?
+    @ObservationIgnored private var playGeneration = 0
+    @ObservationIgnored private var leaseReady = false
 
     private override init() {
         super.init()
     }
 
     func stop() {
+        playGeneration &+= 1
+        leaseReady = false
         progressTask?.cancel()
         progressTask = nil
         player?.stop()
@@ -309,6 +325,8 @@ final class RecordingAudioPlayer: NSObject, AVAudioPlayerDelegate {
         token: String,
         remoteAudioAvailable: Bool
     ) async {
+        playGeneration &+= 1
+        let generation = playGeneration
         statusMessage = nil
         let coordinator = AudioSessionCoordinator.shared
         if lease == nil {
@@ -318,6 +336,7 @@ final class RecordingAudioPlayer: NSObject, AVAudioPlayerDelegate {
                 return
             case .granted(let tokenLease):
                 lease = tokenLease
+                leaseReady = false
                 do {
                     try await coordinator.configureAndActivate(
                         token: tokenLease,
@@ -325,21 +344,37 @@ final class RecordingAudioPlayer: NSObject, AVAudioPlayerDelegate {
                         mode: .spokenAudio,
                         options: []
                     )
+                    guard lease == tokenLease else { return }
+                    leaseReady = true
                 } catch {
+                    if lease == tokenLease {
+                        lease = nil
+                        leaseReady = false
+                        coordinator.release(tokenLease)
+                    }
+                    guard playGeneration == generation else { return }
                     stop()
                     statusMessage = "音频播放准备失败：\(error.localizedDescription)"
                     return
                 }
             }
+        } else if !leaseReady {
+            // 上一次点击的会话激活仍在排队中：等其完成后再检查代次与租约是否依然有效
+            await coordinator.waitForPendingSessionOps()
+            guard playGeneration == generation, lease != nil, leaseReady else { return }
         }
+        guard playGeneration == generation else { return }
 
-        if let root = try? RecordingOutbox.root(tenant: tenant) {
+        // 后台扫描分段目录并读取时长元数据，避免长录音上百段在主线程逐个打开 AVAudioFile
+        let localItems = await Task.detached(priority: .userInitiated) { () -> [(seq: Int, url: URL, startFrame: Int, frames: Int)] in
+            guard let root = try? RecordingOutbox.root(tenant: tenant) else { return [] }
             let localFolder = root.appendingPathComponent(sessionId)
-            let items = RecordingOutbox.localTimeline(in: localFolder)
-            if !items.isEmpty {
-                playLocalTimeline(sessionId: sessionId, items: items, targetFrame: targetFrame)
-                return
-            }
+            return RecordingOutbox.localTimeline(in: localFolder)
+        }.value
+        guard playGeneration == generation else { return }
+        if !localItems.isEmpty {
+            playLocalTimeline(sessionId: sessionId, items: localItems, targetFrame: targetFrame)
+            return
         }
 
         if remoteAudioAvailable, !token.isEmpty {
@@ -347,12 +382,17 @@ final class RecordingAudioPlayer: NSObject, AVAudioPlayerDelegate {
             let estimatedSeq = max(0, targetFrame / (20 * 24_000))
             do {
                 let fileURL = try await RecordingAPI.fetchRemoteChunk(token: token, sessionId: sessionId, seq: estimatedSeq)
-                let frames = max(1, RecordingOutbox.canonicalFrames(of: fileURL))
+                guard playGeneration == generation else { return }
+                let frames = await Task.detached(priority: .userInitiated) {
+                    max(1, RecordingOutbox.canonicalFrames(of: fileURL))
+                }.value
+                guard playGeneration == generation else { return }
                 let startFrame = estimatedSeq * frames
                 let localOffset = max(0, Double(targetFrame - startFrame) / RecordingFormatting.canonicalSampleRate)
                 let single = [(seq: estimatedSeq, url: fileURL, startFrame: startFrame, frames: frames)]
                 playLocalTimeline(sessionId: sessionId, items: single, targetFrame: startFrame + Int(localOffset * 24_000))
             } catch {
+                guard playGeneration == generation else { return }
                 stop()
                 statusMessage = "无法拉取云端原音：\(error.localizedDescription)"
             }
@@ -418,8 +458,10 @@ final class RecordingAudioPlayer: NSObject, AVAudioPlayerDelegate {
     }
 
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        let finishedPlayer = player
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            // 仅处理当前活跃播放器的完成回调，防止旧实例晚到回调误停或误推进新播放
+            guard let self, self.player === finishedPlayer else { return }
             let nextIndex = self.currentPieceIndex + 1
             if self.timeline.indices.contains(nextIndex) {
                 self.startPiece(at: nextIndex, offset: 0)
@@ -478,6 +520,9 @@ final class PersonalRecording {
     private var accumulatedSecondsBeforeResume: Double = 0
     @ObservationIgnored private var snapshotTask: Task<Void, Never>?
     @ObservationIgnored private var snapshotGeneration = 0
+    /// 后台封口中的写入器任务：暂停不阻塞主线程，续录/停止/删除前按序等待其完成。
+    @ObservationIgnored private var pendingSealTask: Task<Void, Never>?
+    @ObservationIgnored private var lastSealFailedFolder: URL?
     private var segmentResumeDate: Date?
     private var timerTask: Task<Void, Never>?
     private var grace: UIBackgroundTaskIdentifier = .invalid
@@ -513,9 +558,16 @@ final class PersonalRecording {
 
     func leaveAccount() {
         RecordingAudioPlayer.shared.stop()
-        if let folder {
+        if let activeFolder = folder {
             pause(reason: "账号切换")
-            try? Data([1]).write(to: folder.appendingPathComponent("stopped"), options: .atomic)
+            // 将 stopped 标记写入并入 pendingSealTask 链，确保重登后 recover() 先等封口与标记落盘再扫描
+            let previousSeal = pendingSealTask
+            pendingSealTask = Task { @MainActor in
+                await previousSeal?.value
+                await Task.detached(priority: .utility) {
+                    try? Data([1]).write(to: activeFolder.appendingPathComponent("stopped"), options: .atomic)
+                }.value
+            }
         }
         folder = nil
         activeMeta = nil
@@ -538,23 +590,68 @@ final class PersonalRecording {
 
     func clearSyncedCopies(store: ChatStore) {
         guard store.unlocked, !store.tenantId.isEmpty else { return }
-        do {
-            let root = try RecordingOutbox.root(tenant: store.tenantId)
-            var removed = 0
-            for dir in try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) {
-                guard dir != folder, !processing.contains(dir),
-                      FileManager.default.fileExists(atPath: dir.appendingPathComponent("accepted").path) else { continue }
-                if RecordingAudioPlayer.shared.activeSessionId == dir.lastPathComponent {
-                    RecordingAudioPlayer.shared.stop()
+        let account = store.tenantId
+        let activeFolder = folder
+        let activeProcessing = processing
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            // 第一步：后台仅扫描待删的已同步目录列表，不删除
+            let scanResult: Result<[URL], Error> = await Task.detached(priority: .utility) {
+                do {
+                    let root = try RecordingOutbox.root(tenant: account)
+                    let dirs = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+                    let candidates = dirs.filter { dir in
+                        dir != activeFolder
+                            && !activeProcessing.contains(dir)
+                            && FileManager.default.fileExists(atPath: dir.appendingPathComponent("accepted").path)
+                    }
+                    return .success(candidates)
+                } catch {
+                    return .failure(error)
                 }
-                try FileManager.default.removeItem(at: dir)
-                removed += 1
+            }.value
+            guard self.loadedSettingsTenant == account else { return }
+            let targets: [URL]
+            switch scanResult {
+            case .success(let list):
+                targets = list
+            case .failure(let error):
+                self.status = error.localizedDescription
+                return
             }
-            preview = ""
-            status = removed > 0 ? "已清理 \(removed) 条已同步的本机副本" : "暂无可清理的已同步副本"
-            refreshLocalSnapshot(tenant: store.tenantId)
-        } catch {
-            status = error.localizedDescription
+            guard !targets.isEmpty else {
+                self.preview = ""
+                self.status = "暂无可清理的已同步副本"
+                self.refreshLocalSnapshot(tenant: account)
+                return
+            }
+            // 第二步：回到主线程先停止正在播放待删目录的播放器，再在后台真正删除目录
+            let targetIds = Set(targets.map(\.lastPathComponent))
+            if let playingId = RecordingAudioPlayer.shared.activeSessionId, targetIds.contains(playingId) {
+                RecordingAudioPlayer.shared.stop()
+            }
+            let deleteResult: Result<Int, Error> = await Task.detached(priority: .utility) {
+                do {
+                    var removed = 0
+                    for dir in targets {
+                        try FileManager.default.removeItem(at: dir)
+                        removed += 1
+                    }
+                    return .success(removed)
+                } catch {
+                    return .failure(error)
+                }
+            }.value
+            guard self.loadedSettingsTenant == account else { return }
+            switch deleteResult {
+            case .success(let removed):
+                self.preview = ""
+                self.status = removed > 0 ? "已清理 \(removed) 条已同步的本机副本" : "暂无可清理的已同步副本"
+                self.refreshLocalSnapshot(tenant: account)
+            case .failure(let error):
+                self.status = error.localizedDescription
+                self.refreshLocalSnapshot(tenant: account)
+            }
         }
     }
 
@@ -606,6 +703,8 @@ final class PersonalRecording {
         guard let root = try? RecordingOutbox.root(tenant: account) else { return ([], 0, 0) }
         let dirs = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.creationDateKey])) ?? []
         var items: [LocalRecordingSummary] = []
+        var totalBytes: Int64 = 0
+        var reclaimableBytes: Int64 = 0
 
         for dir in dirs {
             guard UUID(uuidString: dir.lastPathComponent) != nil else { continue }
@@ -614,6 +713,8 @@ final class PersonalRecording {
             let totalFrames = pieces.reduce(0) { $0 + RecordingOutbox.canonicalFrames(of: $1) }
             let bytes = RecordingOutbox.folderBytes(dir)
             let accepted = FileManager.default.fileExists(atPath: dir.appendingPathComponent("accepted").path)
+            totalBytes += bytes
+            if accepted { reclaimableBytes += bytes }
             let stopped = FileManager.default.fileExists(atPath: dir.appendingPathComponent("stopped").path)
             let transferErr = RecordingOutbox.transferError(in: dir)
 
@@ -657,8 +758,7 @@ final class PersonalRecording {
         }
 
         items.sort { $0.startedAt > $1.startedAt }
-        let storage = RecordingOutbox.totalStorageBytes(tenant: account)
-        return (items, storage.total, storage.syncedReclaimable)
+        return (items, totalBytes, reclaimableBytes)
     }
 
     /// 刷新服务端历史会话与能力信息
@@ -709,6 +809,9 @@ final class PersonalRecording {
         let account = store.tenantId
         starting = true
         defer { starting = false }
+
+        // 若上一次暂停触发的异步封口尚未收尾，先等它完成再续录，确保不与 open.m4a 冲突
+        await awaitPendingSeal()
 
         do {
             try runPreflightChecks()
@@ -914,13 +1017,38 @@ final class PersonalRecording {
         audioLevel = 0
         status = reason == nil ? "已暂停，不收音" : "已暂停（\(reason!)）"
 
-        do {
-            try writer?.finish()
-        } catch {
-            partial = true
-            status = "封口当前音频段异常：\(error.localizedDescription)"
-        }
+        // 异步冲刷编码队列并封口，避免点击暂停/停止时在主线程同步阻塞等待磁盘 I/O
+        let activeWriter = writer
         writer = nil
+        let targetDir = folder
+        let accountSnapshot = tenant
+        if let activeWriter {
+            let previousSeal = pendingSealTask
+            pendingSealTask = Task { @MainActor [weak self] in
+                await previousSeal?.value
+                do {
+                    try await activeWriter.finishAsync()
+                } catch {
+                    guard let self else { return }
+                    if let dir = targetDir {
+                        self.lastSealFailedFolder = dir
+                    }
+                    // 仅在仍属于同一账号和同一录音目录时写入失败状态，防止切账号后污染新账号 UI
+                    if self.tenant == accountSnapshot && self.folder == targetDir {
+                        self.partial = true
+                        self.status = "封口当前音频段异常：\(error.localizedDescription)"
+                        if let dir = targetDir, var meta = self.activeMeta {
+                            meta.partial = true
+                            self.activeMeta = meta
+                            RecordingOutbox.saveMeta(meta, in: dir)
+                        }
+                    }
+                }
+                if let self, !accountSnapshot.isEmpty, self.loadedSettingsTenant == accountSnapshot {
+                    self.refreshLocalSnapshot(tenant: accountSnapshot)
+                }
+            }
+        }
 
         if let dir = folder, var meta = activeMeta {
             if reason == nil {
@@ -942,8 +1070,17 @@ final class PersonalRecording {
             self.lease = nil
             AudioSessionCoordinator.shared.release(lease)
         }
-        if !tenant.isEmpty {
+        if activeWriter == nil, !tenant.isEmpty {
             refreshLocalSnapshot(tenant: tenant)
+        }
+    }
+
+    private func awaitPendingSeal() async {
+        while let task = pendingSealTask {
+            await task.value
+            if pendingSealTask == task {
+                pendingSealTask = nil
+            }
         }
     }
 
@@ -955,25 +1092,32 @@ final class PersonalRecording {
 
     func stop(store: ChatStore) async {
         guard let dir = folder, !starting else { return }
+        let metaSnapshot = activeMeta
+        let partialSnapshot = partial
         finishGrace()
         grace = UIApplication.shared.beginBackgroundTask(withName: "录音封口与同步") { [weak self] in
             Task { @MainActor in self?.finishGrace() }
         }
         pause()
+        // 立刻脱离活动目录，防止等待封口期间 leaveAccount() 对同一目录重复写入 partial=1 覆盖 stopped
+        folder = nil
+        activeMeta = nil
+        draftTitle = ""
+        accumulatedSecondsBeforeResume = 0
+        elapsedSeconds = 0
+        await awaitPendingSeal()
+        let sealFailed = (lastSealFailedFolder == dir)
+        if sealFailed { lastSealFailedFolder = nil }
         JieboHaptic.notification(.success)
 
         do {
-            if var meta = activeMeta {
+            let finalPartial = partial || partialSnapshot || sealFailed
+            if var meta = metaSnapshot {
                 meta.stoppedAt = RecordingFormatting.isoString(from: Date())
-                meta.partial = partial
+                meta.partial = finalPartial
                 RecordingOutbox.saveMeta(meta, in: dir)
             }
-            try Data([partial ? 1 : 0]).write(to: dir.appendingPathComponent("stopped"), options: .atomic)
-            folder = nil
-            activeMeta = nil
-            draftTitle = ""
-            accumulatedSecondsBeforeResume = 0
-            elapsedSeconds = 0
+            try Data([finalPartial ? 1 : 0]).write(to: dir.appendingPathComponent("stopped"), options: .atomic)
             status = "已保存本机，正在本机补全转写并自动同步"
             refreshLocalSnapshot(tenant: store.tenantId)
             await process(dir, store: store)
@@ -1001,6 +1145,7 @@ final class PersonalRecording {
         let dir = root.appendingPathComponent(sessionId)
         if dir == folder {
             pause(reason: "用户删除")
+            await awaitPendingSeal()
             folder = nil
             activeMeta = nil
             accumulatedSecondsBeforeResume = 0
@@ -1010,7 +1155,9 @@ final class PersonalRecording {
             RecordingAudioPlayer.shared.stop()
         }
         await RecordingTransfers.shared.cancelTasks(in: dir)
-        try? FileManager.default.removeItem(at: dir)
+        await Task.detached(priority: .utility) {
+            try? FileManager.default.removeItem(at: dir)
+        }.value
         refreshLocalSnapshot(tenant: account)
     }
 
@@ -1020,6 +1167,9 @@ final class PersonalRecording {
         let account = store.tenantId
         guard recoveringAccounts.insert(account).inserted else { return }
         defer { recoveringAccounts.remove(account) }
+        // 先等待上一轮异步封口及切账号 stopped 落盘完成，防止把正在封口的录音误判为崩溃残留
+        await awaitPendingSeal()
+        guard account == store.tenantId, store.unlocked else { return }
         do {
             let directories = try await Task.detached(priority: .utility) {
                 let root = try RecordingOutbox.root(tenant: account)

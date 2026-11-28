@@ -217,14 +217,7 @@ struct PersonalRecordingPanel: View {
                     .lineLimit(1)
             }
 
-            Text(RecordingFormatting.formatClock(model.elapsedSeconds))
-                .font(.system(size: 40, weight: .semibold, design: .monospaced))
-                .monospacedDigit()
-                .foregroundStyle(model.recording ? JieboColor.ink : JieboColor.ink2)
-                .padding(.vertical, 4)
-
-            AudioLevelMeterView(level: model.audioLevel, active: model.recording)
-                .frame(height: 18)
+            RecordingHeroTelemetryView()
 
             HStack(spacing: 12) {
                 Label(model.recording ? "锁屏可继续收音" : (model.folder != nil ? "已暂停，不收音" : "停止后自动整理交付"), systemImage: model.recording ? "lock.open.fill" : "waveform")
@@ -484,12 +477,9 @@ struct PersonalRecordingPanel: View {
         model.localRecords.filter { $0.phase != .accepted }
     }
 
-    private var localSessionIdSet: Set<String> {
-        Set(model.localRecords.map(\.sessionId))
-    }
-
     private var historyTabView: some View {
-        List {
+        let localIds = Set(model.localRecords.map(\.sessionId))
+        return List {
             if !pendingLocalItems.isEmpty {
                 Section {
                     ForEach(pendingLocalItems) { item in
@@ -533,15 +523,16 @@ struct PersonalRecordingPanel: View {
                     .listRowBackground(JieboColor.white)
                 } else {
                     ForEach(model.remoteSessions) { session in
+                        let hasLocal = localIds.contains(session.sessionId)
                         NavigationLink {
                             RecordingDetailView(
                                 store: store,
                                 sessionId: session.sessionId,
                                 initialStatus: session,
-                                hasLocalAudio: localSessionIdSet.contains(session.sessionId)
+                                hasLocalAudio: hasLocal
                             )
                         } label: {
-                            remoteSessionRow(session, hasLocalAudio: localSessionIdSet.contains(session.sessionId))
+                            remoteSessionRow(session, hasLocalAudio: hasLocal)
                         }
                         .listRowBackground(JieboColor.white)
                     }
@@ -840,6 +831,66 @@ struct PersonalRecordingPanel: View {
     }
 }
 
+// MARK: - 独立观察高频遥测（隔离 12.5fps 电平与 4fps 计时器，避免重绘整个录音面板）
+
+private struct RecordingHeroTelemetryView: View {
+    private var model: PersonalRecording { .shared }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text(RecordingFormatting.formatClock(model.elapsedSeconds))
+                .font(.system(size: 40, weight: .semibold, design: .monospaced))
+                .monospacedDigit()
+                .foregroundStyle(model.recording ? JieboColor.ink : JieboColor.ink2)
+                .padding(.vertical, 4)
+
+            AudioLevelMeterView(level: model.audioLevel, active: model.recording)
+                .frame(height: 18)
+        }
+    }
+}
+
+/// 独立观察播放进度，隔离 4fps currentSeconds 刷新，避免重绘详情页上千段逐字稿列表。
+private struct RecordingPlaybackBarView: View {
+    private var player: RecordingAudioPlayer { .shared }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button {
+                player.togglePause()
+            } label: {
+                Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(JieboColor.pine)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(player.isPlaying ? "暂停播放" : "继续播放")
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(player.isPlaying ? "正在回听原音" : "回听已暂停")
+                    .font(JieboFont.text(.subheadline, weight: .semibold))
+                    .foregroundStyle(JieboColor.ink)
+                Text("\(RecordingFormatting.formatSeconds(player.currentSeconds)) / \(RecordingFormatting.formatSeconds(player.totalSeconds))")
+                    .font(JieboFont.mono(12))
+                    .foregroundStyle(JieboColor.dim)
+            }
+
+            Spacer()
+
+            Button("停止") {
+                player.stop()
+            }
+            .font(JieboFont.text(.caption, weight: .semibold))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(JieboColor.well, in: Capsule())
+            .foregroundStyle(JieboColor.ink)
+            .buttonStyle(.borderless)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
 // MARK: - 动态音量条
 
 private struct AudioLevelMeterView: View {
@@ -883,6 +934,7 @@ struct RecordingDetailView: View {
     @State private var appliedTranscriptQuery = ""
     @State private var cachedMatchedSegments: [RecordingTranscriptSegmentDTO] = []
     @State private var transcriptFilterTask: Task<Void, Never>?
+    @State private var segmentSearchTask: Task<Void, Never>?
     @State private var showDeleteSheet = false
     @State private var deleteLinkedMemories = false
 
@@ -906,20 +958,36 @@ struct RecordingDetailView: View {
     }
 
     private func refreshMatchedSegments() {
+        segmentSearchTask?.cancel()
+        segmentSearchTask = nil
         guard let segs = result?.segments else {
             cachedMatchedSegments = []
             return
         }
         let q = appliedTranscriptQuery
-        cachedMatchedSegments = q.isEmpty ? segs : segs.filter { $0.text.localizedCaseInsensitiveContains(q) }
+        if q.isEmpty {
+            cachedMatchedSegments = segs
+            return
+        }
+        if segs.count <= 200 {
+            cachedMatchedSegments = segs.filter { $0.text.localizedCaseInsensitiveContains(q) }
+            return
+        }
+        segmentSearchTask = Task { @MainActor in
+            let filtered = await Task.detached(priority: .userInitiated) {
+                segs.filter { $0.text.localizedCaseInsensitiveContains(q) }
+            }.value
+            guard !Task.isCancelled else { return }
+            cachedMatchedSegments = filtered
+        }
     }
 
     var body: some View {
         List {
-            // 播放器控制条（仅在播放本条录音时出现）
+            // 播放器控制条（仅在播放本条录音时出现；内部独立观察 currentSeconds，不重绘长逐字稿列表）
             if player.activeSessionId == sessionId {
                 Section {
-                    playbackBar
+                    RecordingPlaybackBarView()
                         .listRowBackground(JieboColor.white)
                 } header: {
                     Text("原音回听")
@@ -1188,46 +1256,12 @@ struct RecordingDetailView: View {
         .onDisappear {
             transcriptFilterTask?.cancel()
             transcriptFilterTask = nil
+            segmentSearchTask?.cancel()
+            segmentSearchTask = nil
         }
         .sheet(isPresented: $showDeleteSheet) {
             deleteConfirmationSheet
         }
-    }
-
-    private var playbackBar: some View {
-        HStack(spacing: 12) {
-            Button {
-                player.togglePause()
-            } label: {
-                Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(JieboColor.pine)
-            }
-            .buttonStyle(.borderless)
-            .accessibilityLabel(player.isPlaying ? "暂停播放" : "继续播放")
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(player.isPlaying ? "正在回听原音" : "回听已暂停")
-                    .font(JieboFont.text(.subheadline, weight: .semibold))
-                    .foregroundStyle(JieboColor.ink)
-                Text("\(RecordingFormatting.formatSeconds(player.currentSeconds)) / \(RecordingFormatting.formatSeconds(player.totalSeconds))")
-                    .font(JieboFont.mono(12))
-                    .foregroundStyle(JieboColor.dim)
-            }
-
-            Spacer()
-
-            Button("停止") {
-                player.stop()
-            }
-            .font(JieboFont.text(.caption, weight: .semibold))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(JieboColor.well, in: Capsule())
-            .foregroundStyle(JieboColor.ink)
-            .buttonStyle(.borderless)
-        }
-        .padding(.vertical, 4)
     }
 
     private var metaHeaderSection: some View {
