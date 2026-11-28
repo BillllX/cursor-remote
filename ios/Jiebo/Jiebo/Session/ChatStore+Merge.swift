@@ -105,10 +105,29 @@ extension ChatStore {
         }
     }
 
+    /// 单遍空白折叠并截断到 240 字符：消除主线程重复编译正则与扫描整段长输入的开销。
     static func userFingerprint(_ text: String) -> String {
-        let collapsed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-        return String(collapsed.prefix(240))
+        guard !text.isEmpty else { return "" }
+        var out = String()
+        out.reserveCapacity(min(text.utf8.count, 240))
+        var count = 0
+        var pendingSpace = false
+        for ch in text {
+            if ch.isWhitespace {
+                if count > 0 { pendingSpace = true }
+                continue
+            }
+            if pendingSpace {
+                out.append(" ")
+                count += 1
+                pendingSpace = false
+                if count >= 240 { break }
+            }
+            out.append(ch)
+            count += 1
+            if count >= 240 { break }
+        }
+        return out
     }
 
     static func toolFromSnapshot(_ value: JSONValue) -> ToolCall? {
@@ -145,16 +164,35 @@ extension ChatStore {
         if !localHas { return incoming }
         var merged = local
         var used = Set<Int>()
+        // 懒缓存本地各回合指纹，避免双重循环里对同一回合重复计算 O(M*N) 次指纹
+        var localFingerprints = [String?](repeating: nil, count: merged.count)
         var prefix: [Turn] = []
         var seenLocal = false
         for remote in incoming {
             let finger = userFingerprint(remote.user)
-            let index = merged.indices.reversed().first {
-                !used.contains($0)
-                    && (merged[$0].id == remote.id
-                        || (!finger.isEmpty && userFingerprint(merged[$0].user) == finger))
+            var matchedIndex: Int?
+            for candidate in merged.indices.reversed() {
+                if used.contains(candidate) { continue }
+                if merged[candidate].id == remote.id {
+                    matchedIndex = candidate
+                    break
+                }
+                if !finger.isEmpty {
+                    let cached: String
+                    if let existing = localFingerprints[candidate] {
+                        cached = existing
+                    } else {
+                        let computed = userFingerprint(merged[candidate].user)
+                        localFingerprints[candidate] = computed
+                        cached = computed
+                    }
+                    if cached == finger {
+                        matchedIndex = candidate
+                        break
+                    }
+                }
             }
-            if let index {
+            if let index = matchedIndex {
                 used.insert(index)
                 seenLocal = true
                 if merged[index].running { continue }
@@ -213,16 +251,28 @@ extension ChatStore {
 
     func markLive(running: [String], queued: [String]) {
         let keep = Set(running + queued)
-        chats = chats.map { chat in
-            var next = chat
-            if !keep.contains(chat.id) {
-                next.turns = next.turns.map { turn in
-                    turn.running || turn.tools.contains(where: { $0.status == "running" })
-                        ? turn.settled(status: turn.status ?? "cancelled")
-                        : turn
+        // 无任何会话需要结清时跳过写回 chats，避免无谓触发全 App 订阅 chats 的 SwiftUI 重绘
+        var updatedIndices: [(Int, [Turn])] = []
+        for (chatIndex, chat) in chats.enumerated() where !keep.contains(chat.id) {
+            var changed = false
+            var turns = chat.turns
+            for turnIndex in turns.indices {
+                let turn = turns[turnIndex]
+                if turn.running || turn.tools.contains(where: { $0.status == "running" }) {
+                    turns[turnIndex] = turn.settled(status: turn.status ?? "cancelled")
+                    changed = true
                 }
             }
-            return next
+            if changed {
+                updatedIndices.append((chatIndex, turns))
+            }
+        }
+        if !updatedIndices.isEmpty {
+            var nextChats = chats
+            for (chatIndex, turns) in updatedIndices {
+                nextChats[chatIndex].turns = turns
+            }
+            chats = nextChats
         }
         refreshLiveBusyIds()
     }
@@ -266,7 +316,7 @@ extension ChatStore {
     }
 
     func merge(local: [ChatSession], remote: [ChatSession]) -> [ChatSession] {
-        let localById = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
+        let localById = Dictionary(local.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
         return remote.map { chat in
             guard let current = localById[chat.id] else { return chat }
             // P8 slim：远端是元数据壳（无 turns 键）→ 只合元数据，本地 turns/加载状态不动。
@@ -362,11 +412,11 @@ extension ChatStore {
         if turnsChanged { turnRenderRevisions[id, default: 0] &+= 1 }
         if streamDelta {
             // 兜底离线提交重连首包直接下发增量时输入栏切换到停止态；常态已忙碌 O(1) 零写入。
-            if !liveBusyIds.contains(id) { syncLiveBusy(id) }
+            if !liveBusyIds.contains(id) { syncLiveBusy(chat: chats[index]) }
         } else {
             if turnsChanged { scheduleDisplayTail(id) }
-            syncLiveBusy(id)
-            syncComposerChrome(id)
+            syncLiveBusy(chat: chats[index])
+            syncComposerChrome(chat: chats[index])
             // P4b：增量上传只推脏会话。冷启动缓存列表的行只读，不标脏（首个 stored_state 会整份替换）
             if sync, id != "boot", !cachedOnlyIds.contains(id) {
                 dirtyChatIds.insert(id)
@@ -387,8 +437,14 @@ extension ChatStore {
         let available = Set(chats[chatIndex].turns.map(\.id))
         let ready = pendingTurnFiles.take(chatId: chatId, availableTurnIds: available)
         guard !ready.isEmpty else { return }
+        let turnIndexById: [String: Int]? = ready.count > 1
+            ? Dictionary(
+                chats[chatIndex].turns.enumerated().map { ($0.element.id, $0.offset) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            : nil
         for (turnId, files) in ready {
-            guard let turnIndex = chats[chatIndex].turns.firstIndex(where: { $0.id == turnId }) else { continue }
+            guard let turnIndex = turnIndexById?[turnId] ?? chats[chatIndex].turns.firstIndex(where: { $0.id == turnId }) else { continue }
             let turn = chats[chatIndex].turns[turnIndex]
             chats[chatIndex].turns[turnIndex].files = turn.filesSource == .authoritative
                 ? Turn.stableAuthoritativeFiles(current: turn.files, incoming: files)
@@ -452,7 +508,11 @@ extension ChatStore {
 
     /// 输入栏用。集合没变就不写，避免流式每个字都通知输入栏重画。
     func syncLiveBusy(_ chatId: String) {
-        let busy = chats.first { $0.id == chatId }.map(chatShowsRunning) ?? runningChatIds.contains(chatId)
+        if let chat = chats.first(where: { $0.id == chatId }) {
+            syncLiveBusy(chat: chat)
+            return
+        }
+        let busy = runningChatIds.contains(chatId)
         if busy {
             guard !liveBusyIds.contains(chatId) else { return }
             liveBusyIds.insert(chatId)
@@ -462,15 +522,26 @@ extension ChatStore {
         }
     }
 
+    private func syncLiveBusy(chat: ChatSession) {
+        let busy = chatShowsRunning(chat)
+        if busy {
+            guard !liveBusyIds.contains(chat.id) else { return }
+            liveBusyIds.insert(chat.id)
+        } else {
+            guard liveBusyIds.contains(chat.id) else { return }
+            liveBusyIds.remove(chat.id)
+        }
+    }
+
     func refreshLiveBusyIds() {
         var next = Set(runningChatIds)
-        for chat in chats where chatShowsRunning(chat) {
-            next.insert(chat.id)
+        for chat in chats {
+            if chatShowsRunning(chat) {
+                next.insert(chat.id)
+            }
+            syncComposerChrome(chat: chat)
         }
         if next != liveBusyIds { liveBusyIds = next }
-        for chat in chats {
-            syncComposerChrome(chat.id)
-        }
     }
 
     func syncComposerChrome(_ chatId: String) {
@@ -478,6 +549,10 @@ extension ChatStore {
             if composerChromeByChat.removeValue(forKey: chatId) != nil {}
             return
         }
+        syncComposerChrome(chat: chat)
+    }
+
+    private func syncComposerChrome(chat: ChatSession) {
         let next = ComposerChrome(
             mode: chat.mode,
             model: chat.sessionModel ?? model,
@@ -486,8 +561,8 @@ extension ChatStore {
             pending: chat.turns.reversed().first { $0.pendingTool != nil }?.pendingTool,
             queued: chat.turns.filter(\.queued)
         )
-        if composerChromeByChat[chatId] != next {
-            composerChromeByChat[chatId] = next
+        if composerChromeByChat[chat.id] != next {
+            composerChromeByChat[chat.id] = next
         }
     }
 

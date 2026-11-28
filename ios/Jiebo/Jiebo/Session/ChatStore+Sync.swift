@@ -49,8 +49,11 @@ extension ChatStore {
             guard !dirty.isEmpty else { return }
             stateRev += 1
             // P4b：只上传脏会话（流式期间从全量 2MB 降到单会话）
+            let chatById: [String: ChatSession]? = dirty.count > 1
+                ? Dictionary(chats.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+                : nil
             for id in dirty {
-                guard let chat = chats.first(where: { $0.id == id }), !cachedOnlyIds.contains(id) else {
+                guard let chat = chatById?[id] ?? chats.first(where: { $0.id == id }), !cachedOnlyIds.contains(id) else {
                     dirtyChatIds.remove(id) // 本地已删（delete_session 已单独通知）/ 只读的缓存行
                     continue
                 }
@@ -169,21 +172,26 @@ extension ChatStore {
             dropChatState(id)
             forgetBodyCache(id)
         }
-        for (id, cached) in cachedBodies {
-            guard let index = chats.firstIndex(where: { $0.id == id }) else {
-                clearDraftBox(for: id)
-                forgetBodyCache(id) // 服务端已经没有这条：缓存的正文不能再复活
-                continue
+        if !cachedBodies.isEmpty {
+            let chatIndexById = Dictionary(
+                chats.enumerated().map { ($0.element.id, $0.offset) },
+                uniquingKeysWith: { _, latest in latest }
+            )
+            for (id, cached) in cachedBodies {
+                guard let index = chatIndexById[id] else {
+                    clearDraftBox(for: id)
+                    forgetBodyCache(id) // 服务端已经没有这条：缓存的正文不能再复活
+                    continue
+                }
+                guard !chats[index].turnsComplete else { continue }
+                // 尾段没有 bodyRevs，但也要挂回来，否则一连上服务器当前会话会先空掉
+                if chats[index].turns.isEmpty, bodyRevs[id] != nil || displayOnlyIds.contains(id) {
+                    chats[index].turns = cached.turns
+                }
+                if currentDraft(for: id).isEmpty, !cached.draft.isEmpty {
+                    setDraftBox(cached.draft, for: id)
+                }
             }
-            guard !chats[index].turnsComplete else { continue }
-            // 尾段没有 bodyRevs，但也要挂回来，否则一连上服务器当前会话会先空掉
-            if chats[index].turns.isEmpty, bodyRevs[id] != nil || displayOnlyIds.contains(id) {
-                chats[index].turns = cached.turns
-            }
-            if currentDraft(for: id).isEmpty, !cached.draft.isEmpty {
-                setDraftBox(cached.draft, for: id)
-            }
-            invalidateTurnListMemo(id)
         }
         for chat in chats {
             invalidateTurnListMemo(chat.id)
@@ -271,10 +279,15 @@ extension ChatStore {
         // 对齐网页 stored_digest：先拿旧 rev 判目录是否 stale，再写入服务端 chatRevs。
         // 别端写入后网关会 broadcast digest——已加载正文须按 rev 增量补齐（不能只改元数据）。
         // 本地优先会话仍保留本地 rev / 正文，不参与远端覆盖。
+        let chatIndexById = Dictionary(
+            chats.enumerated().map { ($0.element.id, $0.offset) },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        let followedIds = Set(followedBodyChatIds())
         var listStale = !cachedOnlyIds.isEmpty
         for (id, serverRev) in serverRevs where !listStale {
             guard !deletedIds.contains(id) else { continue }
-            let missing = !chats.contains(where: { $0.id == id })
+            let missing = chatIndexById[id] == nil
             if missing || chatRevs[id] != serverRev { listStale = true }
         }
         for (id, serverRev) in serverRevs {
@@ -284,8 +297,8 @@ extension ChatStore {
             // 本地优先的也要记下服务端版本：回执据此发现期间别处改过正文，等不脏了再补齐
             chatRevs[id] = serverRev
             guard !hasLocalPriority(id) else { continue }
-            let follow = followedBodyChatIds().contains(id)
-            if let index = chats.firstIndex(where: { $0.id == id }), chats[index].turnsComplete {
+            let follow = followedIds.contains(id)
+            if let index = chatIndexById[id], chats[index].turnsComplete {
                 let baseRev = bodyRevs[id] ?? prior
                 if baseRev != serverRev {
                     markNeedsRefresh(id, rev: baseRev)

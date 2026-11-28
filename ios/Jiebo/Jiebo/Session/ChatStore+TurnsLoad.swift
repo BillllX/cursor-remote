@@ -429,13 +429,25 @@ extension ChatStore {
         guard chatId != "boot", !tenantId.isEmpty,
               let chat = chats.first(where: { $0.id == chatId })
         else { return }
-        let settled = chat.turns.filter { !ChatStore.isLiveTurn($0) }
-        let tail = Array(settled.suffix(ChatCache.tailLimit))
-        guard !tail.isEmpty else { return }
         let partial = partialHistories[chatId]
+        let needTotalCount = partial?.nextFrom == 0
+        var reversedTail: [Turn] = []
+        reversedTail.reserveCapacity(min(chat.turns.count, ChatCache.tailLimit))
+        var settledCount = 0
+        for turn in chat.turns.reversed() where !ChatStore.isLiveTurn(turn) {
+            settledCount += 1
+            if reversedTail.count < ChatCache.tailLimit {
+                reversedTail.append(turn)
+            } else if !needTotalCount {
+                // 常规路径只需尾部 40 条已结束回合，收集满即停止，避免整段历史 filter 拷贝
+                break
+            }
+        }
+        guard !reversedTail.isEmpty else { return }
+        let tail = Array(reversedTail.reversed())
         // 全部分页已到头但含 deferred 时，磁盘只留最后 40 轮；下次启动游标要回到这段尾页之前。
         let cachedNextFrom = partial.map {
-            $0.nextFrom == 0 ? max(0, settled.count - tail.count) : $0.nextFrom
+            $0.nextFrom == 0 ? max(0, settledCount - tail.count) : $0.nextFrom
         }
         ChatCache.saveTail(
             tenant: tenantId,
@@ -552,6 +564,7 @@ extension ChatStore {
         // 基线前缀和补来的页是直接拼的：接缝判断错一次就会同一轮出现两遍
         var result = Turn.uniqued(server)
         var position: [String: Int] = [:]
+        position.reserveCapacity(result.count)
         for (offset, turn) in result.enumerated() { position[turn.id] = offset }
         for turn in chats[index].turns {
             let live = ChatStore.isLiveTurn(turn)
@@ -946,7 +959,7 @@ extension ChatStore {
                       payload.turnId == turnId,
                       payload.chatRev == requestedRev,
                       self.chatRevs[chatId] == requestedRev,
-                      var full = Turn.from(payload.turn),
+                      var full = payload.turn,
                       full.id == turnId,
                       !full.deferred,
                       let index = self.chats.firstIndex(where: { $0.id == chatId }),
@@ -995,11 +1008,11 @@ extension ChatStore {
         }
     }
 
-    struct TurnFetchPayload {
+    struct TurnFetchPayload: Sendable {
         var chatId: String
         var turnId: String
         var chatRev: Int
-        var turn: JSONValue
+        var turn: Turn?
     }
 
     enum TurnHydrationError: Error { case badResponse, stale }
@@ -1014,8 +1027,10 @@ extension ChatStore {
               let responseChatId = object["chatId"]?.string,
               let responseTurnId = object["turnId"]?.string,
               let chatRev = object["chatRev"]?.int,
-              let turn = object["turn"]
+              let rawTurn = object["turn"]
         else { throw TurnHydrationError.badResponse }
-        return TurnFetchPayload(chatId: responseChatId, turnId: responseTurnId, chatRev: chatRev, turn: turn)
+        // 在后台完成大回合解码，避免点开 deferred 回合时在主线程解析长正文卡顿
+        let decodedTurn = Turn.from(rawTurn)
+        return TurnFetchPayload(chatId: responseChatId, turnId: responseTurnId, chatRev: chatRev, turn: decodedTurn)
     }
 }
