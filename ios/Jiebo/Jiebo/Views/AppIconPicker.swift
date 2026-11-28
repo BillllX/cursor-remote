@@ -20,7 +20,18 @@ enum AppIconChoice: String, CaseIterable, Identifiable {
 
     /// 传给 `setAlternateIconName` 的键，和 App Icon 集合同名。赛博是主图标，传 nil。
     var alternateName: String? {
-        self == .cyber ? nil : "AppIcon\(rawValue.capitalized)"
+        switch self {
+        case .sticker: "AppIconSticker"
+        case .paper: "AppIconPaper"
+        case .cyber: nil
+        case .porcelain: "AppIconPorcelain"
+        case .plush: "AppIconPlush"
+        case .enamel: "AppIconEnamel"
+        case .jelly: "AppIconJelly"
+        case .wood: "AppIconWood"
+        case .ink: "AppIconInk"
+        case .helmet: "AppIconHelmet"
+        }
     }
 
     var title: String {
@@ -39,14 +50,30 @@ enum AppIconChoice: String, CaseIterable, Identifiable {
     }
 
     /// 设置页里的预览。主图标资源不能用 Image 读出来，所以每张另放一份。
-    var previewAsset: String { "IconChoice\(rawValue.capitalized)" }
+    var previewAsset: String {
+        switch self {
+        case .sticker: "IconChoiceSticker"
+        case .paper: "IconChoicePaper"
+        case .cyber: "IconChoiceCyber"
+        case .porcelain: "IconChoicePorcelain"
+        case .plush: "IconChoicePlush"
+        case .enamel: "IconChoiceEnamel"
+        case .jelly: "IconChoiceJelly"
+        case .wood: "IconChoiceWood"
+        case .ink: "IconChoiceInk"
+        case .helmet: "IconChoiceHelmet"
+        }
+    }
 
+    @MainActor
     static var current: AppIconChoice {
         let name = UIApplication.shared.alternateIconName
         return allCases.first { $0.alternateName == name } ?? .cyber
     }
 
-    static var supported: Bool { UIApplication.shared.supportsAlternateIcons }
+    /// 设备是否支持替换图标在进程生命周期内恒定，缓存一次避免网格逐行重复查系统接口。
+    @MainActor
+    static let supported: Bool = UIApplication.shared.supportsAlternateIcons
 }
 
 /// 设置里点「主屏幕图标」后推入的选择页。iPhone 和 iPad 的设置都进这里。
@@ -57,13 +84,28 @@ struct AppIconPickerScreen: View {
     @State private var message: String?
 
     var body: some View {
+        let palette = JieboTheme.shared.palette
+        let appearance = JieboTheme.shared.appearance
+        let supported = AppIconChoice.supported
+        let anyPending = pending != nil
         ScrollView {
             LazyVGrid(
                 columns: [GridItem(.adaptive(minimum: max(iconSide + 28, 108)), spacing: 16)],
                 spacing: 20
             ) {
                 ForEach(AppIconChoice.allCases) { choice in
-                    iconButton(choice)
+                    AppIconChoiceCell(
+                        choice: choice,
+                        selected: selection == choice,
+                        busy: pending == choice,
+                        disabled: anyPending || !supported,
+                        iconSide: iconSide,
+                        palette: palette,
+                        appearance: appearance
+                    ) {
+                        Task { await apply(choice) }
+                    }
+                    .equatable()
                 }
             }
             .padding(.horizontal, 16)
@@ -76,7 +118,7 @@ struct AppIconPickerScreen: View {
                         .foregroundStyle(JieboColor.ink)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text(AppIconChoice.supported
+                Text(supported
                     ? "iPhone 和 iPad 都会换成这一张。点选之后，系统会再确认一次。"
                     : "这台设备不能更换主屏幕图标。")
                     .font(JieboFont.text(.footnote))
@@ -92,12 +134,53 @@ struct AppIconPickerScreen: View {
         .onAppear { selection = AppIconChoice.current }
     }
 
-    private func iconButton(_ choice: AppIconChoice) -> some View {
-        let selected = selection == choice
-        let busy = pending == choice
-        return Button {
-            Task { await apply(choice) }
-        } label: {
+    @MainActor
+    private func apply(_ choice: AppIconChoice) async {
+        guard choice != selection, pending == nil else { return }
+        guard AppIconChoice.supported else {
+            message = "这台设备不能更换主屏幕图标。"
+            return
+        }
+        pending = choice
+        message = nil
+        let error = await withCheckedContinuation { (continuation: CheckedContinuation<Error?, Never>) in
+            UIApplication.shared.setAlternateIconName(choice.alternateName) { error in
+                continuation.resume(returning: error)
+            }
+        }
+        pending = nil
+        if error != nil {
+            message = "没有换成「\(choice.title)」。"
+            selection = AppIconChoice.current
+        } else {
+            selection = choice
+            message = nil
+        }
+    }
+}
+
+private struct AppIconChoiceCell: View, Equatable {
+    let choice: AppIconChoice
+    let selected: Bool
+    let busy: Bool
+    let disabled: Bool
+    let iconSide: CGFloat
+    let palette: JieboPalette
+    let appearance: JieboAppearance
+    let onTap: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.choice == rhs.choice
+            && lhs.selected == rhs.selected
+            && lhs.busy == rhs.busy
+            && lhs.disabled == rhs.disabled
+            && lhs.iconSide == rhs.iconSide
+            && lhs.palette == rhs.palette
+            && lhs.appearance == rhs.appearance
+    }
+
+    var body: some View {
+        Button(action: onTap) {
             VStack(spacing: 8) {
                 Image(choice.previewAsset)
                     .resizable()
@@ -130,33 +213,9 @@ struct AppIconPickerScreen: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(pending != nil || !AppIconChoice.supported)
+        .disabled(disabled)
         .accessibilityLabel(selected ? "\(choice.title)，当前图标" : choice.title)
         .accessibilityHint(selected ? "已经在用" : "换成这个主屏幕图标")
         .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    @MainActor
-    private func apply(_ choice: AppIconChoice) async {
-        guard choice != selection, pending == nil else { return }
-        guard AppIconChoice.supported else {
-            message = "这台设备不能更换主屏幕图标。"
-            return
-        }
-        pending = choice
-        message = nil
-        let error = await withCheckedContinuation { (continuation: CheckedContinuation<Error?, Never>) in
-            UIApplication.shared.setAlternateIconName(choice.alternateName) { error in
-                continuation.resume(returning: error)
-            }
-        }
-        pending = nil
-        if error != nil {
-            message = "没有换成「\(choice.title)」。"
-            selection = AppIconChoice.current
-        } else {
-            selection = choice
-            message = nil
-        }
     }
 }

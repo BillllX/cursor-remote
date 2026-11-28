@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 
 /// 一套配色的表面色，与 web/app/themes.css 对齐；语义状态色单独维护。
-struct JieboSurfaces {
+struct JieboSurfaces: Equatable {
     var bg: UInt32
     var sidebar: UInt32
     var panel: UInt32
@@ -18,6 +18,21 @@ enum JieboPalette: String, CaseIterable, Identifiable, Sendable {
     case sticker, jiebo, neutral, paper, sand, pine, cool, ink, night, clay
 
     var id: String { rawValue }
+
+    fileprivate var tableIndex: Int {
+        switch self {
+        case .sticker: 0
+        case .jiebo: 1
+        case .neutral: 2
+        case .paper: 3
+        case .sand: 4
+        case .pine: 5
+        case .cool: 6
+        case .ink: 7
+        case .night: 8
+        case .clay: 9
+        }
+    }
 
     var title: String {
         switch self {
@@ -122,6 +137,14 @@ enum JieboAppearance: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    fileprivate var tableIndex: Int {
+        switch self {
+        case .system: 0
+        case .light: 1
+        case .dark: 2
+        }
+    }
+
     var title: String {
         switch self {
         case .system: "跟随系统"
@@ -193,11 +216,6 @@ enum JieboColor {
         let runBg: Color
     }
 
-    private struct CacheKey: Hashable {
-        let palette: JieboPalette
-        let appearance: JieboAppearance
-    }
-
     fileprivate static func isDark(_ traits: UITraitCollection, appearance: JieboAppearance) -> Bool {
         switch appearance {
         case .light: return false
@@ -222,10 +240,13 @@ enum JieboColor {
         }
     }
 
-    private static let cachedPalettes: [CacheKey: PaletteColors] = {
-        var table: [CacheKey: PaletteColors] = [:]
-        table.reserveCapacity(JieboPalette.allCases.count * JieboAppearance.allCases.count)
-        for palette in JieboPalette.allCases {
+    private static let appearanceStride = JieboAppearance.allCases.count
+
+    private static let cachedPalettes: [PaletteColors] = {
+        var table: [PaletteColors] = []
+        table.reserveCapacity(JieboPalette.allCases.count * appearanceStride)
+        for (pIndex, palette) in JieboPalette.allCases.enumerated() {
+            precondition(palette.tableIndex == pIndex, "JieboPalette.tableIndex 与 allCases 顺序不一致")
             let light = palette.light
             let dark = palette.dark
             let lightExtras = palette.extras(dark: false)
@@ -233,14 +254,15 @@ enum JieboColor {
             let wellRatio = palette == .sticker ? 0.04 : 0.45
             let lightWell = blend(light.panel, light.border, wellRatio)
             let darkWell = blend(dark.panel, dark.border, wellRatio)
-            for appearance in JieboAppearance.allCases {
+            for (aIndex, appearance) in JieboAppearance.allCases.enumerated() {
+                precondition(appearance.tableIndex == aIndex, "JieboAppearance.tableIndex 与 allCases 顺序不一致")
                 let c = { (l: UInt32, d: UInt32) in
                     resolvedColor(lightHex: l, darkHex: d, appearance: appearance)
                 }
                 let border = c(light.border, dark.border)
                 let accent = c(light.accent, dark.accent)
                 let user = c(light.user, dark.user)
-                table[CacheKey(palette: palette, appearance: appearance)] = PaletteColors(
+                table.append(PaletteColors(
                     paper: c(light.bg, dark.bg),
                     mist: user,
                     white: c(light.panel, dark.panel),
@@ -259,28 +281,34 @@ enum JieboColor {
                     pineDeep: accent,
                     run: palette == .sticker ? c(0xC83E22, 0xFF7357) : c(0x8A6526, 0xD4B47A),
                     runBg: palette == .sticker ? c(0xFFF0EB, 0x34201B) : c(0xF2E8D2, 0x2C2617)
-                )
+                ))
             }
         }
         return table
     }()
 
-    private static let cachedShimmer: [JieboAppearance: Color] = {
+    private static let cachedShimmer: [Color] = {
         let lightUI = UIColor.white.withAlphaComponent(0.55)
         let darkUI = UIColor.white.withAlphaComponent(0.12)
-        return [
-            .light: Color(uiColor: lightUI),
-            .dark: Color(uiColor: darkUI),
-            .system: Color(uiColor: UIColor { traits in
-                traits.userInterfaceStyle == .dark ? darkUI : lightUI
-            }),
-        ]
+        return JieboAppearance.allCases.enumerated().map { index, appearance in
+            precondition(appearance.tableIndex == index, "JieboAppearance.tableIndex 与 cachedShimmer 顺序不一致")
+            switch appearance {
+            case .system:
+                return Color(uiColor: UIColor { traits in
+                    traits.userInterfaceStyle == .dark ? darkUI : lightUI
+                })
+            case .light:
+                return Color(uiColor: lightUI)
+            case .dark:
+                return Color(uiColor: darkUI)
+            }
+        }
     }()
 
     private static func current() -> PaletteColors {
         let palette = JieboTheme.shared.palette
         let appearance = JieboTheme.shared.appearance
-        return cachedPalettes[CacheKey(palette: palette, appearance: appearance)]!
+        return cachedPalettes[palette.tableIndex * appearanceStride + appearance.tableIndex]
     }
 
     static var paper: Color { current().paper }
@@ -299,7 +327,7 @@ enum JieboColor {
     /// 缩略图占位、浅胶囊的底：卡片色往细边色靠 45%。浅色比卡片略深，深色比卡片略亮——两种主题下都不会比卡片更黑
     static var well: Color { current().well }
     /// 骨架扫光：任何主题下都比底色亮一点（深色里只是一层很淡的白）
-    static var shimmer: Color { cachedShimmer[JieboTheme.shared.appearance]! }
+    static var shimmer: Color { cachedShimmer[JieboTheme.shared.appearance.tableIndex] }
 
     private static func blend(_ a: UInt32, _ b: UInt32, _ t: Double) -> UInt32 {
         func channel(_ shift: UInt32) -> UInt32 {
@@ -435,9 +463,15 @@ extension Color {
     }
 
     init(light: UInt32, dark: UInt32) {
+        if light == dark {
+            self.init(hex: light)
+            return
+        }
+        let lightUI = UIColor(hex: light)
+        let darkUI = UIColor(hex: dark)
         self.init(uiColor: UIColor { traits in
             let isDark = JieboColor.isDark(traits, appearance: JieboTheme.shared.appearance)
-            return isDark ? UIColor(hex: dark) : UIColor(hex: light)
+            return isDark ? darkUI : lightUI
         })
     }
 }
@@ -560,18 +594,34 @@ extension AnyTransition {
     }
 }
 
-/// 全 App 共用的触觉词汇，避免各页面各自选择强度。
+/// 全 App 共用的触觉词汇，避免各页面各自选择强度，并复用反馈生成器避免每次点击重复分配实例。
+@MainActor
 enum JieboHaptic {
+    private static let selectionGenerator = UISelectionFeedbackGenerator()
+    private static let notificationGenerator = UINotificationFeedbackGenerator()
+    private static let lightImpact = UIImpactFeedbackGenerator(style: .light)
+    private static let mediumImpact = UIImpactFeedbackGenerator(style: .medium)
+    private static let heavyImpact = UIImpactFeedbackGenerator(style: .heavy)
+    private static let softImpact = UIImpactFeedbackGenerator(style: .soft)
+    private static let rigidImpact = UIImpactFeedbackGenerator(style: .rigid)
+
     static func selection() {
-        UISelectionFeedbackGenerator().selectionChanged()
+        selectionGenerator.selectionChanged()
     }
 
     static func impact(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .light) {
-        UIImpactFeedbackGenerator(style: style).impactOccurred()
+        switch style {
+        case .light: lightImpact.impactOccurred()
+        case .medium: mediumImpact.impactOccurred()
+        case .heavy: heavyImpact.impactOccurred()
+        case .soft: softImpact.impactOccurred()
+        case .rigid: rigidImpact.impactOccurred()
+        @unknown default: UIImpactFeedbackGenerator(style: style).impactOccurred()
+        }
     }
 
     static func notification(_ type: UINotificationFeedbackGenerator.FeedbackType) {
-        UINotificationFeedbackGenerator().notificationOccurred(type)
+        notificationGenerator.notificationOccurred(type)
     }
 }
 

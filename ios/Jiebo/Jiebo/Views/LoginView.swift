@@ -6,25 +6,14 @@ struct LoginView: View {
     @FocusState private var focused: Bool
 
     private var canEnter: Bool {
-        !store.tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !store.verifying
+        !store.verifying && store.tokenDraft.contains { !$0.isWhitespace && !$0.isNewline }
     }
 
     var body: some View {
         @Bindable var store = store
         ZStack {
-            JieboColor.paper.ignoresSafeArea()
-            if JieboTheme.shared.palette != .sticker {
-                Circle()
-                    .fill(JieboColor.pine.opacity(0.22))
-                    .frame(width: 280, height: 280)
-                    .blur(radius: 40)
-                    .offset(x: -120, y: -220)
-                Circle()
-                    .fill(JieboColor.clay.opacity(0.18))
-                    .frame(width: 240, height: 240)
-                    .blur(radius: 36)
-                    .offset(x: 140, y: 180)
-            }
+            LoginBackdrop(palette: JieboTheme.shared.palette, appearance: JieboTheme.shared.appearance)
+                .equatable()
             VStack(spacing: 0) {
                 Spacer()
                 VStack(alignment: .leading, spacing: 14) {
@@ -87,5 +76,29 @@ struct LoginView: View {
     private var loginStatusLine: String {
         if store.verifying { return "正在核对访问码" }
         return store.connected ? "已连上服务器" : store.linkState.title
+    }
+}
+
+/// 登录页装饰背景：按 (palette, appearance) 判等隔离，避免每次键入访问码重算大半径高斯模糊层。
+private struct LoginBackdrop: View, Equatable {
+    let palette: JieboPalette
+    let appearance: JieboAppearance
+
+    var body: some View {
+        ZStack {
+            JieboColor.paper.ignoresSafeArea()
+            if palette != .sticker {
+                Circle()
+                    .fill(JieboColor.pine.opacity(0.22))
+                    .frame(width: 280, height: 280)
+                    .blur(radius: 40)
+                    .offset(x: -120, y: -220)
+                Circle()
+                    .fill(JieboColor.clay.opacity(0.18))
+                    .frame(width: 240, height: 240)
+                    .blur(radius: 36)
+                    .offset(x: 140, y: 180)
+            }
+        }
     }
 }

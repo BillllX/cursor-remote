@@ -27,10 +27,13 @@ struct ThemeSettingsSheet: View {
                         ThemePaletteCard(
                             palette: palette,
                             selected: theme.palette == palette,
-                            appearance: theme.appearance
+                            activePalette: theme.palette,
+                            appearance: theme.appearance,
+                            reduceMotion: reduceMotion
                         ) {
                             withAnimation(JieboMotion.fade(reduceMotion)) { theme.palette = palette }
                         }
+                        .equatable()
                         .listRowInsets(EdgeInsets(top: 7, leading: 0, bottom: 7, trailing: 0))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -55,18 +58,42 @@ struct ThemeSettingsSheet: View {
 }
 
 /// 一套配色一张卡：左右两块迷你对话界面分别是这套配色的浅色、深色。外观锁定在某一边时，另一边压暗。
-private struct ThemePaletteCard: View {
+private struct ThemePaletteCard: View, Equatable {
     let palette: JieboPalette
     let selected: Bool
+    let activePalette: JieboPalette
     let appearance: JieboAppearance
+    let reduceMotion: Bool
     let onSelect: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.palette == rhs.palette
+            && lhs.selected == rhs.selected
+            && lhs.activePalette == rhs.activePalette
+            && lhs.appearance == rhs.appearance
+            && lhs.reduceMotion == rhs.reduceMotion
+    }
 
     var body: some View {
         Button(action: onSelect) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
-                    ThemeMiniThread(ink: palette.light, dark: false, idle: appearance == .dark)
-                    ThemeMiniThread(ink: palette.dark, dark: true, idle: appearance == .light)
+                    ThemeMiniThread(
+                        ink: palette.light,
+                        dark: false,
+                        idle: appearance == .dark,
+                        activePalette: activePalette,
+                        appearance: appearance
+                    )
+                    .equatable()
+                    ThemeMiniThread(
+                        ink: palette.dark,
+                        dark: true,
+                        idle: appearance == .light,
+                        activePalette: activePalette,
+                        appearance: appearance
+                    )
+                    .equatable()
                 }
                 HStack(alignment: .center, spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
@@ -101,10 +128,12 @@ private struct ThemePaletteCard: View {
 }
 
 /// 迷你对话界面：标题、助理正文、用户气泡、输入胶囊和发送键，颜色直接取这套配色的色值，不跟当前明暗走。
-private struct ThemeMiniThread: View {
+private struct ThemeMiniThread: View, Equatable {
     let ink: JieboSurfaces
     let dark: Bool
     let idle: Bool
+    let activePalette: JieboPalette
+    let appearance: JieboAppearance
 
     var body: some View {
         VStack(spacing: 6) {
