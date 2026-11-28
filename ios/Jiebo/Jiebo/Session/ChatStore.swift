@@ -866,6 +866,7 @@ final class ChatStore {
     var cacheEpoch = 0
     @ObservationIgnored var bootstrapSnapshot: AppBootstrapSnapshot?
     @ObservationIgnored var bootstrapLoadTask: Task<Void, Never>?
+    @ObservationIgnored var bootstrapSaveTask: Task<Void, Never>?
     @ObservationIgnored var bootstrapLoadCompleted = false
     @ObservationIgnored var bootstrapAssistantDirty = false
     @ObservationIgnored var bootstrapWorkspacesDirty = false

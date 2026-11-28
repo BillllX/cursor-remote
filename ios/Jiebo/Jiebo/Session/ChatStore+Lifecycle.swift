@@ -418,6 +418,8 @@ extension ChatStore {
         expiredUploadIds = []
         stateFetchTask?.cancel()
         bootstrapLoadTask?.cancel()
+        bootstrapSaveTask?.cancel()
+        bootstrapSaveTask = nil
         bootstrapSnapshot = nil
         bootstrapLoadCompleted = false
         bootstrapAssistantDirty = false

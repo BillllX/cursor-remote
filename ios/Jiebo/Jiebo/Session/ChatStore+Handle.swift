@@ -50,6 +50,8 @@ extension ChatStore {
             var changedTenant = false
             if let nextTenant = readyTenantId?.nilIfEmpty {
                 if !tenantId.isEmpty, tenantId != nextTenant {
+                    // 切换租户前冲刷旧租户挂起的启动快照，避免最后 800ms 变更被取消丢失
+                    flushBootstrapSnapshotIfNeeded()
                     resetTenantSession()
                 }
                 if tenantId != nextTenant {

@@ -180,14 +180,17 @@ struct StickerLaunchFrame: View {
                     Rectangle().opacity(1 - StickerLaunchTimeline.ease((time - 0.15) / 0.30))
                 } else {
                     // Destination-out punches a genuinely transparent expanding hole through the entire intro.
+                    // 前段未开始中心揭幕（reveal == 0）时跳过离屏高斯模糊圆，降低 60fps 启动动画 GPU 开销。
+                    let revealDiameter = reveal > 0.001 ? hypot(size.width, size.height) * 1.04 * reveal : 0
                     ZStack {
                         Rectangle()
-                        Circle()
-                            .fill(.black)
-                            .frame(width: hypot(size.width, size.height) * 1.04 * reveal,
-                                   height: hypot(size.width, size.height) * 1.04 * reveal)
-                            .blur(radius: 6 * (1 - reveal))
-                            .blendMode(.destinationOut)
+                        if revealDiameter > 0 {
+                            Circle()
+                                .fill(.black)
+                                .frame(width: revealDiameter, height: revealDiameter)
+                                .blur(radius: 6 * (1 - reveal))
+                                .blendMode(.destinationOut)
+                        }
                     }.compositingGroup()
                 }
             }

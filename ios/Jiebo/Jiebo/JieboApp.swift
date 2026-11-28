@@ -74,6 +74,9 @@ private struct JieboSceneRoot: View {
         let active = phase == .active
         let change = SceneActivityRegistry.shared.update(token: scene.token, isActive: active)
         im.setAppActive(change.anyActive)
+        if phase == .inactive || (phase == .background && !change.anyActive) {
+            store.flushBootstrapSnapshotIfNeeded()
+        }
         if phase == .background && !change.anyActive {
             WidgetSnapshotBridge.shared.refresh(from: store)
             AppTrafficMeter.shared.flush()

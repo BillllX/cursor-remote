@@ -256,20 +256,21 @@ struct CollapsedSidebarRail: View {
             railButton(NavigationIconId.workspace.symbol, label: "切换文件夹", action: store.openWorkspaceSwitcher)
             railButton("books.vertical", label: "知识库") { kbOpen = true }
             railButton(NavigationIconId.memory.symbol, label: "记忆") { memoryOpen = true }
-            if store.linkState == .offline {
+            let linkState = store.linkState
+            if linkState == .offline {
                 Button {
                     store.retryConnection()
                 } label: {
-                    LinkStatusDot(state: store.linkState, size: 8)
+                    LinkStatusDot(state: linkState, size: 8)
                         .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(store.linkState.title)
+                .accessibilityLabel(linkState.title)
                 .accessibilityHint("重新连接")
             } else {
-                LinkStatusDot(state: store.linkState, size: 8)
+                LinkStatusDot(state: linkState, size: 8)
                     .padding(.top, 4)
-                    .accessibilityLabel("连接状态，\(store.linkState.title)")
+                    .accessibilityLabel("连接状态，\(linkState.title)")
             }
             railButton(NavigationIconId.account.symbol, label: "设置") { settingsOpen = true }
                 .padding(.bottom, 12)
@@ -322,25 +323,26 @@ struct CollapsedSidebarRail: View {
         tint: Color? = nil,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
+        let isSticker = JieboTheme.shared.palette == .sticker
+        return Button(action: action) {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: symbol)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(on ? (JieboTheme.shared.palette == .sticker ? JieboColor.fillFg : (tint ?? JieboColor.pine)) : (tint ?? JieboColor.ink2))
+                    .foregroundStyle(on ? (isSticker ? JieboColor.fillFg : (tint ?? JieboColor.pine)) : (tint ?? JieboColor.ink2))
                     .frame(width: 36, height: 36)
-                    .background(on ? (JieboTheme.shared.palette == .sticker ? JieboColor.pine : (tint ?? JieboColor.pine).opacity(0.12)) : Color.clear)
+                    .background(on ? (isSticker ? JieboColor.pine : (tint ?? JieboColor.pine).opacity(0.12)) : Color.clear)
                     .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
                             .stroke(
                                 on
-                                    ? (JieboTheme.shared.palette == .sticker ? JieboColor.fillFg : (tint ?? JieboColor.pine).opacity(0.42))
+                                    ? (isSticker ? JieboColor.fillFg : (tint ?? JieboColor.pine).opacity(0.42))
                                     : JieboColor.line,
                                 lineWidth: JieboStroke.outline
                             )
                     )
                     .overlay(alignment: .leading) {
-                        if on && JieboTheme.shared.palette != .sticker {
+                        if on && !isSticker {
                             Capsule()
                                 .fill(tint ?? JieboColor.pine)
                                 .frame(width: 3, height: 22)
@@ -622,59 +624,63 @@ struct SearchToolView: View {
                 .foregroundStyle(JieboColor.dim)
                 .padding(16)
             Spacer()
-        } else if store.searchNameHits.isEmpty, store.searchHits.isEmpty {
-            if store.searchLoading {
-                ProgressView("正在搜索…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if !store.searchContentNote.isEmpty {
-                Text("文件名里没有「\(query)」。\(store.searchContentNote)")
-                    .font(JieboFont.text(.subheadline))
-                    .foregroundStyle(JieboColor.dim)
-                    .padding(16)
-                Spacer()
-            } else {
-                Text("文件名和内容里都没有「\(query)」")
-                    .font(JieboFont.text(.subheadline))
-                    .foregroundStyle(JieboColor.dim)
-                    .padding(16)
-                Spacer()
-            }
         } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(store.searchNameHits, id: \.self) { path in
-                        Button {
-                            openHit(path)
-                        } label: {
-                            hitLabel(title: path, detail: "文件名")
+            // 仅计算一次文件名命中，避免判断空态与渲染列表重复全量扫描 fileIndex
+            let nameHits = store.searchNameHits
+            if nameHits.isEmpty, store.searchHits.isEmpty {
+                if store.searchLoading {
+                    ProgressView("正在搜索…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if !store.searchContentNote.isEmpty {
+                    Text("文件名里没有「\(query)」。\(store.searchContentNote)")
+                        .font(JieboFont.text(.subheadline))
+                        .foregroundStyle(JieboColor.dim)
+                        .padding(16)
+                    Spacer()
+                } else {
+                    Text("文件名和内容里都没有「\(query)」")
+                        .font(JieboFont.text(.subheadline))
+                        .foregroundStyle(JieboColor.dim)
+                        .padding(16)
+                    Spacer()
+                }
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(nameHits, id: \.self) { path in
+                            Button {
+                                openHit(path)
+                            } label: {
+                                hitLabel(title: path, detail: "文件名")
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
-                    }
-                    ForEach(Array(store.searchHits.enumerated()), id: \.offset) { _, hit in
-                        Button {
-                            openHit(hit.path)
-                        } label: {
-                            hitLabel(
-                                title: hit.line > 0 ? "\(hit.path):\(hit.line)" : hit.path,
-                                detail: hit.text
-                            )
+                        ForEach(Array(store.searchHits.enumerated()), id: \.offset) { _, hit in
+                            Button {
+                                openHit(hit.path)
+                            } label: {
+                                hitLabel(
+                                    title: hit.line > 0 ? "\(hit.path):\(hit.line)" : hit.path,
+                                    detail: hit.text
+                                )
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
-                    }
-                    if store.searchTruncated, !store.searchLoading {
-                        Text("结果太多，只显示前 \(store.searchHits.count) 条。换个更具体的关键词试试。")
-                            .font(JieboFont.text(.footnote))
-                            .foregroundStyle(JieboColor.dim)
-                            .padding(16)
-                    }
-                    if !store.searchContentNote.isEmpty, !store.searchLoading {
-                        Text(store.searchContentNote)
-                            .font(JieboFont.text(.footnote))
-                            .foregroundStyle(JieboColor.dim)
-                            .padding(16)
-                    } else if store.searchLoading {
-                        ProgressView("正在搜索内容…")
-                            .padding(16)
+                        if store.searchTruncated, !store.searchLoading {
+                            Text("结果太多，只显示前 \(store.searchHits.count) 条。换个更具体的关键词试试。")
+                                .font(JieboFont.text(.footnote))
+                                .foregroundStyle(JieboColor.dim)
+                                .padding(16)
+                        }
+                        if !store.searchContentNote.isEmpty, !store.searchLoading {
+                            Text(store.searchContentNote)
+                                .font(JieboFont.text(.footnote))
+                                .foregroundStyle(JieboColor.dim)
+                                .padding(16)
+                        } else if store.searchLoading {
+                            ProgressView("正在搜索内容…")
+                                .padding(16)
+                        }
                     }
                 }
             }
@@ -712,16 +718,18 @@ struct GitToolView: View {
     @Environment(ChatStore.self) private var store
     var onOpen: ((String) -> Void)? = nil
 
-    private var paths: [String] { store.gitStatus.keys.sorted() }
-
     var body: some View {
-        if paths.isEmpty {
+        let statusMap = store.gitStatus
+        if statusMap.isEmpty {
             Text("没有未提交的改动")
                 .font(JieboFont.text(.subheadline))
                 .foregroundStyle(JieboColor.dim)
                 .padding(16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
+            let paths = statusMap.keys.sorted()
+            let palette = JieboTheme.shared.palette
+            let appearance = JieboTheme.shared.appearance
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(paths, id: \.self) { path in
@@ -732,20 +740,13 @@ struct GitToolView: View {
                                 store.loadPreview(path, diff: true)
                             }
                         } label: {
-                            HStack(spacing: 8) {
-                                Text(store.gitStatus[path] ?? "")
-                                    .font(JieboFont.text(.caption, weight: .semibold))
-                                    .foregroundStyle(JieboColor.brass)
-                                    .frame(minWidth: 18)
-                                Text(path)
-                                    .font(JieboFont.text(.footnote))
-                                    .foregroundStyle(JieboColor.ink)
-                                    .lineLimit(1)
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .contentShape(Rectangle())
+                            GitStatusRowView(
+                                code: statusMap[path] ?? "",
+                                path: path,
+                                palette: palette,
+                                appearance: appearance
+                            )
+                            .equatable()
                         }
                         .buttonStyle(.plain)
                     }
@@ -754,9 +755,40 @@ struct GitToolView: View {
         }
     }
 }
+
+private struct GitStatusRowView: View, Equatable {
+    let code: String
+    let path: String
+    let palette: JieboPalette
+    let appearance: JieboAppearance
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(code)
+                .font(JieboFont.text(.caption, weight: .semibold))
+                .foregroundStyle(JieboColor.brass)
+                .frame(minWidth: 18)
+            Text(path)
+                .font(JieboFont.text(.footnote))
+                .foregroundStyle(JieboColor.ink)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+    }
+}
+
 struct TerminalToolView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.sceneSessionState) private var sceneSession
+
+    private struct TailScrollSignal: Equatable {
+        let id: String?
+        let outputBytes: Int
+        let tailSuffix: String
+    }
 
     var body: some View {
         let rows = store.shellEntries(for: sceneSession?.workbenchChatId)
@@ -773,21 +805,26 @@ struct TerminalToolView: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
+            let palette = JieboTheme.shared.palette
+            let appearance = JieboTheme.shared.appearance
+            let lastOutput = rows.last?.output ?? ""
+            let tailSignal = TailScrollSignal(
+                id: rows.last?.id,
+                outputBytes: lastOutput.utf8.count,
+                tailSuffix: String(lastOutput.suffix(48))
+            )
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(rows) { row in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("$ \(row.command)")
-                                    .font(JieboFont.monoText(.footnote))
-                                    .foregroundStyle(JieboColor.ink)
-                                Text(row.output.isEmpty ? (row.running ? "正在跑…" : "没有输出") : row.output)
-                                    .font(JieboFont.monoText(.caption))
-                                    .foregroundStyle(row.output.isEmpty ? JieboColor.dim : JieboColor.ink2)
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .padding(.horizontal, 14)
+                            TerminalEntryRowView(
+                                command: row.command,
+                                output: row.output,
+                                running: row.running,
+                                palette: palette,
+                                appearance: appearance
+                            )
+                            .equatable()
                             .id(row.id)
                         }
                     }
@@ -799,7 +836,8 @@ struct TerminalToolView: View {
                 .onChange(of: store.terminalFocusCallId) { _, _ in
                     scrollTerminal(proxy, rows: rows)
                 }
-                .onChange(of: rows.last?.output) { _, _ in
+                // 仅比对末行 id 与 UTF-8 字节数，避免流式刷屏时对数百 KB 字符串逐字节判等
+                .onChange(of: tailSignal) { _, _ in
                     if let id = rows.last?.id {
                         proxy.scrollTo(id, anchor: .bottom)
                     }
@@ -813,5 +851,27 @@ struct TerminalToolView: View {
         if let id {
             proxy.scrollTo(id, anchor: .center)
         }
+    }
+}
+
+private struct TerminalEntryRowView: View, Equatable {
+    let command: String
+    let output: String
+    let running: Bool
+    let palette: JieboPalette
+    let appearance: JieboAppearance
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("$ \(command)")
+                .font(JieboFont.monoText(.footnote))
+                .foregroundStyle(JieboColor.ink)
+            Text(output.isEmpty ? (running ? "正在跑…" : "没有输出") : output)
+                .font(JieboFont.monoText(.caption))
+                .foregroundStyle(output.isEmpty ? JieboColor.dim : JieboColor.ink2)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 14)
     }
 }

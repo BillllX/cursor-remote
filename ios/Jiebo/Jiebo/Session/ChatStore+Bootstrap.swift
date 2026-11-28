@@ -75,9 +75,34 @@ extension ChatStore {
         invalidateMergedFileTreeCache(for: chatId)
     }
 
-    func persistBootstrapSnapshot() {
+    func persistBootstrapSnapshot(immediate: Bool = false) {
         guard bootstrapLoadCompleted, !tenantId.isEmpty, let snapshot = bootstrapSnapshot else { return }
-        AppBootstrapCache.save(snapshot, tenant: tenantId)
+        if immediate {
+            bootstrapSaveTask?.cancel()
+            bootstrapSaveTask = nil
+            AppBootstrapCache.save(snapshot, tenant: tenantId)
+            return
+        }
+        // 合并冷启动/重连瞬间的连续助理、工作区与文件索引更新，避免 1 秒内多次全量序列化几 MB 快照写盘
+        let tenant = tenantId
+        let epoch = cacheEpoch
+        bootstrapSaveTask?.cancel()
+        bootstrapSaveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            guard let self, !Task.isCancelled,
+                  self.cacheEpoch == epoch,
+                  self.tenantId == tenant,
+                  self.bootstrapLoadCompleted,
+                  let latest = self.bootstrapSnapshot
+            else { return }
+            self.bootstrapSaveTask = nil
+            AppBootstrapCache.save(latest, tenant: tenant)
+        }
+    }
+
+    func flushBootstrapSnapshotIfNeeded() {
+        guard bootstrapSaveTask != nil else { return }
+        persistBootstrapSnapshot(immediate: true)
     }
 
     func updateCachedAssistant(_ state: AssistantState, memoryRevision: Int?) {
@@ -95,7 +120,8 @@ extension ChatStore {
         snapshot.assistantMemoryRevision = nil
         bootstrapAssistantDirty = true
         bootstrapSnapshot = snapshot
-        persistBootstrapSnapshot()
+        // 清空失效助理缓存需立刻入队，避免 800ms 窗口内切租户或退后台遗留旧快照
+        persistBootstrapSnapshot(immediate: true)
     }
 
     func updateCachedWorkspaces(root: String, items: [WorkspaceItem]) {
@@ -114,13 +140,21 @@ extension ChatStore {
         bootstrapFileIndexTombstones.remove(chatId)
         snapshot.fileIndexes.removeValue(forKey: chatId)
         snapshot.fileIndexes[chatId] = .init(paths: paths, truncated: truncated, status: status)
-        while snapshot.fileIndexes.count > limit {
+        if snapshot.fileIndexes.count > limit {
             let protected = Set([chatId, activeId, chatHomeThreadChatId].compactMap { $0 })
-            guard let victim = snapshot.fileIndexes.keys.sorted().first(where: { !protected.contains($0) })
-                ?? snapshot.fileIndexes.keys.sorted().first
-            else { break }
-            snapshot.fileIndexes.removeValue(forKey: victim)
-            invalidateMergedFileTreeCache(for: victim)
+            let sortedKeys = snapshot.fileIndexes.keys.sorted()
+            var overflow = snapshot.fileIndexes.count - limit
+            // 先按字典序淘汰非受保护会话，再在极端情况下淘汰剩余键，避免 while 内重复排序
+            for key in sortedKeys where overflow > 0 && !protected.contains(key) {
+                snapshot.fileIndexes.removeValue(forKey: key)
+                invalidateMergedFileTreeCache(for: key)
+                overflow -= 1
+            }
+            for key in sortedKeys where overflow > 0 && snapshot.fileIndexes[key] != nil {
+                snapshot.fileIndexes.removeValue(forKey: key)
+                invalidateMergedFileTreeCache(for: key)
+                overflow -= 1
+            }
         }
         bootstrapFileIndexesDirty = true
         bootstrapSnapshot = snapshot
