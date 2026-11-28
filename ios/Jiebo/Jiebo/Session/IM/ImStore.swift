@@ -118,10 +118,16 @@ final class ImStore {
     }
     var avatarTicket: ImTicket?
     var convs: [String: ImConvRow] = [:] {
-        didSet { invalidateDirectoryCache() }
+        didSet {
+            invalidateDirectoryCache()
+            let nextUnread = convs.values.reduce(0) { $0 + $1.unread }
+            if nextUnread != totalUnread { totalUnread = nextUnread }
+        }
     }
     var tickets: [String: ImTicket] = [:]
     var blocked: Set<String> = []
+    /// 缓存全局未读数：仅在数值真实变化时更新，避免 convs 非未读字段变动误唤醒角标与推送观察者。
+    private(set) var totalUnread = 0
     /// 按会话隔离的时间线盒、草稿盒与按消息隔离的上传进度盒，消除全局字典广播。
     @ObservationIgnored private var timelineBoxes: [String: ImTimelineBox] = [:]
     private(set) var timelineBoxesEpoch = 0
@@ -135,6 +141,11 @@ final class ImStore {
         revision: UInt64,
         query: String,
         result: (chatted: [ImDirectoryRow], others: [ImDirectoryRow])
+    )?
+    @ObservationIgnored private var groupDirectoryCache: (
+        revision: UInt64,
+        query: String,
+        result: [ImConvRow]
     )?
     /// Collab 运行图是网关规范化服务数据；界面只读，审批和执行仍留在既有安全边界。
     var collabRuns: [String: [CollabRunSnapshot]] = [:]
@@ -215,8 +226,6 @@ final class ImStore {
     init() {}
 
     var meId: String { me?.id ?? tenant }
-
-    var totalUnread: Int { convs.values.reduce(0) { $0 + $1.unread } }
 
     /// 正停在这个会话、聊天主页在前面、App 在前台
     func isViewing(_ convId: String) -> Bool {
@@ -310,6 +319,7 @@ final class ImStore {
 
     private func invalidateDirectoryCache() {
         directoryCache = nil
+        groupDirectoryCache = nil
         directoryRevision &+= 1
     }
 
@@ -496,29 +506,71 @@ final class ImStore {
         let now = Self.nowMs
         if !contactsLoaded {
             if me == nil { me = snapshot.me }
-            for user in snapshot.users where users[user.id] == nil { users[user.id] = user }
+            if !snapshot.users.isEmpty {
+                var nextUsers = users
+                var changed = false
+                for user in snapshot.users where nextUsers[user.id] == nil {
+                    nextUsers[user.id] = user
+                    changed = true
+                }
+                if changed { users = nextUsers }
+            }
         }
         if !listLoaded {
-            for row in snapshot.convs where convs[row.convId] == nil {
-                convs[row.convId] = row
-                if let ticket = row.ticket, ticket.exp > now, tickets[row.convId] == nil { tickets[row.convId] = ticket }
+            if !snapshot.convs.isEmpty {
+                var nextConvs = convs
+                var nextTickets = tickets
+                var convsChanged = false
+                var ticketsChanged = false
+                for row in snapshot.convs where nextConvs[row.convId] == nil {
+                    nextConvs[row.convId] = row
+                    convsChanged = true
+                    if let ticket = row.ticket, ticket.exp > now, nextTickets[row.convId] == nil {
+                        nextTickets[row.convId] = ticket
+                        ticketsChanged = true
+                    }
+                }
+                if convsChanged { convs = nextConvs }
+                if ticketsChanged { tickets = nextTickets }
             }
-            if blocked.isEmpty { blocked = Set(snapshot.blocked) }
+            if blocked.isEmpty, !snapshot.blocked.isEmpty { blocked = Set(snapshot.blocked) }
         }
         for (key, text) in snapshot.drafts where (draftBoxes[key]?.text ?? "").isEmpty {
             let box = draftBox(for: key)
             if box.text != text { box.text = text }
         }
-        for (key, seqs) in snapshot.hidden { hidden[key, default: []].formUnion(seqs) }
-        for (key, seqs) in snapshot.heardVoice { heardVoice[key, default: []].formUnion(seqs) }
-        for (convId, rows) in snapshot.voiceText {
-            for (seq, text) in rows {
-                if let number = Int(seq), voiceText[convId]?[number] == nil {
-                    voiceText[convId, default: [:]][number] = text
+        if !snapshot.hidden.isEmpty {
+            var nextHidden = hidden
+            for (key, seqs) in snapshot.hidden { nextHidden[key, default: []].formUnion(seqs) }
+            for convId in Array(nextHidden.keys) {
+                var gone = nextHidden[convId] ?? []
+                let floor = hideBefore(convId)
+                if floor > 0 { gone = gone.filter { $0 > floor } }
+                if gone.count > Self.hiddenLimit {
+                    gone = Set(gone.sorted(by: >).prefix(Self.hiddenLimit))
+                }
+                nextHidden[convId] = gone.isEmpty ? nil : gone
+            }
+            hidden = nextHidden
+        }
+        if !snapshot.heardVoice.isEmpty {
+            var nextHeard = heardVoice
+            for (key, seqs) in snapshot.heardVoice { nextHeard[key, default: []].formUnion(seqs) }
+            heardVoice = nextHeard
+        }
+        if !snapshot.voiceText.isEmpty {
+            var nextVoiceText = voiceText
+            var changed = false
+            for (convId, rows) in snapshot.voiceText {
+                for (seq, text) in rows {
+                    if let number = Int(seq), nextVoiceText[convId]?[number] == nil {
+                        nextVoiceText[convId, default: [:]][number] = text
+                        changed = true
+                    }
                 }
             }
+            if changed { voiceText = nextVoiceText }
         }
-        for convId in Array(hidden.keys) { pruneHidden(convId) }
         // 待发消息还没从 conv 文件读进来时不能扫：keep 是空的，会把还要重发的附件清掉。
         guard timelinesReady else { return }
         ImCache.sweepOutbox(tenant: tenant, keep: pendingOutboxFiles())
@@ -613,22 +665,72 @@ final class ImStore {
             contactsLoaded = true
             saveStateSoon()
         case .list(let rows, let blockedIds, let more, let cursor):
+            // 整页会话先在局部字典合并，一次性写回 convs/tickets，避免每页百次 Observation 广播与目录缓存失效
+            var nextConvs = convs
+            var nextTickets = tickets
+            var convsChanged = false
+            var ticketsChanged = false
+            var hidePruneIds: [String] = []
             for row in rows {
-                upsert(row)
+                var next = row
+                if let old = nextConvs[row.convId] {
+                    if liveSinceListRequest.contains(row.convId) {
+                        // 这页发出后该会话收到过实时更新（撤回、置顶、免打扰不改 maxSeq，所以不能拿 maxSeq 比新旧）：
+                        // 行里的最后一条、未读、已读线、置顶、免打扰都可能比本地旧，整段保留本地，拉完再对一次账
+                        next = old
+                        listSkipped = true
+                    }
+                    next.hideBefore = max(old.hideBefore, row.hideBefore)
+                }
+                if next.hideBefore > 0 {
+                    applyHideBeforeInPlace(row.convId, conv: &next)
+                    hidePruneIds.append(row.convId)
+                }
+                if nextConvs[row.convId] != next {
+                    nextConvs[row.convId] = next
+                    convsChanged = true
+                }
+                if let ticket = row.ticket, nextTickets[row.convId] != ticket {
+                    nextTickets[row.convId] = ticket
+                    ticketsChanged = true
+                }
                 listSeen.insert(row.convId)
             }
-            blocked = Set(blockedIds)
+            if !more, listPaging {
+                // 列表里没有了的会话（对方不可见、全被拒收）从本机去掉；翻页期间新来的保留
+                for id in Array(nextConvs.keys) where !listSeen.contains(id) && !listTouched.contains(id) {
+                    nextConvs[id] = nil
+                    convsChanged = true
+                }
+            }
+            if convsChanged { convs = nextConvs }
+            if ticketsChanged { tickets = nextTickets }
+            if !hidePruneIds.isEmpty {
+                var nextHidden = hidden
+                var hiddenChanged = false
+                for convId in hidePruneIds {
+                    guard var gone = nextHidden[convId] else { continue }
+                    let floor = hideBefore(convId)
+                    let beforeCount = gone.count
+                    if floor > 0 { gone = gone.filter { $0 > floor } }
+                    if gone.count > Self.hiddenLimit {
+                        gone = Set(gone.sorted(by: >).prefix(Self.hiddenLimit))
+                    }
+                    let updated: Set<Int>? = gone.isEmpty ? nil : gone
+                    if updated != nextHidden[convId] || gone.count != beforeCount {
+                        nextHidden[convId] = updated
+                        hiddenChanged = true
+                    }
+                }
+                if hiddenChanged { hidden = nextHidden }
+            }
+            let nextBlocked = Set(blockedIds)
+            if blocked != nextBlocked { blocked = nextBlocked }
             if more, let cursor {
                 // 下一页由网关在这之后算：之前到过的实时更新它都已经包含了
                 liveSinceListRequest = []
                 send(.imList(cursor: cursor, limit: 100))
                 return
-            }
-            // 列表里没有了的会话（对方不可见、全被拒收）从本机去掉；翻页期间新来的保留
-            if listPaging {
-                for id in Array(convs.keys) where !listSeen.contains(id) && !listTouched.contains(id) {
-                    convs[id] = nil
-                }
             }
             listPaging = false
             listSeen = []
@@ -818,22 +920,6 @@ final class ImStore {
         saveStateSoon()
     }
 
-    private func upsert(_ row: ImConvRow) {
-        var next = row
-        if let old = convs[row.convId] {
-            if liveSinceListRequest.contains(row.convId) {
-                // 这页发出后该会话收到过实时更新（撤回、置顶、免打扰不改 maxSeq，所以不能拿 maxSeq 比新旧）：
-                // 行里的最后一条、未读、已读线、置顶、免打扰都可能比本地旧，整段保留本地，拉完再对一次账
-                next = old
-                listSkipped = true
-            }
-            next.hideBefore = max(old.hideBefore, row.hideBefore)
-        }
-        convs[row.convId] = next
-        if let ticket = row.ticket { tickets[row.convId] = ticket }
-        applyHideBefore(row.convId)
-    }
-
     /// 实时更新或本机改动落到了这个会话：在途的列表页不能再覆盖它
     private func noteLive(_ convId: String) {
         if listPaging { liveSinceListRequest.insert(convId) }
@@ -884,7 +970,14 @@ final class ImStore {
     /// 清空聊天记录之后：之前的消息从本机去掉，已读线推到它，最后一条也跟着清
     private func applyHideBefore(_ convId: String) {
         guard var conv = convs[convId], conv.hideBefore > 0 else { return }
+        applyHideBeforeInPlace(convId, conv: &conv)
+        convs[convId] = conv
+        pruneHidden(convId)
+    }
+
+    private func applyHideBeforeInPlace(_ convId: String, conv: inout ImConvRow) {
         let floor = conv.hideBefore
+        guard floor > 0 else { return }
         let items = rawMessages(convId)
         if items.contains(where: { ($0.seq ?? Int.max) <= floor }) {
             setTimelineMessages(items.filter { ($0.seq ?? Int.max) > floor }, for: convId)
@@ -894,8 +987,6 @@ final class ImStore {
         conv.readSeq = max(conv.readSeq, floor)
         // 未读以网关下发的为准（settings 带 unread）；这里只处理确定为 0 的情况
         if conv.readSeq >= conv.maxSeq { conv.unread = 0 }
-        convs[convId] = conv
-        pruneHidden(convId)
     }
 
     /// 本机删掉的 seq：清空线以下的不用再记；每个会话只留最新的 hiddenLimit 条
@@ -913,13 +1004,11 @@ final class ImStore {
     private func pendingOutboxFiles() -> Set<String> {
         var names = Set<String>()
         for box in timelineBoxes.values {
-            let items = box.messages
-            for item in items where item.seq == nil {
-                guard let outgoing = item.outgoing else { continue }
-                names.insert(outgoing.file)
-                names.insert(outgoing.thumbFile)
-            }
-            for item in items where item.seq == nil {
+            for item in box.messages where item.seq == nil {
+                if let outgoing = item.outgoing {
+                    names.insert(outgoing.file)
+                    names.insert(outgoing.thumbFile)
+                }
                 if let upload = item.upload { names.insert(upload.file) }
             }
         }
@@ -1985,10 +2074,14 @@ final class ImStore {
         return result
     }
 
-    /// 协作群使用既有 IM 会话投影；iOS 只提供运行图读取入口，不开放 collab_op。
+    /// 协作群使用既有 IM 会话投影；iOS 只提供运行图读取入口，不开放 collab_op；按 directoryRevision + query 缓存。
     func groupConversations(query: String) -> [ImConvRow] {
+        let rev = directoryRevision
+        if let hit = groupDirectoryCache, hit.revision == rev, hit.query == query {
+            return hit.result
+        }
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return convs.values
+        let result = convs.values
             .filter { row in
                 guard row.kind == "group" else { return false }
                 return needle.isEmpty || (row.title ?? "协作群").localizedCaseInsensitiveContains(needle)
@@ -2000,6 +2093,8 @@ final class ImStore {
                 if left != right { return left > right }
                 return lhs.convId < rhs.convId
             }
+        groupDirectoryCache = (rev, query, result)
+        return result
     }
 
     /// 视图层观察态：订阅单会话 latestPending，避免独立行视图漏刷新。

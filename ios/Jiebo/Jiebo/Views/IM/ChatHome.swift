@@ -237,7 +237,15 @@ struct ChatListView: View {
             if !groups.isEmpty {
                 Section {
                     ForEach(groups, id: \.convId) { group in
-                        groupRow(group)
+                        ImGroupRow(
+                            group: group,
+                            selected: destination == .group(group.convId),
+                            onSelect: {
+                                setDestination(.group(group.convId))
+                                im.syncCollab(convId: group.convId)
+                            }
+                        )
+                        .equatable()
                     }
                 } header: {
                     JieboListHeader("iOS 协作")
@@ -246,7 +254,12 @@ struct ChatListView: View {
             if !rows.others.isEmpty {
                 Section {
                     ForEach(rows.others) { row in
-                        contactRow(row)
+                        ImContactRow(
+                            user: row.user,
+                            selected: destination == .person(row.user.id),
+                            onSelect: { setDestination(.person(row.user.id)) }
+                        )
+                        .equatable()
                     }
                 } header: {
                     JieboListHeader(rows.chatted.isEmpty ? "平台上的人" : "还没聊过")
@@ -274,16 +287,7 @@ struct ChatListView: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 if let switchPhoneSpace {
-                    Button {
-                        switchPhoneSpace(.assistant)
-                    } label: {
-                        AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32)
-                            .accessibilityHidden(true)
-                            .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PressScaleButtonStyle())
-                    .accessibilityLabel("返回小驳")
+                    ChatListAssistantAvatarButton(onTap: { switchPhoneSpace(.assistant) })
                 } else {
                     Button(action: openSettings) {
                         Image(systemName: NavigationIconId.account.symbol)
@@ -294,17 +298,7 @@ struct ChatListView: View {
                 }
             }
             ToolbarItem(placement: .principal) {
-                VStack(spacing: 1) {
-                    Text("聊天与协作")
-                        .font(JieboFont.text(.headline))
-                        .foregroundStyle(JieboColor.ink)
-                    if !im.online {
-                        Text(store.connected ? "服务器没开聊天功能" : (store.linkState == .offline ? "已断开" : "正在连接…"))
-                            .font(JieboFont.text(.caption2))
-                            .foregroundStyle(store.linkState == .offline ? JieboColor.danger : JieboColor.dim)
-                    }
-                }
-                .accessibilityElement(children: .combine)
+                ChatListTitleView()
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -328,63 +322,6 @@ struct ChatListView: View {
             }
         }
     }
-
-    // MARK: 行
-
-    private func groupRow(_ group: ImConvRow) -> some View {
-        let selected = destination == .group(group.convId)
-        return Button {
-            setDestination(.group(group.convId))
-            im.syncCollab(convId: group.convId)
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: NavigationIconId.collab.symbol)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(JieboColor.brass)
-                    .frame(width: 48, height: 48)
-                    .background(JieboColor.sidebar)
-                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-                    .overlay(alignment: .topTrailing) { ImUnreadMark(conv: group).offset(x: 6, y: -6) }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(group.title ?? "协作群")
-                        .font(JieboFont.text(.body, weight: .medium))
-                        .foregroundStyle(JieboColor.ink)
-                        .lineLimit(1)
-                    Text(group.memberCount > 0 ? "\(group.memberCount) 位成员 · 只读运行图" : "只读运行图")
-                        .font(JieboFont.text(.subheadline))
-                        .foregroundStyle(JieboColor.dim)
-                }
-                Spacer()
-            }
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(selected ? JieboColor.mist : JieboColor.paper)
-        .accessibilityLabel("\(group.title ?? "协作群")，只读协作运行图")
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    private func contactRow(_ row: ImDirectoryRow) -> some View {
-        Button {
-            setDestination(.person(row.user.id))
-        } label: {
-            HStack(spacing: 12) {
-                ImAvatar(user: row.user, size: 40)
-                Text(row.user.nickname)
-                    .font(JieboFont.text(.body))
-                    .foregroundStyle(JieboColor.ink)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(destination == .person(row.user.id) ? JieboColor.mist : JieboColor.paper)
-        .accessibilityLabel(row.user.nickname)
-    }
-
 
     private var destination: ChatDestination? {
         sceneSession?.chatDestination ?? store.chatHomeDestination
@@ -426,6 +363,121 @@ struct ChatListView: View {
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// 独立观察小驳姿态的返回按钮，避免后台姿态变更触发整张 ChatListView 重算。
+private struct ChatListAssistantAvatarButton: View {
+    @Environment(ChatStore.self) private var store
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32)
+                .accessibilityHidden(true)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScaleButtonStyle())
+        .accessibilityLabel("返回小驳")
+    }
+}
+
+/// 独立观察连接状态的标题视图，避免断线/重连抖动波及联系人列表。
+private struct ChatListTitleView: View {
+    @Environment(ImStore.self) private var im
+    @Environment(ChatStore.self) private var store
+
+    var body: some View {
+        VStack(spacing: 1) {
+            Text("聊天与协作")
+                .font(JieboFont.text(.headline))
+                .foregroundStyle(JieboColor.ink)
+            if !im.online {
+                Text(store.connected ? "服务器没开聊天功能" : (store.linkState == .offline ? "已断开" : "正在连接…"))
+                    .font(JieboFont.text(.caption2))
+                    .foregroundStyle(store.linkState == .offline ? JieboColor.danger : JieboColor.dim)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct ImGroupRow: View, Equatable {
+    let group: ImConvRow
+    let selected: Bool
+    var palette: JieboPalette = JieboTheme.shared.palette
+    var appearance: JieboAppearance = JieboTheme.shared.appearance
+    let onSelect: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.group == rhs.group
+            && lhs.selected == rhs.selected
+            && lhs.palette == rhs.palette
+            && lhs.appearance == rhs.appearance
+    }
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 12) {
+                Image(systemName: NavigationIconId.collab.symbol)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(JieboColor.brass)
+                    .frame(width: 48, height: 48)
+                    .background(JieboColor.sidebar)
+                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .overlay(alignment: .topTrailing) { ImUnreadMark(conv: group).offset(x: 6, y: -6) }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(group.title ?? "协作群")
+                        .font(JieboFont.text(.body, weight: .medium))
+                        .foregroundStyle(JieboColor.ink)
+                        .lineLimit(1)
+                    Text(group.memberCount > 0 ? "\(group.memberCount) 位成员 · 只读运行图" : "只读运行图")
+                        .font(JieboFont.text(.subheadline))
+                        .foregroundStyle(JieboColor.dim)
+                }
+                Spacer()
+            }
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(selected ? JieboColor.mist : JieboColor.paper)
+        .accessibilityLabel("\(group.title ?? "协作群")，只读协作运行图")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+private struct ImContactRow: View, Equatable {
+    let user: ImUser
+    let selected: Bool
+    var palette: JieboPalette = JieboTheme.shared.palette
+    var appearance: JieboAppearance = JieboTheme.shared.appearance
+    let onSelect: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.user == rhs.user
+            && lhs.selected == rhs.selected
+            && lhs.palette == rhs.palette
+            && lhs.appearance == rhs.appearance
+    }
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 12) {
+                ImAvatar(user: user, size: 40)
+                Text(user.nickname)
+                    .font(JieboFont.text(.body))
+                    .foregroundStyle(JieboColor.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(selected ? JieboColor.mist : JieboColor.paper)
+        .accessibilityLabel(user.nickname)
     }
 }
 
@@ -611,7 +663,9 @@ struct ImAvatar: View {
     private var pixel: Int { Int(size * displayScale) }
 
     private var taskKey: String {
-        "\(user.avatar ?? "")|\(im.avatarTicket?.sig ?? "")"
+        // 无头像时不订阅 im.avatarTicket，避免票据刷新误唤醒整张列表里的纯文字头像
+        guard let avatar = user.avatar, !avatar.isEmpty else { return "" }
+        return "\(im.tenant)|\(avatar)|\(im.avatarTicket?.sig ?? "")"
     }
 
     static func tint(for id: String) -> Color {
@@ -621,7 +675,7 @@ struct ImAvatar: View {
 
     @MainActor
     private func load() async {
-        guard let blob = user.avatar else {
+        guard let blob = user.avatar, !blob.isEmpty else {
             image = nil
             return
         }
