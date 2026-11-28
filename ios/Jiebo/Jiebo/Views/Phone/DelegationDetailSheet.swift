@@ -9,6 +9,7 @@ struct DelegationDetailSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var stopConfirm = false
     @State private var stopping = false
+    @State private var clockTick = Date()
 
     /// 过程区最多显示的步骤数
     private static let processLimit = 30
@@ -22,17 +23,19 @@ struct DelegationDetailSheet: View {
     }
 
     /// 子会话（本机没同步到时为 nil）
-    private var childChat: ChatSession? {
-        guard let childId = delegation?.childChatId, !childId.isEmpty else { return nil }
+    private func childChat(for row: AssistantDelegation?) -> ChatSession? {
+        guard let childId = row?.childChatId, !childId.isEmpty else { return nil }
         return store.chats.first(where: { $0.id == childId })
     }
 
     var body: some View {
+        let row = delegation
+        let chat = childChat(for: row)
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    if let row = delegation {
-                        content(row)
+                    if let row {
+                        content(row, chat: chat)
                     } else {
                         AssistantMutedText("这项委派已不存在")
                             .padding(.top, 24)
@@ -60,10 +63,10 @@ struct DelegationDetailSheet: View {
             Text("停掉后已经改过的文件不会自动还原")
         }
         .onAppear { loadProcess() }
-        .onChange(of: childChat != nil) { _, hasChat in
+        .onChange(of: chat != nil) { _, hasChat in
             if hasChat { loadProcess() }
         }
-        .onChange(of: delegation?.status) { _, status in
+        .onChange(of: row?.status) { _, status in
             if status != "running" && status != "awaiting" { stopping = false }
         }
     }
@@ -71,7 +74,7 @@ struct DelegationDetailSheet: View {
     // MARK: 内容
 
     @ViewBuilder
-    private func content(_ row: AssistantDelegation) -> some View {
+    private func content(_ row: AssistantDelegation, chat: ChatSession?) -> some View {
         let approvals = (store.assistantState?.approvals ?? []).filter { $0.delegationId == row.id }
         header(row)
         if row.status == "awaiting", !approvals.isEmpty {
@@ -88,8 +91,8 @@ struct DelegationDetailSheet: View {
                     .assistantCard()
             }
         }
-        processSection
-        filesSection
+        processSection(row: row, chat: chat)
+        filesSection(chat: chat)
         if let reason = row.waitReason { AssistantMutedText(reason) }
         DelegationQueueAction(item: row, fullWidth: true)
         stopSection(row)
@@ -102,11 +105,19 @@ struct DelegationDetailSheet: View {
                 .font(JieboFont.text(.title3, weight: .semibold))
                 .foregroundStyle(JieboColor.ink)
                 .fixedSize(horizontal: false, vertical: true)
-            TimelineView(.periodic(from: .now, by: 30)) { context in
-                Text(metaLine(row, now: context.date))
-                    .font(JieboFont.text(.caption))
-                    .foregroundStyle(JieboColor.dim)
-            }
+            // 仅进行中的委派每 30 秒刷新已用时；已结束委派不再持有定时器
+            Text(metaLine(row, now: clockTick))
+                .font(JieboFont.text(.caption))
+                .foregroundStyle(JieboColor.dim)
+                .task(id: row.endedAt == nil) {
+                    guard row.endedAt == nil else { return }
+                    clockTick = Date()
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: .seconds(30))
+                        guard !Task.isCancelled else { return }
+                        clockTick = Date()
+                    }
+                }
             HStack(spacing: 5) {
                 Circle()
                     .fill(colors.fg)
@@ -144,27 +155,27 @@ struct DelegationDetailSheet: View {
 
     // MARK: 过程（只读）
 
-    private var processSection: some View {
+    private func processSection(row: AssistantDelegation, chat: ChatSession?) -> some View {
         AssistantSection("过程") {
-            if let chat = childChat {
+            if let chat {
                 let tools = chat.turns.last?.tools ?? []
                 if tools.isEmpty {
                     AssistantMutedText(chat.turnsComplete ? "还没有步骤。" : (store.delegationProcessPendingTitle(chatId: chat.id) ?? "正在加载过程…"))
                 } else {
                     processRows(tools)
                 }
-            } else if delegation?.childChatId.isEmpty != false {
+            } else if row.childChatId.isEmpty {
                 AssistantMutedText("这项委派没有单独的过程记录")
             } else {
-                AssistantMutedText(store.delegationProcessPendingTitle(chatId: delegation?.childChatId) ?? "正在读取过程…")
+                AssistantMutedText(store.delegationProcessPendingTitle(chatId: row.childChatId) ?? "正在读取过程…")
             }
         }
     }
 
     /// 子会话最后一轮的文件。按子会话 id 读（它的工作区），先收起 sheet：预览层和 Quick Look 都在 sheet 下面
     @ViewBuilder
-    private var filesSection: some View {
-        if let chat = childChat, let turn = chat.turns.last, !turn.cardFiles.isEmpty {
+    private func filesSection(chat: ChatSession?) -> some View {
+        if let chat, let turn = chat.turns.last, !turn.cardFiles.isEmpty {
             AssistantSection("文件") {
                 TurnFileCards(turn: turn, chatId: chat.id, beforeOpen: { dismiss() })
             }
@@ -179,37 +190,11 @@ struct DelegationDetailSheet: View {
                 AssistantMutedText("更早还有 \(hidden) 步")
             }
             ForEach(shown) { tool in
-                processRow(tool)
+                DelegationProcessRow(tool: tool)
+                    .equatable()
             }
         }
         .assistantCard()
-    }
-
-    private func processRow(_ tool: ToolCall) -> some View {
-        let running = tool.status == "running"
-        let failed = tool.status == "error"
-        let color: Color = running ? JieboColor.run : (failed ? JieboColor.danger : JieboColor.ok)
-        let symbol = running ? "ellipsis" : (failed ? "xmark" : "checkmark")
-        return HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: symbol)
-                .font(JieboFont.text(.caption2, weight: .semibold))
-                .foregroundStyle(color)
-                .frame(width: 14)
-            Text(running ? "正在\(Self.verb(for: tool))" : Self.verb(for: tool))
-                .font(JieboFont.text(.footnote, weight: .medium))
-                .foregroundStyle(JieboColor.ink)
-            Text(tool.summary)
-                .font(JieboFont.monoText(.caption))
-                .foregroundStyle(JieboColor.dim)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 0)
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    private static func verb(for tool: ToolCall) -> String {
-        ToolCardView.chineseVerb(tool)
     }
 
     // MARK: 停止
@@ -238,5 +223,35 @@ struct DelegationDetailSheet: View {
     private func loadProcess() {
         guard let childId = delegation?.childChatId, !childId.isEmpty else { return }
         store.ensureTurnsLoaded(childId)
+    }
+}
+
+private struct DelegationProcessRow: View, Equatable {
+    let tool: ToolCall
+    var palette: JieboPalette = JieboTheme.shared.palette
+    var appearance: JieboAppearance = JieboTheme.shared.appearance
+
+    var body: some View {
+        let running = tool.status == "running"
+        let failed = tool.status == "error"
+        let color: Color = running ? JieboColor.run : (failed ? JieboColor.danger : JieboColor.ok)
+        let symbol = running ? "ellipsis" : (failed ? "xmark" : "checkmark")
+        let verb = ToolCardView.chineseVerb(tool)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: symbol)
+                .font(JieboFont.text(.caption2, weight: .semibold))
+                .foregroundStyle(color)
+                .frame(width: 14)
+            Text(running ? "正在\(verb)" : verb)
+                .font(JieboFont.text(.footnote, weight: .medium))
+                .foregroundStyle(JieboColor.ink)
+            Text(tool.summary)
+                .font(JieboFont.monoText(.caption))
+                .foregroundStyle(JieboColor.dim)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
     }
 }

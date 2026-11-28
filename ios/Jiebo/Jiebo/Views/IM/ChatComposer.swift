@@ -54,7 +54,7 @@ private struct ImLargeImageBatch {
 }
 
 extension ImPickTemp {
-    /// 相册里选中的一张落成临时文件：优先让系统直接给文件；不行再取字节写成文件（字节写完就释放）
+    /// 相册里选中的一张落成临时文件：优先让系统直接给文件；不行再取字节在后台写成文件（字节写完就释放）
     @MainActor
     static func load(_ item: PhotosPickerItem) async -> URL? {
         if let picked = try? await item.loadTransferable(type: ImPickedFile.self) {
@@ -62,7 +62,9 @@ extension ImPickTemp {
         }
         guard let data = try? await item.loadTransferable(type: Data.self) else { return nil }
         let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "img"
-        return write(data, ext: ext)
+        return await Task.detached(priority: .userInitiated) {
+            write(data, ext: ext)
+        }.value
     }
 }
 
@@ -84,7 +86,10 @@ struct ChatComposer: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var pickerOpen = false
     @State private var cameraOpen = false
+    @State private var cameraDismissed = true
     @State private var cameraShot: URL?
+    @State private var cameraTask: Task<Void, Never>?
+    @State private var composerActive = false
     @State private var picked: ImPickedImages?
     @State private var voiceMode = false
     @State private var recorder = ImVoiceRecorder()
@@ -171,18 +176,21 @@ struct ChatComposer: View {
             }
         }
         .onAppear {
+            composerActive = true
             guard !loadedDraft else { return }
             loadedDraft = true
             draftTenant = im.tenant
             replaceDraft(im.draft(for: convId))
         }
         .onChange(of: im.tenant) { _, nextTenant in
+            cancelPendingCameraShot()
             draftBuffer.cancelPersist()
             draftTenant = nextTenant
             ignoreDraftEcho = nil
             replaceDraft(nextTenant.isEmpty ? "" : im.draft(for: convId))
         }
         .onChange(of: convId) { oldConvId, nextConvId in
+            cancelPendingCameraShot()
             flushDraft(for: oldConvId, commitComposition: true)
             ignoreDraftEcho = nil
             replaceDraft(im.draft(for: nextConvId))
@@ -200,6 +208,8 @@ struct ChatComposer: View {
             }
         }
         .onDisappear {
+            composerActive = false
+            cancelPendingCameraShot()
             flushDraft(for: convId, commitComposition: true)
             cancelLargeImageBatch()
             recorder.cancel()
@@ -214,18 +224,36 @@ struct ChatComposer: View {
             photoItems = []
             loadPicked(items)
         }
-        // 相机盖子收完再弹预览：同一刻又收又弹，sheet 会弹不出来
+        // 相机盖子收完再弹预览：同一刻又收又弹，sheet 会弹不出来；JPEG 编码与落盘移至后台并校验会话存活
         .fullScreenCover(isPresented: $cameraOpen, onDismiss: {
+            cameraDismissed = true
             guard let shot = cameraShot else { return }
             cameraShot = nil
             picked = ImPickedImages(files: [shot])
         }) {
             CameraPicker { image in
-                // 拍的那张只在这里编码一次，写成文件后字节和 UIImage 都不留
-                if let image, let data = image.jpegData(compressionQuality: 0.92) {
-                    cameraShot = ImPickTemp.write(data, ext: "jpg")
-                }
+                cancelPendingCameraShot()
+                cameraDismissed = false
                 cameraOpen = false
+                guard let image else { return }
+                let capturedTenant = im.tenant
+                let capturedConvId = convId
+                cameraTask = Task { @MainActor in
+                    let shot = await Task.detached(priority: .userInitiated) { () -> URL? in
+                        guard !Task.isCancelled, let data = image.jpegData(compressionQuality: 0.92) else { return nil }
+                        return ImPickTemp.write(data, ext: "jpg")
+                    }.value
+                    guard let shot else { return }
+                    guard !Task.isCancelled, composerActive, im.tenant == capturedTenant, convId == capturedConvId else {
+                        ImPickTemp.remove([shot])
+                        return
+                    }
+                    if cameraDismissed {
+                        picked = ImPickedImages(files: [shot])
+                    } else {
+                        cameraShot = shot
+                    }
+                }
             }
             .ignoresSafeArea()
         }
@@ -241,7 +269,7 @@ struct ChatComposer: View {
             ImFilePrep.adopt(source, tenant: tenant) { prepared in
                 guard tenant == im.tenant else {
                     if let prepared, let dir = ImCache.outboxDir(tenant: tenant) {
-                        try? FileManager.default.removeItem(at: dir.appendingPathComponent(prepared.file))
+                        ImPickTemp.remove([dir.appendingPathComponent(prepared.file)])
                     }
                     return
                 }
@@ -429,25 +457,7 @@ struct ChatComposer: View {
     }
 
     private var voiceButton: some View {
-        HStack(spacing: 8) {
-            if recorder.recording {
-                HStack(alignment: .center, spacing: 2) {
-                    ForEach(0 ..< 5, id: \.self) { index in
-                        Capsule()
-                            .frame(width: 2, height: CGFloat(5 + recorder.level * Double(5 + index * 3)))
-                    }
-                }
-            }
-            Text(recorder.recording ? (recorder.cancelling ? "松开取消" : "松开发送 · \(Int(recorder.seconds))″") : "按住说话")
-                .font(JieboFont.text(.body, weight: .medium))
-        }
-            .foregroundStyle(recorder.cancelling ? JieboColor.danger : JieboColor.ink)
-            .frame(maxWidth: .infinity, minHeight: 40)
-            .background(recorder.recording ? JieboColor.well : JieboColor.white)
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(JieboColor.line)
-            }
+        ImVoiceRecordButtonLabel(recorder: recorder)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -498,17 +508,35 @@ struct ChatComposer: View {
             if !voiceStartFailed, !wasCancelling, elapsed > 0 || pressedFor < 1 { im.showToast("说话时间太短") }
             return
         }
-        guard let dir = ImCache.outboxDir(tenant: im.tenant) else { return }
+        let tenant = im.tenant
+        let peer = peer
+        guard let dir = ImCache.outboxDir(tenant: tenant) else {
+            ImPickTemp.remove([recording.0])
+            return
+        }
         let name = "voice-\(UUID().uuidString.lowercased()).m4a"
         let target = dir.appendingPathComponent(name)
-        do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try FileManager.default.moveItem(at: recording.0, to: target)
+        Task { @MainActor in
+            let moved = await Task.detached(priority: .userInitiated) { () -> Bool in
+                do {
+                    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                    try FileManager.default.moveItem(at: recording.0, to: target)
+                    return true
+                } catch {
+                    try? FileManager.default.removeItem(at: recording.0)
+                    return false
+                }
+            }.value
+            guard moved else {
+                im.showToast("录音保存不了")
+                return
+            }
+            guard tenant == im.tenant else {
+                ImPickTemp.remove([target])
+                return
+            }
             im.sendVoice(file: name, durationMs: recording.1, waveform: recording.2, to: peer)
             onSent()
-        } catch {
-            try? FileManager.default.removeItem(at: recording.0)
-            im.showToast("录音保存不了")
         }
     }
 
@@ -561,9 +589,20 @@ struct ChatComposer: View {
                 return
             }
             if !prepared.isEmpty {
-                let sizes = prepared.map { outgoing -> Int64 in
-                    guard let dir = ImCache.outboxDir(tenant: tenant) else { return 0 }
-                    return ImPickTemp.size(dir.appendingPathComponent(outgoing.file))
+                let sizes: [Int64]
+                if let dir = ImCache.outboxDir(tenant: tenant) {
+                    let fileNames = prepared.map(\.file)
+                    sizes = await Task.detached(priority: .userInitiated) {
+                        fileNames.map { ImPickTemp.size(dir.appendingPathComponent($0)) }
+                    }.value
+                } else {
+                    sizes = []
+                }
+                guard tenant == im.tenant else {
+                    removeLargeImageBatchFiles(
+                        ImLargeImageBatch(images: prepared, bytes: 0, tenant: tenant, convId: convId, peer: peer)
+                    )
+                    return
                 }
                 if sizes.contains(where: { $0 > Int64(MobileMediaPolicy.largeShareRetryBudget) }) {
                     largeImageBatch = ImLargeImageBatch(
@@ -594,6 +633,15 @@ struct ChatComposer: View {
         onSent()
     }
 
+    private func cancelPendingCameraShot() {
+        cameraTask?.cancel()
+        cameraTask = nil
+        if let shot = cameraShot {
+            cameraShot = nil
+            ImPickTemp.remove([shot])
+        }
+    }
+
     private func cancelLargeImageBatch() {
         guard let batch = largeImageBatch else { return }
         largeImageBatch = nil
@@ -607,6 +655,34 @@ struct ChatComposer: View {
                 dir.appendingPathComponent(image.file),
                 dir.appendingPathComponent(image.thumbFile),
             ])
+        }
+    }
+}
+
+// MARK: 语音按住说话标签（隔离 12.5Hz 电平与计时更新，避免重建整条 ChatComposer）
+
+private struct ImVoiceRecordButtonLabel: View {
+    let recorder: ImVoiceRecorder
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if recorder.recording {
+                HStack(alignment: .center, spacing: 2) {
+                    ForEach(0 ..< 5, id: \.self) { index in
+                        Capsule()
+                            .frame(width: 2, height: CGFloat(5 + recorder.level * Double(5 + index * 3)))
+                    }
+                }
+            }
+            Text(recorder.recording ? (recorder.cancelling ? "松开取消" : "松开发送 · \(Int(recorder.seconds))″") : "按住说话")
+                .font(JieboFont.text(.body, weight: .medium))
+        }
+        .foregroundStyle(recorder.cancelling ? JieboColor.danger : JieboColor.ink)
+        .frame(maxWidth: .infinity, minHeight: 40)
+        .background(recorder.recording ? JieboColor.well : JieboColor.white)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(JieboColor.line)
         }
     }
 }
@@ -682,7 +758,9 @@ struct ImSendPreview: View {
         .task {
             let source = files
             let pixel = Self.previewPixel
-            totalBytes = source.reduce(Int64(0)) { $0 + ImPickTemp.size($1) }
+            totalBytes = await Task.detached(priority: .userInitiated) {
+                source.reduce(Int64(0)) { $0 + ImPickTemp.size($1) }
+            }.value
             // 一张一张解码，每张解完就显示，不攒一批
             for file in source {
                 let thumb = await Task.detached(priority: .userInitiated) {
@@ -834,7 +912,9 @@ struct ImImageViewer: View {
             var file: URL?
             if let outgoing = item.outgoing, let dir = ImCache.outboxDir(tenant: tenant) {
                 let local = dir.appendingPathComponent(outgoing.file)
-                if FileManager.default.fileExists(atPath: local.path) { file = local }
+                file = await Task.detached(priority: .userInitiated) {
+                    FileManager.default.fileExists(atPath: local.path) ? local : nil
+                }.value
             }
             if file == nil, case .image(let blob, _, _, _, _)? = item.body {
                 file = await ImImageCache.shared.originalFile(blob: blob, tenant: tenant, remote: im.mediaURL(convId: convId, blob: blob))
