@@ -1,12 +1,22 @@
 import SwiftUI
 
 /// 一轮里多个工具时收成一行摘要；展开后列出紧凑工具卡。
-struct ToolRunSummaryView: View {
+struct ToolRunSummaryView: View, Equatable {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var tools: [ToolCall]
     var turnRunning: Bool
     var durationMs: Double?
+    var palette: JieboPalette = JieboTheme.shared.palette
+    var appearance: JieboAppearance = JieboTheme.shared.appearance
     @State private var detailOpen = false
+
+    static func == (lhs: ToolRunSummaryView, rhs: ToolRunSummaryView) -> Bool {
+        lhs.tools == rhs.tools
+            && lhs.turnRunning == rhs.turnRunning
+            && lhs.durationMs == rhs.durationMs
+            && lhs.palette == rhs.palette
+            && lhs.appearance == rhs.appearance
+    }
 
     private var runningToolId: String? {
         tools.last(where: { $0.status == "running" })?.callId
@@ -76,6 +86,7 @@ struct ToolRunSummaryView: View {
                             compactPresentation: true,
                             showBorder: false
                         )
+                        .equatable()
                     }
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))

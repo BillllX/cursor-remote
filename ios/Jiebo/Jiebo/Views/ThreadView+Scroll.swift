@@ -65,9 +65,14 @@ extension ThreadView {
                             GeometryReader { geo in
                                 Color.clear
                                     .onChange(of: geo.frame(in: .named("threadScroll")).minY) { _, minY in
-                                        // VStack 会一次性建好子视图，不能用 onAppear；看哨兵是否进视口
-                                        guard homeActive, minY >= -12, minY < viewportHeight - 48 else { return }
-                                        guard !stickToBottom else { return }
+                                        // VStack 会一次性建好子视图，不能用 onAppear；看哨兵是否进入视口顶部触发带，且每次进视口只拉一批
+                                        let visible = isTopSentinelInTriggerZone(minY)
+                                        guard homeActive, visible, !stickToBottom else {
+                                            if !visible { earlierMemoryArmed = true }
+                                            return
+                                        }
+                                        guard earlierMemoryArmed else { return }
+                                        earlierMemoryArmed = false
                                         loadEarlierTurns(proxy: proxy, allTurns: allTurns, limit: allTurns.count - hiddenCount)
                                     }
                             }
@@ -89,7 +94,7 @@ extension ThreadView {
                             GeometryReader { marker in
                                 Color.clear
                                     .onChange(of: marker.frame(in: .named("threadScroll")).minY) { _, minY in
-                                        let visible = minY >= -12 && minY < viewportHeight - 48
+                                        let visible = isTopSentinelInTriggerZone(minY)
                                         guard homeActive, visible, !stickToBottom else {
                                             if !visible { earlierDiskArmed = true }
                                             return
@@ -123,7 +128,7 @@ extension ThreadView {
                             GeometryReader { marker in
                                 Color.clear
                                     .onChange(of: marker.frame(in: .named("threadScroll")).minY) { _, minY in
-                                        let visible = minY >= -12 && minY < viewportHeight - 48
+                                        let visible = isTopSentinelInTriggerZone(minY)
                                         guard homeActive, visible, !stickToBottom else {
                                             if !visible { earlierNetworkArmed = true }
                                             return
@@ -177,6 +182,7 @@ extension ThreadView {
                     if !stickToBottom {
                         Button {
                             stickToBottom = true
+                            readingWindowStart = nil
                             if let last = threadChat?.turns.last?.id, last != pinnedTurnId {
                                 pinToTurn(last, proxy: proxy, height: viewportHeight)
                             } else {
@@ -283,17 +289,42 @@ extension ThreadView {
                 }
             }
             .onChange(of: homeActive && scenePhase == .active) { _, active in
-                if !active { cancelStreamScroll(); return }
+                if !active {
+                    scrollMetrics.lastActiveTurnId = threadChat?.turns.last?.id
+                    scrollMetrics.lastActiveLiveTail = liveTail
+                    scrollMetrics.lastActiveHeightRevision = pinHeightRevision
+                    scrollMetrics.lastActiveViewportHeight = viewportHeight
+                    cancelStreamScroll()
+                    return
+                }
                 guard active, stickToBottom,
                       let last = threadChat?.turns.last?.id, viewportHeight > 1 else { return }
-                // Only catch up a following reader. Reading older messages remains untouched.
-                if last != pinnedTurnId { pinToTurn(last, proxy: proxy, height: viewportHeight) }
-                else if pinExceeded { scheduleStreamScroll(proxy) }
+                // 仅在真正新增了轮次、或后台期间末轮正文/视口尺寸发生变化时补滚；静止会话切回前台零程序滚动。
+                if last != pinnedTurnId {
+                    pinToTurn(last, proxy: proxy, height: viewportHeight)
+                } else if pinExceeded {
+                    let tailChanged = last != scrollMetrics.lastActiveTurnId
+                        || liveTail != scrollMetrics.lastActiveLiveTail
+                        || pinHeightRevision != scrollMetrics.lastActiveHeightRevision
+                        || abs(viewportHeight - scrollMetrics.lastActiveViewportHeight) > 0.5
+                        || threadChat?.turns.last?.running == true
+                    if tailChanged {
+                        scheduleStreamScroll(proxy)
+                    }
+                }
             }
             .onChange(of: resolvedChatId) { _, id in
                 // 切会话把最后一轮顶对齐，避免把钉顶留白滚进视口。
                 cancelStreamScroll()
                 followTask?.cancel()
+                scrollMetrics.resetForChatSwitch()
+                loadingEarlierBatch = false
+                earlierNetworkAnchorId = nil
+                earlierAnchorMinY = 0
+                earlierMemoryArmed = true
+                earlierDiskArmed = true
+                earlierNetworkArmed = true
+                readingWindowStart = nil
                 stickToBottom = true
                 motionChatId = id
                 if let last = threadChat?.turns.last?.id, viewportHeight > 1 {
@@ -329,12 +360,16 @@ extension ThreadView {
     @ViewBuilder
     func pinnedTurn(_ turn: Turn, index: Int, turns: [Turn], inviteTurnId: String?) -> some View {
         let pinned = pinnedTurnId == turn.id
+        let isFirst = index == 0
         TurnView(
             turn: turn,
             canAnswer: index == turns.count - 1 && !turn.running && !turn.queued,
             embedded: chrome == .embedded,
             isLastAssistant: turn.id == turns.last?.id,
             canRestorePrompt: turn.id == turns.last?.id
+                && !turn.running
+                && !turn.queued
+                && !(turn.error ?? "").isEmpty
                 && store.draft(for: resolvedChatId).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 && {
                     let trimmed = turn.user.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -354,25 +389,47 @@ extension ThreadView {
         )
         .equatable()
         .background {
-            if pinned {
+            if pinned || isFirst {
                 GeometryReader { geo in
                     Color.clear
                         .onAppear {
-                            notePinContentHeight(geo.size.height)
-                            notePinnedMinY(geo.frame(in: .named("threadScroll")).minY)
+                            let minY = geo.frame(in: .named("threadScroll")).minY
+                            if isFirst {
+                                scrollMetrics.firstTurnId = turn.id
+                                scrollMetrics.firstTurnMinY = minY
+                            }
+                            if pinned {
+                                notePinContentHeight(geo.size.height)
+                                notePinnedMinY(minY)
+                            }
                         }
                         .onChange(of: geo.size.height) { _, height in
-                            notePinContentHeight(height)
+                            if pinned { notePinContentHeight(height) }
                         }
                         .onChange(of: geo.frame(in: .named("threadScroll")).minY) { _, y in
-                            notePinnedMinY(y)
+                            if isFirst {
+                                scrollMetrics.firstTurnId = turn.id
+                                scrollMetrics.firstTurnMinY = y
+                            }
+                            if pinned { notePinnedMinY(y) }
                         }
                 }
             }
         }
+        .overlay(alignment: .top) {
+            Color.clear
+                .frame(height: 1)
+                .id("turn-top-\(turn.id)")
+        }
         .frame(minHeight: pinned ? pinnedMinHeight : 0, alignment: .top)
         .id(turn.id)
         .transition(.opacity.combined(with: .offset(y: 10)))
+    }
+
+    /// 顶部哨兵仅在进入视口上沿触发带时自动拉页，避免短对话在屏幕下半区就误触发连续分页。
+    func isTopSentinelInTriggerZone(_ minY: CGFloat) -> Bool {
+        let upper = viewportHeight > 1 ? min(120, max(64, viewportHeight * 0.28)) : 96
+        return minY >= -12 && minY < upper
     }
 
     /// 把这一轮顶对齐到可视区上方。height 还没量到时只记下 id，等 viewportHeight 再滚。
@@ -396,7 +453,7 @@ extension ThreadView {
             try? await Task.sleep(for: .milliseconds(50))
             guard !Task.isCancelled, pinnedTurnId == id else { return }
             scrollingProgrammatically = false
-            pinBaselineMinY = pinnedTurnMinY
+            pinBaselineMinY = scrollMetrics.pinnedTurnMinY
             pinBaselineReady = true
         }
     }
@@ -423,7 +480,7 @@ extension ThreadView {
             try? await Task.sleep(for: .milliseconds(280))
             guard !Task.isCancelled else { return }
             scrollingProgrammatically = false
-            pinBaselineMinY = pinnedTurnMinY
+            pinBaselineMinY = scrollMetrics.pinnedTurnMinY
             pinBaselineReady = true
         }
     }
@@ -492,7 +549,7 @@ extension ThreadView {
 
     /// iOS 17 没有滚动相位。基线是最近一次定位后的位置：钉顶时在轮顶，贴底后改到贴底位置。
     func notePinnedMinY(_ y: CGFloat) {
-        pinnedTurnMinY = y
+        scrollMetrics.pinnedTurnMinY = y
         guard Date() >= pinScrollGuardUntil else { return }
         if pinRecaptureBaseline {
             pinBaselineMinY = y
@@ -510,13 +567,22 @@ extension ThreadView {
         }
     }
 
-    /// 在列表顶部 prepend 更早轮次后，锚定原先最上面那一轮，避免整页跳动
+    /// 按 1pt 顶锚恢复某轮在视口中的原相对偏移，消除直接贴 .top 带来的 60~100pt 跳动。
+    func scrollToTurnTop(_ proxy: ScrollViewProxy, turnId: String, targetMinY: CGFloat) {
+        let span = max(1, viewportHeight - 1)
+        let clamped = min(max(targetMinY, 0), span)
+        let unitY = viewportHeight > 1 ? clamped / span : 0
+        scrollWithoutAnimation(proxy, id: "turn-top-\(turnId)", anchor: UnitPoint(x: 0.5, y: unitY))
+    }
+
+    /// 在列表顶部 prepend 更早轮次后，按原视口偏移锚定原先最上面那一轮，避免整页跳动
     func loadEarlierTurns(proxy: ScrollViewProxy, allTurns: [Turn], limit: Int) {
         guard !loadingEarlierBatch else { return }
         let hidden = allTurns.count - limit
         guard hidden > 0 else { return }
         loadingEarlierBatch = true
         let anchorId = Array(allTurns.suffix(limit)).first?.id
+        let savedMinY = (anchorId != nil && scrollMetrics.firstTurnId == anchorId) ? scrollMetrics.firstTurnMinY : 0
         let next = min(allTurns.count, limit + Self.renderedTurnStep)
         renderedTurnLimitByChat[resolvedChatId] = next
         if !stickToBottom { readingWindowStart = allTurns.suffix(next).first?.id }
@@ -529,29 +595,36 @@ extension ThreadView {
             defer { scrollingProgrammatically = false }
             await Task.yield()
             guard !Task.isCancelled else { return }
-            scrollWithoutAnimation(proxy, id: anchorId, anchor: .top)
+            scrollToTurnTop(proxy, turnId: anchorId, targetMinY: savedMinY)
         }
     }
 
     /// 内存里的尾部已经露完，再从磁盘往前读一页。不把半截标成全文。
     func loadDiskEarlier(proxy: ScrollViewProxy, allTurns: [Turn]) {
+        let targetChatId = resolvedChatId
         guard !loadingEarlierBatch,
-              store.diskBodyCursors[resolvedChatId] != nil,
-              !store.diskPrependIds.contains(resolvedChatId)
+              store.diskBodyCursors[targetChatId] != nil,
+              !store.diskPrependIds.contains(targetChatId)
         else { return }
         let anchor = allTurns.first?.id
+        let savedMinY = (anchor != nil && scrollMetrics.firstTurnId == anchor) ? scrollMetrics.firstTurnMinY : 0
         let previous = allTurns.count
         loadingEarlierBatch = true
         Task { @MainActor in
-            let added = await store.prependCachedTurns(resolvedChatId)
+            let added = await store.prependCachedTurns(targetChatId)
+            guard resolvedChatId == targetChatId else {
+                loadingEarlierBatch = false
+                return
+            }
             guard added else {
                 loadingEarlierBatch = false
                 return
             }
-            let total = store.uniquedTurns(for: resolvedChatId).count
-            renderedTurnLimitByChat[resolvedChatId] = min(total, previous + Self.renderedTurnStep)
+            let total = store.uniquedTurns(for: targetChatId).count
+            renderedTurnLimitByChat[targetChatId] = min(total, previous + Self.renderedTurnStep)
             loadingEarlierBatch = false
             guard let anchor else { return }
+            earlierAnchorMinY = savedMinY
             earlierNetworkAnchorId = anchor
             restoreEarlierNetworkAnchor(anchor, proxy: proxy)
         }
@@ -562,20 +635,29 @@ extension ThreadView {
               !store.loadingChatIds.contains(resolvedChatId),
               let anchor = allTurns.first?.id
         else { return }
+        earlierAnchorMinY = (scrollMetrics.firstTurnId == anchor) ? scrollMetrics.firstTurnMinY : 0
         earlierNetworkAnchorId = anchor
         store.loadPreviousHistory(resolvedChatId)
-        if !store.loadingChatIds.contains(resolvedChatId) { earlierNetworkAnchorId = nil }
+        if !store.loadingChatIds.contains(resolvedChatId) {
+            earlierNetworkAnchorId = nil
+            earlierAnchorMinY = 0
+        }
     }
 
     func restoreEarlierNetworkAnchor(_ anchor: String, proxy: ScrollViewProxy) {
+        let savedMinY = earlierAnchorMinY
         cancelStreamScroll()
         followTask?.cancel()
         followTask = Task { @MainActor in
-            defer { earlierNetworkAnchorId = nil; scrollingProgrammatically = false }
+            defer {
+                earlierNetworkAnchorId = nil
+                earlierAnchorMinY = 0
+                scrollingProgrammatically = false
+            }
             scrollingProgrammatically = true
             await Task.yield()
             guard !Task.isCancelled else { return }
-            scrollWithoutAnimation(proxy, id: anchor, anchor: .top)
+            scrollToTurnTop(proxy, turnId: anchor, targetMinY: savedMinY)
         }
     }
 }

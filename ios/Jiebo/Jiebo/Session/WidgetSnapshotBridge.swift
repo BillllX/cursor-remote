@@ -25,12 +25,32 @@ final class WidgetSnapshotBridge {
         refresh(from: store)
     }
 
+    private struct SnapshotInput {
+        let unlocked: Bool
+        let connected: Bool
+        let linkOffline: Bool
+        let assistantNetworkConfirmed: Bool
+        let assistantName: String
+        let assistantState: AssistantState?
+        let now: Date
+    }
+
     func refresh(from store: ChatStore) {
-        let snapshot = makeSnapshot(from: store)
+        let input = SnapshotInput(
+            unlocked: store.unlocked,
+            connected: store.connected,
+            linkOffline: store.linkOffline,
+            assistantNetworkConfirmed: store.assistantNetworkConfirmed,
+            assistantName: store.assistantName,
+            assistantState: store.assistantState,
+            now: Date()
+        )
         let appGroup = Self.appGroup
         let widgetKind = Self.widgetKind
-        // 串行写入保证登出快照排在之前的已登录快照之后。
+        let privacyModeKey = Self.privacyModeKey
+        // 串行后台队列构造快照并写盘，避免主线程触发 TodoDue 解析与 App Group UserDefaults 跨进程 IPC。
         fileQueue.async {
+            let snapshot = Self.buildSnapshot(from: input, appGroup: appGroup, privacyModeKey: privacyModeKey)
             guard let container = FileManager.default.containerURL(
                 forSecurityApplicationGroupIdentifier: appGroup
             ) else { return }
@@ -48,10 +68,15 @@ final class WidgetSnapshotBridge {
         }
     }
 
-    private func makeSnapshot(from store: ChatStore, now: Date = Date()) -> WidgetSnapshot {
-        guard store.unlocked else { return .loggedOut(now: now) }
+    nonisolated private static func buildSnapshot(
+        from input: SnapshotInput,
+        appGroup: String,
+        privacyModeKey: String
+    ) -> WidgetSnapshot {
+        let now = input.now
+        guard input.unlocked else { return .loggedOut(now: now) }
 
-        let state = store.assistantState
+        let state = input.assistantState
         let unread = state?.unreadInbox ?? 0
         let reminders = (state?.todos ?? []).filter {
             guard !$0.done, let due = TodoDue.parse($0.due) else { return false }
@@ -63,21 +88,21 @@ final class WidgetSnapshotBridge {
 
         let status: WidgetSnapshot.AssistantStatus
         let statusText: String
-        if !store.connected || store.linkOffline {
+        if !input.connected || input.linkOffline {
             status = .offline
             statusText = "离线，显示上次摘要"
-        } else if state == nil || !store.assistantNetworkConfirmed {
+        } else if state == nil || !input.assistantNetworkConfirmed {
             status = .syncing
             statusText = "正在同步"
         } else if isWorking {
             status = .working
-            statusText = "\(store.assistantName) 正在处理"
+            statusText = "\(input.assistantName) 正在处理"
         } else if attention > 0 {
             status = .needsAttention
             statusText = "有 \(attention) 项待处理"
         } else {
             status = .available
-            statusText = "\(store.assistantName) 随时在"
+            statusText = "\(input.assistantName) 随时在"
         }
 
         let highlight: WidgetSnapshot.Highlight?
@@ -89,7 +114,7 @@ final class WidgetSnapshotBridge {
             highlight = nil
         }
 
-        let defaults = UserDefaults(suiteName: Self.appGroup)
+        let defaults = UserDefaults(suiteName: appGroup)
         return WidgetSnapshot(
             loginState: .loggedIn,
             assistantStatus: status,
@@ -99,7 +124,7 @@ final class WidgetSnapshotBridge {
             highlight: highlight,
             updatedAt: now,
             staleAfter: now.addingTimeInterval(WidgetSnapshot.staleInterval),
-            privacyMode: defaults?.bool(forKey: Self.privacyModeKey) ?? false
+            privacyMode: defaults?.bool(forKey: privacyModeKey) ?? false
         )
     }
 }

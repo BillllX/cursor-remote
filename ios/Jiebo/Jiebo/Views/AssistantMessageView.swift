@@ -8,65 +8,71 @@ private let markdownStreamSignposter = OSSignposter(
     category: "WorkbenchMarkdown"
 )
 
-/// 流式时每个 token 都会改 text。界面只读 rendered：换行或 80ms 才排一次，停下立刻排完整版。
+/// 流式时每个 token 都会改 text。界面只读 rendered：固定节奏（66ms）排一次，停下立刻排完整版。
+/// @路径 链接转换已下沉到分段级 AssistantMessage，避免流式每次刷新对全文跑 O(N^2) 正则。
 struct StreamingAssistantText: View {
     let text: String
     let live: Bool
-    let transform: @MainActor (String) -> String
+    var linkFileMentions: Bool = true
 
     @State private var rendered: String?
-    @State private var latest = ""
+    @State private var latest: String
     @State private var flush: Task<Void, Never>?
 
+    init(text: String, live: Bool, linkFileMentions: Bool = true) {
+        self.text = text
+        self.live = live
+        self.linkFileMentions = linkFileMentions
+        _rendered = State(initialValue: live ? text : nil)
+        _latest = State(initialValue: text)
+    }
+
     var body: some View {
-        // live 时禁止在 body 里 transform：父视图每个 token 都会重算，那会把节流绕开。
-        ChunkedAssistantMessage(text: live ? (rendered ?? "") : measuredTransform(text))
-            .equatable()
-            .onAppear {
-                latest = text
-                if live { rendered = measuredTransform(text) }
+        ChunkedAssistantMessage(
+            text: live ? (rendered ?? text) : text,
+            linkFileMentions: linkFileMentions
+        )
+        .equatable()
+        .onAppear {
+            latest = text
+            if live { rendered = text }
+        }
+        .onChange(of: text) { old, value in
+            latest = value
+            guard live else { return }
+            if !value.hasPrefix(old) {
+                flushNow(value)
+                return
             }
-            .onChange(of: text) { old, value in
-                latest = value
-                guard live else { return }
-                let appended = value.hasPrefix(old)
-                let delta = appended ? String(value.dropFirst(old.count)) : ""
-                if !appended || delta.contains("\n") {
-                    flushNow(value)
-                    return
-                }
-                guard flush == nil else { return }
-                flush = Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(80))
-                    guard !Task.isCancelled else { return }
-                    rendered = measuredTransform(latest)
-                    flush = nil
-                }
-            }
-            .onChange(of: live) { _, isLive in
-                flush?.cancel()
-                flush = nil
-                rendered = isLive ? measuredTransform(latest.isEmpty ? text : latest) : nil
-            }
-            .onDisappear {
-                if live {
-                    rendered = measuredTransform(latest.isEmpty ? text : latest)
-                }
-                flush?.cancel()
+            guard flush == nil else { return }
+            flush = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(66))
+                guard !Task.isCancelled else { return }
+                let interval = markdownStreamSignposter.beginInterval("Markdown flush")
+                rendered = latest
+                markdownStreamSignposter.endInterval("Markdown flush", interval)
                 flush = nil
             }
+        }
+        .onChange(of: live) { _, isLive in
+            flush?.cancel()
+            flush = nil
+            latest = text
+            rendered = isLive ? text : nil
+        }
+        .onDisappear {
+            if live {
+                rendered = latest.isEmpty ? text : latest
+            }
+            flush?.cancel()
+            flush = nil
+        }
     }
 
     private func flushNow(_ value: String) {
         flush?.cancel()
         flush = nil
-        rendered = measuredTransform(value)
-    }
-
-    private func measuredTransform(_ value: String) -> String {
-        let interval = markdownStreamSignposter.beginInterval("Markdown transform")
-        defer { markdownStreamSignposter.endInterval("Markdown transform", interval) }
-        return transform(value)
+        rendered = value
     }
 }
 
@@ -74,11 +80,15 @@ struct StreamingAssistantText: View {
 /// 流式时只有最后一段在变，前面的段不再重新拆块、解析表格和排版
 struct ChunkedAssistantMessage: View, Equatable {
     let text: String
+    var linkFileMentions: Bool = false
     var palette: JieboPalette = JieboTheme.shared.palette
     var appearance: JieboAppearance = JieboTheme.shared.appearance
 
     static func == (lhs: ChunkedAssistantMessage, rhs: ChunkedAssistantMessage) -> Bool {
-        lhs.text == rhs.text && lhs.palette == rhs.palette && lhs.appearance == rhs.appearance
+        lhs.text == rhs.text
+            && lhs.linkFileMentions == rhs.linkFileMentions
+            && lhs.palette == rhs.palette
+            && lhs.appearance == rhs.appearance
     }
 
     /// 正文、标题与段距一起跟随系统大字体，流式分段与缓存方式保持一致。
@@ -87,7 +97,7 @@ struct ChunkedAssistantMessage: View, Equatable {
     var body: some View {
         VStack(alignment: .leading, spacing: paragraphSpacing) {
             ForEach(Array(ChunkMemo.shared.chunks(text).enumerated()), id: \.offset) { _, chunk in
-                AssistantMessage(text: chunk)
+                AssistantMessage(text: chunk, linkFileMentions: linkFileMentions)
                     .equatable()
             }
         }
@@ -140,7 +150,7 @@ private final class ChunkMemo {
         var chunks: [String]
     }
     private var entries: [Entry] = []
-    private static let maxEntries = 8
+    private static let maxEntries = 32
 
     func chunks(_ text: String) -> [String] {
         var head: [String] = []
@@ -179,16 +189,25 @@ private final class ChunkMemo {
 
 private struct AssistantMessage: View, Equatable {
     let text: String
+    var linkFileMentions: Bool = false
     var palette: JieboPalette = JieboTheme.shared.palette
     var appearance: JieboAppearance = JieboTheme.shared.appearance
 
     static func == (lhs: AssistantMessage, rhs: AssistantMessage) -> Bool {
-        lhs.text == rhs.text && lhs.palette == rhs.palette && lhs.appearance == rhs.appearance
+        lhs.text == rhs.text
+            && lhs.linkFileMentions == rhs.linkFileMentions
+            && lhs.palette == rhs.palette
+            && lhs.appearance == rhs.appearance
+    }
+
+    private var renderedText: String {
+        linkFileMentions ? TurnView.linkMentions(text) : text
     }
 
     var body: some View {
+        let source = renderedText
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+            ForEach(Array(blocks(of: source).enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .code(let code, let lang):
                     CodeBlockView(code: code, lang: lang)
@@ -217,7 +236,7 @@ private struct AssistantMessage: View, Equatable {
         case liveCode(String)
     }
 
-    private var blocks: [Block] {
+    private func blocks(of source: String) -> [Block] {
         var result: [Block] = []
         var prose: [String] = []
         var code: [String] = []
@@ -230,7 +249,7 @@ private struct AssistantMessage: View, Equatable {
             }
             prose = []
         }
-        for line in text.components(separatedBy: "\n") {
+        for line in source.components(separatedBy: "\n") {
             let trimmedFence = line.drop { $0 == " " || $0 == "\t" }
             if trimmedFence.hasPrefix("```") || trimmedFence.hasPrefix("~~~") {
                 if inCode {
@@ -252,7 +271,7 @@ private struct AssistantMessage: View, Equatable {
             result.append(.liveCode(tail))
         }
         flushProse()
-        if result.isEmpty { result.append(.prose(text)) }
+        if result.isEmpty { result.append(.prose(source)) }
         return result
     }
 }

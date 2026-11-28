@@ -16,8 +16,10 @@ struct TodoReceipt: Identifiable, Hashable {
     var id: String { callId }
 
     static func captured(in turn: Turn, todos: [AssistantTodo]?) -> [TodoReceipt] {
-        turn.tools.compactMap { tool in
-            guard AssistantToolText.baseName(tool.name) == "todo_add",
+        guard !turn.tools.isEmpty else { return [] }
+        return turn.tools.compactMap { tool in
+            guard tool.name.range(of: "todo_add", options: [.caseInsensitive, .anchored, .backwards]) != nil,
+                  AssistantToolText.baseName(tool.name) == "todo_add",
                   let result = AssistantToolText.resultObject(tool.result),
                   result["ok"]?.bool == true,
                   let id = result["id"]?.string

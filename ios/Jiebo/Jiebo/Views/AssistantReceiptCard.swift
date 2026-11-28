@@ -183,27 +183,49 @@ struct AssistantReceiptDock: View {
     @State private var dismissalRevision = 0
     @State private var appeared = false
     @State private var pulse = false
+    @State private var clockNow = Date()
 
     private var scope: String {
         AssistantReceiptMemory.scope(server: GatewayConfig.url.absoluteString, tenant: store.tenantId)
     }
 
+    private var needsPeriodicClock: Bool {
+        guard homeActive, scenePhase == .active, let state = store.assistantState else { return false }
+        if state.approvals.contains(where: { $0.expiresAt > 0 }) { return true }
+        if (state.draftCards ?? []).contains(where: { $0.status == "waiting_user" && $0.expiresAt > 0 }) { return true }
+        if !state.inbox.isEmpty || !state.delegations.isEmpty || !(state.workspaceRuns ?? []).isEmpty { return true }
+        return false
+    }
+
+    /// 保持单一稳定的 dockContent 视图身份，避免切后台/开侧栏时重建分支销毁已打开的详情 Sheet。
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            let receipts = AssistantReceipt.results(in: store.assistantState, now: context.date.timeIntervalSince1970 * 1000)
-                .filter { !AssistantReceiptMemory.contains($0.id, scope: scope + ".dismissed") }
-            let receipt = receipts.first
-            let now = context.date.timeIntervalSince1970 * 1000
-            let drafts = (store.assistantState?.draftCards ?? []).filter {
-                $0.status == "waiting_user" && ($0.expiresAt <= 0 || $0.expiresAt > now)
+        dockContent(nowDate: clockNow)
+            .task(id: needsPeriodicClock) {
+                clockNow = Date()
+                guard needsPeriodicClock else { return }
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(30))
+                    guard !Task.isCancelled else { return }
+                    clockNow = Date()
+                }
             }
-                .sorted { $0.createdAt > $1.createdAt }
-            let approvals = (store.assistantState?.approvals ?? []).filter { $0.expiresAt <= 0 || $0.expiresAt > now }
-            let skills = store.memoryCenterSkillProposals.filter { $0.status == "pending" }
-            let pendingCount = max(drafts.count, approvals.count) + skills.count
-            let running = (store.assistantState?.delegations ?? []).filter { ["queued", "running", "awaiting"].contains($0.status) }
-            let selectedKey = pendingCount > 0 ? "pending:\(drafts.first?.id ?? approvals.first?.id ?? skills.first?.id ?? "")" : receipt?.id ?? running.first?.id
-            VStack(spacing: 4) {
+    }
+
+    private func dockContent(nowDate: Date) -> some View {
+        let now = nowDate.timeIntervalSince1970 * 1000
+        let receipts = AssistantReceipt.results(in: store.assistantState, now: now)
+            .filter { !AssistantReceiptMemory.contains($0.id, scope: scope + ".dismissed") }
+        let receipt = receipts.first
+        let drafts = (store.assistantState?.draftCards ?? []).filter {
+            $0.status == "waiting_user" && ($0.expiresAt <= 0 || $0.expiresAt > now)
+        }
+            .sorted { $0.createdAt > $1.createdAt }
+        let approvals = (store.assistantState?.approvals ?? []).filter { $0.expiresAt <= 0 || $0.expiresAt > now }
+        let skills = store.memoryCenterSkillProposals.filter { $0.status == "pending" }
+        let pendingCount = max(drafts.count, approvals.count) + skills.count
+        let running = (store.assistantState?.delegations ?? []).filter { ["queued", "running", "awaiting"].contains($0.status) }
+        let selectedKey = pendingCount > 0 ? "pending:\(drafts.first?.id ?? approvals.first?.id ?? skills.first?.id ?? "")" : receipt?.id ?? running.first?.id
+        return VStack(spacing: 4) {
                 if pendingCount > 0 {
                     if let skill = skills.first {
                         VStack(alignment: .leading, spacing: 8) {
@@ -278,7 +300,6 @@ struct AssistantReceiptDock: View {
             .onChange(of: homeActive) { _, active in if !active { pulse = false } }
             .onChange(of: scenePhase) { _, phase in if phase != .active { pulse = false } }
             .onChange(of: reduceMotion) { _, reduced in if reduced { pulse = false } }
-        }
     }
 
     @ViewBuilder private func skillActions(_ skill: SkillFactoryProposalRow) -> some View {

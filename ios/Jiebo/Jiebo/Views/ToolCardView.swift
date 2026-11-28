@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct ToolCardView: View {
+struct ToolCardView: View, Equatable {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.threadChatId) private var environmentChatId
@@ -9,8 +9,18 @@ struct ToolCardView: View {
     var tool: ToolCall
     var compactPresentation = false
     var showBorder = true
+    var palette: JieboPalette = JieboTheme.shared.palette
+    var appearance: JieboAppearance = JieboTheme.shared.appearance
     @State private var expanded = false
     private var chatId: String { environmentChatId.isEmpty ? store.activeId : environmentChatId }
+
+    static func == (lhs: ToolCardView, rhs: ToolCardView) -> Bool {
+        lhs.tool == rhs.tool
+            && lhs.compactPresentation == rhs.compactPresentation
+            && lhs.showBorder == rhs.showBorder
+            && lhs.palette == rhs.palette
+            && lhs.appearance == rhs.appearance
+    }
 
     init(
         tool: ToolCall,

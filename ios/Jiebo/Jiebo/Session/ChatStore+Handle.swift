@@ -410,10 +410,11 @@ extension ChatStore {
                 heldDeltas[id, default: []].append(text)
                 break
             }
-            enqueueStreamDelta(.text(text), chatId: id, flushNow: text.contains("\n"))
+            // 不再遇换行立刻冲刷，保持稳定节流节奏，避免列表/代码/表格流式退化成逐 token 重排。
+            enqueueStreamDelta(.text(text), chatId: id)
         case .thinkingDelta(let id, let text):
             if awaitSnapshot.contains(id) || snapshotHold.contains(id) { break }
-            enqueueStreamDelta(.thinking(text), chatId: id, flushNow: text.contains("\n"))
+            enqueueStreamDelta(.thinking(text), chatId: id)
         case .toolStarted(let id, let callId, let name, let args, let parent, let agent, let toolModel, let toolAt):
             if awaitSnapshot.contains(id) || snapshotHold.contains(id) { break }
             patchRunning(id) { turn in
@@ -1056,14 +1057,18 @@ extension ChatStore {
         guard let events = streamDeltaBuffers.removeValue(forKey: chatId), !events.isEmpty else { return }
         let interval = workbenchStreamSignposter.beginInterval("Delta flush")
         defer { workbenchStreamSignposter.endInterval("Delta flush", interval) }
-        patchRunning(chatId) { turn in
+        patchRunning(chatId, streamDelta: true) { turn in
             var next = turn
+            var touchedText = false
+            var touchedThinking = false
             for event in events {
                 switch event {
                 case .text(let text):
                     next.assistant += text
+                    touchedText = true
                 case .thinking(let text):
                     next.thinking += text
+                    touchedThinking = true
                 case .toolOutput(let callId, let stream, let chunk, let stdout, let stderr):
                     if let index = next.tools.firstIndex(where: { $0.callId == callId }) {
                         next.tools[index].result = mergeOutput(
@@ -1088,8 +1093,8 @@ extension ChatStore {
                     }
                 }
             }
-            next.assistant = ReplyText.repair(next.assistant)
-            next.thinking = ReplyText.repair(next.thinking)
+            if touchedText { next.assistant = ReplyText.repair(next.assistant) }
+            if touchedThinking { next.thinking = ReplyText.repair(next.thinking) }
             return next
         }
     }

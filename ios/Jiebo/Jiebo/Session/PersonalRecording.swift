@@ -476,6 +476,8 @@ final class PersonalRecording {
     private var partial = false
     private var previewCount = 0
     private var accumulatedSecondsBeforeResume: Double = 0
+    @ObservationIgnored private var snapshotTask: Task<Void, Never>?
+    @ObservationIgnored private var snapshotGeneration = 0
     private var segmentResumeDate: Date?
     private var timerTask: Task<Void, Never>?
     private var grace: UIBackgroundTaskIdentifier = .invalid
@@ -519,6 +521,11 @@ final class PersonalRecording {
         activeMeta = nil
         tenant = ""
         loadedSettingsTenant = ""
+        snapshotGeneration &+= 1
+        snapshotTask?.cancel()
+        snapshotTask = nil
+        localTotalBytes = 0
+        localReclaimableBytes = 0
         preview = ""
         status = ""
         warningBanner = ""
@@ -569,12 +576,34 @@ final class PersonalRecording {
 
     /// 刷新本机目录扫描与占用统计
     func refreshLocalSnapshot(tenant account: String) {
-        guard !account.isEmpty, let root = try? RecordingOutbox.root(tenant: account) else {
-            localRecords = []
-            localTotalBytes = 0
-            localReclaimableBytes = 0
-            return
+        guard !account.isEmpty, account == loadedSettingsTenant else { return }
+        snapshotGeneration &+= 1
+        guard snapshotTask == nil else { return }
+        snapshotTask = Task {
+            while !Task.isCancelled {
+                let generation = snapshotGeneration
+                let account = loadedSettingsTenant
+                let activeFolder = folder
+                let activeRecording = recording
+                let snapshot = await Task.detached(priority: .utility) {
+                    Self.scanSnapshot(account: account, folder: activeFolder, recording: activeRecording)
+                }.value
+                guard !Task.isCancelled else { return }
+                guard generation == snapshotGeneration else { continue }
+                if loadedSettingsTenant == account {
+                    if localRecords != snapshot.items { localRecords = snapshot.items }
+                    if localTotalBytes != snapshot.total { localTotalBytes = snapshot.total }
+                    if localReclaimableBytes != snapshot.reclaimable { localReclaimableBytes = snapshot.reclaimable }
+                }
+                snapshotTask = nil
+                return
+            }
         }
+    }
+
+    nonisolated private static func scanSnapshot(account: String, folder: URL?, recording: Bool)
+        -> (items: [LocalRecordingSummary], total: Int64, reclaimable: Int64) {
+        guard let root = try? RecordingOutbox.root(tenant: account) else { return ([], 0, 0) }
         let dirs = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.creationDateKey])) ?? []
         var items: [LocalRecordingSummary] = []
         let iso = ISO8601DateFormatter()
@@ -629,10 +658,8 @@ final class PersonalRecording {
         }
 
         items.sort { $0.startedAt > $1.startedAt }
-        localRecords = items
         let storage = RecordingOutbox.totalStorageBytes(tenant: account)
-        localTotalBytes = storage.total
-        localReclaimableBytes = storage.syncedReclaimable
+        return (items, storage.total, storage.syncedReclaimable)
     }
 
     /// 刷新服务端历史会话与能力信息
@@ -1001,12 +1028,14 @@ final class PersonalRecording {
                 return try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
             }.value
             guard account == store.tenantId, store.unlocked else { return }
+            var recoveredAny = false
             for dir in directories {
                 guard account == store.tenantId, store.unlocked else { return }
                 guard UUID(uuidString: dir.lastPathComponent) != nil,
                       dir != folder,
                       !FileManager.default.fileExists(atPath: dir.appendingPathComponent("accepted").path)
                 else { continue }
+                recoveredAny = true
                 let marker = dir.appendingPathComponent("stopped")
                 if !FileManager.default.fileExists(atPath: marker.path) {
                     // 上次崩溃/强杀残留，封口 open.m4a 并标记为部分内容
@@ -1025,7 +1054,9 @@ final class PersonalRecording {
                 }
                 await process(dir, store: store)
             }
-            refreshLocalSnapshot(tenant: account)
+            if recoveredAny {
+                refreshLocalSnapshot(tenant: account)
+            }
         } catch {
             status = error.localizedDescription
         }

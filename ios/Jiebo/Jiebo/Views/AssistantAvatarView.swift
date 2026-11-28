@@ -159,77 +159,112 @@ struct StickerRobotFace: View {
     @Environment(\.homeActive) private var homeActive
     @State private var appeared = false
     @State private var startedAt = Date()
+    @State private var idleBlinking = false
 
-    private var animates: Bool {
-        appeared && homeActive && !reduceMotion && scenePhase == .active && phase != .offline
+    private var activeMotionAllowed: Bool {
+        appeared && homeActive && !reduceMotion && scenePhase == .active
+    }
+
+    /// 仅在思考/听写/执行/成功等活跃态启用逐帧 TimelineView；idle/approval/failure/offline 零空转。
+    private var needsContinuousTimeline: Bool {
+        guard activeMotionAllowed else { return false }
+        switch phase {
+        case .thinking, .listening, .executing, .success:
+            return true
+        case .idle, .approval, .failure, .offline:
+            return false
+        }
     }
 
     var body: some View {
         GeometryReader { proxy in
             let side = min(proxy.size.width, proxy.size.height)
             let compact = side <= 36
-            // Small navigation marks need fewer updates; all motion stops off screen.
-            TimelineView(.animation(minimumInterval: compact ? 1.0 / 15 : 1.0 / 30, paused: !animates)) { context in
-                let time = animates ? max(0, context.date.timeIntervalSince(startedAt)) : 0
-                let beat = sin(time * .pi * 2 / 2.8)
+            // 单一稳定 TimelineView 结构，idle/approval/failure/offline 通过 paused 彻底停帧且避免切换态闪烁。
+            TimelineView(.animation(minimumInterval: compact ? 1.0 / 12 : 1.0 / 24, paused: !needsContinuousTimeline)) { context in
+                let active = needsContinuousTimeline
+                let time = active ? max(0, context.date.timeIntervalSince(startedAt)) : 0
+                let beat = active ? sin(time * .pi * 2 / 2.8) : 0
                 let blinkCycle = time.truncatingRemainder(dividingBy: 4.7)
-                let blink = animates && blinkCycle > 3.9 && blinkCycle < 4.06
-                let gaze = phase == .thinking ? sin(time * 1.5) * side * 0.035 : 0
-                ZStack {
-                    RoundedRectangle(cornerRadius: side * 0.32, style: .continuous)
-                        .fill(JieboColor.white)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: side * 0.32, style: .continuous)
-                                .stroke(JieboColor.ink, lineWidth: max(1.8, side * 0.026))
-                        }
-                        .frame(width: side * 0.77, height: side * 0.66)
-                        .rotationEffect(.degrees(-7))
-                    HStack(spacing: side * 0.13) {
-                        eye(side: side)
-                            .scaleEffect(x: 1, y: blink ? 0.12 : 1)
-                        eye(side: side)
-                            .scaleEffect(x: 1, y: blink ? 0.12 : 1)
-                    }
-                    .rotationEffect(.degrees(-7))
-                    .offset(x: gaze + (phase == .listening ? side * 0.02 : 0),
-                            y: phase == .failure ? side * 0.04 : 0)
-                    if phase != .offline {
-                        Image(systemName: badgeSymbol)
-                            .font(.system(size: side * (compact ? 0.23 : 0.22), weight: .bold))
-                            .foregroundStyle(phase == .failure ? JieboColor.danger : JieboColor.spark)
-                            .background(JieboColor.paper, in: Circle())
-                            .scaleEffect(badgeScale(time: time, beat: beat))
-                            .rotationEffect(.degrees(phase == .thinking ? beat * 18 : 0))
-                            .offset(x: side * 0.33, y: -side * 0.32)
-                    }
-                    if !compact && (phase == .listening || phase == .executing) {
-                        Image(systemName: phase == .listening ? "wave.3.right" : "arrow.triangle.2.circlepath")
-                            .font(.system(size: side * 0.15, weight: .medium))
-                            .foregroundStyle(JieboColor.ink)
-                            .rotationEffect(.degrees(phase == .executing ? time * 180 : 0))
-                            .opacity(phase == .listening ? 0.6 + 0.4 * sin(time * 6) : 1)
-                            .offset(x: -side * 0.43, y: -side * 0.23)
-                    }
-                    if !compact && phase == .thinking {
-                        Image(systemName: "sparkle")
-                            .font(.system(size: side * 0.12, weight: .bold))
-                            .foregroundStyle(JieboColor.spark)
-                            .scaleEffect(1 + beat * 0.22)
-                            .offset(x: side * 0.12, y: -side * 0.43)
-                    }
-                }
-                .scaleEffect(x: 1 - beat * 0.008, y: 1 + beat * 0.018, anchor: .bottom)
-                .rotationEffect(.degrees(phase == .listening ? -2 + beat * 2 : phase == .approval ? -3 : 0))
-                .offset(y: phase == .success ? -side * 0.08 * abs(sin(min(time, 0.8) / 0.8 * .pi)) : -side * 0.018 * beat)
-                .frame(width: proxy.size.width, height: proxy.size.height)
+                let blink = active ? (blinkCycle > 3.9 && blinkCycle < 4.06) : idleBlinking
+                faceBody(side: side, compact: compact, time: time, beat: beat, blink: blink)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
             }
         }
         .onAppear { startedAt = Date(); appeared = true }
-        .onDisappear { appeared = false }
-        .onChange(of: phase) { _, _ in startedAt = Date() }
-        .onChange(of: scenePhase) { _, next in
-            if next == .active { startedAt = Date() }
+        .onDisappear { appeared = false; idleBlinking = false }
+        .onChange(of: phase) { _, _ in
+            startedAt = Date()
+            idleBlinking = false
         }
+        .onChange(of: scenePhase) { _, next in
+            if next == .active { startedAt = Date() } else { idleBlinking = false }
+        }
+        .onChange(of: homeActive) { _, active in
+            if active { startedAt = Date() } else { idleBlinking = false }
+        }
+        .task(id: "\(phase == .idle):\(activeMotionAllowed)") {
+            idleBlinking = false
+            guard phase == .idle, activeMotionAllowed else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(4_500))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: 0.07)) { idleBlinking = true }
+                try? await Task.sleep(for: .milliseconds(130))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: 0.08)) { idleBlinking = false }
+            }
+        }
+    }
+
+    private func faceBody(side: CGFloat, compact: Bool, time: Double, beat: Double, blink: Bool) -> some View {
+        let gaze = phase == .thinking ? sin(time * 1.5) * side * 0.035 : 0
+        return ZStack {
+            RoundedRectangle(cornerRadius: side * 0.32, style: .continuous)
+                .fill(JieboColor.white)
+                .overlay {
+                    RoundedRectangle(cornerRadius: side * 0.32, style: .continuous)
+                        .stroke(JieboColor.ink, lineWidth: max(1.8, side * 0.026))
+                }
+                .frame(width: side * 0.77, height: side * 0.66)
+                .rotationEffect(.degrees(-7))
+            HStack(spacing: side * 0.13) {
+                eye(side: side)
+                    .scaleEffect(x: 1, y: blink ? 0.12 : 1)
+                eye(side: side)
+                    .scaleEffect(x: 1, y: blink ? 0.12 : 1)
+            }
+            .rotationEffect(.degrees(-7))
+            .offset(x: gaze + (phase == .listening ? side * 0.02 : 0),
+                    y: phase == .failure ? side * 0.04 : 0)
+            if phase != .offline {
+                Image(systemName: badgeSymbol)
+                    .font(.system(size: side * (compact ? 0.23 : 0.22), weight: .bold))
+                    .foregroundStyle(phase == .failure ? JieboColor.danger : JieboColor.spark)
+                    .background(JieboColor.paper, in: Circle())
+                    .scaleEffect(badgeScale(time: time, beat: beat))
+                    .rotationEffect(.degrees(phase == .thinking ? beat * 18 : 0))
+                    .offset(x: side * 0.33, y: -side * 0.32)
+            }
+            if !compact && (phase == .listening || phase == .executing) {
+                Image(systemName: phase == .listening ? "wave.3.right" : "arrow.triangle.2.circlepath")
+                    .font(.system(size: side * 0.15, weight: .medium))
+                    .foregroundStyle(JieboColor.ink)
+                    .rotationEffect(.degrees(phase == .executing ? time * 180 : 0))
+                    .opacity(phase == .listening ? 0.6 + 0.4 * sin(time * 6) : 1)
+                    .offset(x: -side * 0.43, y: -side * 0.23)
+            }
+            if !compact && phase == .thinking {
+                Image(systemName: "sparkle")
+                    .font(.system(size: side * 0.12, weight: .bold))
+                    .foregroundStyle(JieboColor.spark)
+                    .scaleEffect(1 + beat * 0.22)
+                    .offset(x: side * 0.12, y: -side * 0.43)
+            }
+        }
+        .scaleEffect(x: 1 - beat * 0.008, y: 1 + beat * 0.018, anchor: .bottom)
+        .rotationEffect(.degrees(phase == .listening ? -2 + beat * 2 : phase == .approval ? -3 : 0))
+        .offset(y: phase == .success ? -side * 0.08 * abs(sin(min(time, 0.8) / 0.8 * .pi)) : -side * 0.018 * beat)
     }
 
     private func badgeScale(time: Double, beat: Double) -> Double {

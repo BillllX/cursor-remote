@@ -105,10 +105,11 @@ enum ChatCache {
         }
     }
 
-    /// turns 传 Turn.json() 的结果：编码和写盘都在后台做
-    static func saveBody(tenant: String, chatId: String, rev: Int, turns: [JSONValue], serverSegs: [String]? = nil) {
+    /// 后台执行 Turn.json() 与写盘，避免主线程递归截断大工具 JSON 导致掉帧。
+    static func saveBody(tenant: String, chatId: String, rev: Int, turns: [Turn], serverSegs: [String]? = nil) {
         queue.async {
-            writeBody(tenant: tenant, chatId: chatId, rev: rev, rows: turns, serverSegs: serverSegs)
+            let rows = turns.map { $0.json() }
+            writeBody(tenant: tenant, chatId: chatId, rev: rev, rows: rows, serverSegs: serverSegs)
             prune(tenant: tenant, keep: chatId)
         }
     }
@@ -150,16 +151,17 @@ enum ChatCache {
         }
     }
 
-    /// turns 是已经去掉正在生成的回合之后的 Turn.json()。调用方保证最多 tailLimit 条
+    /// turns 是已经去掉正在生成的回合之后的纯值副本；Turn.json() 与写盘全在后台队列执行。
     static func saveTail(
         tenant: String,
         chatId: String,
-        turns: [JSONValue],
+        turns: [Turn],
         chatRev: Int? = nil,
         nextFrom: Int? = nil
     ) {
         queue.async {
-            writeTail(tenant: tenant, chatId: chatId, rows: turns, chatRev: chatRev, nextFrom: nextFrom)
+            let rows = turns.map { $0.json() }
+            writeTail(tenant: tenant, chatId: chatId, rows: rows, chatRev: chatRev, nextFrom: nextFrom)
         }
     }
 
@@ -257,14 +259,28 @@ enum ChatCache {
         }
     }
 
-    static func saveList(tenant: String, stateRev: Int, chatRevs: [String: Int], chats: [JSONValue]) {
+    struct ListCacheEntry {
+        var session: ChatSession
+        var preview: String
+    }
+
+    static func saveList(tenant: String, stateRev: Int, chatRevs: [String: Int], entries: [ListCacheEntry]) {
         queue.async {
             guard let dir = tenantDir(tenant) else { return }
+            let rows: [JSONValue] = entries.compactMap { entry in
+                var slim = entry.session
+                slim.turnsComplete = false // json() 不写 turns 键
+                guard var object = slim.json().object else { return nil }
+                if !entry.preview.isEmpty {
+                    object["preview"] = .string(entry.preview)
+                }
+                return .object(object)
+            }
             let object: JSONValue = .object([
                 "v": .number(1),
                 "stateRev": .number(Double(stateRev)),
                 "chatRevs": .object(chatRevs.mapValues { .number(Double($0)) }),
-                "chats": .array(chats),
+                "chats": .array(rows),
                 "savedAt": .number(Date().timeIntervalSince1970),
             ])
             do {

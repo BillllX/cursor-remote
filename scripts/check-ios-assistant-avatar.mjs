@@ -37,9 +37,10 @@ for (const needle of [
 requireSource(phone, "AssistantPlayfulAvatar(phase: store.assistantAvatarPhase, size: 32, completionEvent: store.assistantCompletionEvent)", "iPhone 导航栏形象");
 requireSource(
   phone,
-  "LinkStatusDot(state: store.linkState, syncing: store.isThreadSyncBusy(assistantTargetChatId))",
+  "LinkStatusDot(state: store.linkState, syncing: syncingChat != nil)",
   "iPhone 状态点在形象下方",
 );
+requireSource(phone, "store.isThreadSyncBusy(id)", "iPhone 状态点同步来源");
 requireSource(emptyState, "AssistantPlayfulAvatar(", "助理空状态形象");
 requireSource(pad, "AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32, completionEvent: store.assistantCompletionEvent)", "iPad 今日标题形象");
 requireSource(avatar, "private let motionGain: CGFloat = 1.75", "助理动作幅度");

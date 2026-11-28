@@ -5,6 +5,14 @@ struct ImViewerTarget: Identifiable, Hashable {
     var id: String
 }
 
+/// 非 @Observable 滚动采样盒：记录首条消息 ID 与视口内偏移，避免高频写 @State 触发表格重排。
+@MainActor
+private final class ImScrollMetrics {
+    var firstMessageId: String?
+    var firstMessageMinY: CGFloat = 0
+    var viewportHeight: CGFloat = 0
+}
+
 /// 和一个人的聊天页：标题是对方昵称，「…」看对方资料。
 /// 进来停在最底下；在底部时新消息跟着滚，往上翻着的时候不打扰
 struct ChatThreadView: View {
@@ -14,6 +22,7 @@ struct ChatThreadView: View {
     @State private var atBottom = true
     @State private var profileOpen = false
     @State private var viewer: ImViewerTarget?
+    @State private var scrollMetrics = ImScrollMetrics()
     @FocusState private var composerFocused: Bool
 
     private static let bottomId = "im-bottom"
@@ -22,15 +31,34 @@ struct ChatThreadView: View {
 
     private var convId: String { im.convId(with: peer) }
 
+    private static func topAnchorId(_ id: String) -> String { "im-top-\(id)" }
+
     var body: some View {
         let messages = im.visibleMessages(convId)
+        let firstMessageId = messages.first?.id
+        let seqIndex: [Int: ImLocalMessage] = {
+            var map: [Int: ImLocalMessage] = [:]
+            if let all = im.timelines[convId] {
+                map.reserveCapacity(all.count)
+                for msg in all {
+                    if let seq = msg.seq { map[seq] = msg }
+                }
+            }
+            return map
+        }()
         let person = im.user(peer)
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
                     olderHeader(hasMessages: !messages.isEmpty)
                     ForEach(Self.rows(messages)) { row in
-                        rowView(row, person: person, proxy: proxy)
+                        rowView(
+                            row,
+                            person: person,
+                            firstMessageId: firstMessageId,
+                            seqIndex: seqIndex,
+                            proxy: proxy
+                        )
                     }
                     Color.clear
                         .frame(height: 1)
@@ -40,6 +68,12 @@ struct ChatThreadView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
+            }
+            .coordinateSpace(name: "imThreadScroll")
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.height
+            } action: { height in
+                scrollMetrics.viewportHeight = height
             }
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
@@ -54,9 +88,24 @@ struct ChatThreadView: View {
                 }
             }
             .onChange(of: messages.first?.id) { old, _ in
-                // 往前翻了一页：停在原来最上面那条，别跳
+                // 往前翻了一页：核对采样锚点匹配后，等一帧以无动画原位复锚，避免跳动与 LazyVStack 落空。
                 guard let old, !atBottom else { return }
-                proxy.scrollTo(old, anchor: .top)
+                let matchedMinY = scrollMetrics.firstMessageId == old ? scrollMetrics.firstMessageMinY : nil
+                let vh = scrollMetrics.viewportHeight
+                Task { @MainActor in
+                    await Task.yield()
+                    var tx = Transaction()
+                    tx.disablesAnimations = true
+                    withTransaction(tx) {
+                        if let minY = matchedMinY, vh > 2 {
+                            let clamped = min(max(minY, 0), vh - 1)
+                            let anchorY = clamped / (vh - 1)
+                            proxy.scrollTo(Self.topAnchorId(old), anchor: UnitPoint(x: 0.5, y: anchorY))
+                        } else {
+                            proxy.scrollTo(old, anchor: .top)
+                        }
+                    }
+                }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
@@ -134,7 +183,13 @@ struct ChatThreadView: View {
     }
 
     @ViewBuilder
-    private func rowView(_ row: Row, person: ImUser, proxy: ScrollViewProxy) -> some View {
+    private func rowView(
+        _ row: Row,
+        person: ImUser,
+        firstMessageId: String?,
+        seqIndex: [Int: ImLocalMessage],
+        proxy: ScrollViewProxy
+    ) -> some View {
         switch row {
         case .time(_, let at):
             Text(ImFormat.dividerTime(at))
@@ -144,42 +199,61 @@ struct ChatThreadView: View {
                 .padding(.top, 14)
                 .padding(.bottom, 6)
         case .message(let item):
-            if item.recalled {
-                Text(item.from == im.meId ? "你撤回了一条消息" : "\(person.nickname) 撤回了一条消息")
-                    .font(JieboFont.text(.caption))
-                    .foregroundStyle(JieboColor.dim)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-            } else {
-                let quotedMessage = quoted(item)
-                ImBubbleRow(
-                    message: item,
-                    peer: person,
-                    mine: item.from == im.meId,
-                    quoted: quotedMessage,
-                    openImage: { viewer = ImViewerTarget(id: item.id) },
-                    quote: {
-                        if let seq = item.seq {
-                            im.replyTo[item.convId] = seq
-                            composerFocused = true
-                        }
-                    },
-                    onTapQuote: quotedMessage.map { target in
-                        {
-                            withAnimation(JieboMotion.standard(reduceMotion)) {
-                                proxy.scrollTo(target.id, anchor: .center)
+            let isFirst = item.id == firstMessageId
+            Group {
+                if item.recalled {
+                    Text(item.from == im.meId ? "你撤回了一条消息" : "\(person.nickname) 撤回了一条消息")
+                        .font(JieboFont.text(.caption))
+                        .foregroundStyle(JieboColor.dim)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                } else {
+                    let quotedMessage = item.replyTo.flatMap { seqIndex[$0] }
+                    ImBubbleRow(
+                        message: item,
+                        peer: person,
+                        mine: item.from == im.meId,
+                        quoted: quotedMessage,
+                        openImage: { viewer = ImViewerTarget(id: item.id) },
+                        quote: {
+                            if let seq = item.seq {
+                                im.replyTo[item.convId] = seq
+                                composerFocused = true
+                            }
+                        },
+                        onTapQuote: quotedMessage.map { target in
+                            {
+                                withAnimation(JieboMotion.standard(reduceMotion)) {
+                                    proxy.scrollTo(target.id, anchor: .center)
+                                }
                             }
                         }
+                    )
+                    .padding(.vertical, 5)
+                }
+            }
+            .overlay(alignment: .top) {
+                Color.clear
+                    .frame(height: 1)
+                    .id(Self.topAnchorId(item.id))
+            }
+            .background {
+                if isFirst {
+                    GeometryReader { geo in
+                        let minY = geo.frame(in: .named("imThreadScroll")).minY
+                        Color.clear
+                            .onAppear {
+                                scrollMetrics.firstMessageId = item.id
+                                scrollMetrics.firstMessageMinY = minY
+                            }
+                            .onChange(of: minY) { _, value in
+                                scrollMetrics.firstMessageId = item.id
+                                scrollMetrics.firstMessageMinY = value
+                            }
                     }
-                )
-                .padding(.vertical, 5)
+                }
             }
         }
-    }
-
-    private func quoted(_ item: ImLocalMessage) -> ImLocalMessage? {
-        guard let seq = item.replyTo else { return nil }
-        return im.timelines[item.convId]?.first { $0.seq == seq }
     }
 
     @ViewBuilder

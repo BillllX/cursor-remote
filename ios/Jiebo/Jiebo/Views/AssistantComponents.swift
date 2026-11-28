@@ -174,13 +174,25 @@ func assistantFormatMillis(_ millis: Double) -> String {
     return Date(timeIntervalSince1970: millis / 1000).formatted(date: .abbreviated, time: .shortened)
 }
 
+private enum AssistantTimeFormatters {
+    static let lock = NSLock()
+    static let relative: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.unitsStyle = .short
+        return formatter
+    }()
+}
+
 /// 相对时间（毫秒时间戳），例如「3分钟前」
 func assistantRelativeTime(_ millis: Double) -> String {
     guard millis > 0 else { return "" }
-    let formatter = RelativeDateTimeFormatter()
-    formatter.locale = Locale(identifier: "zh_CN")
-    formatter.unitsStyle = .short
-    return formatter.localizedString(for: Date(timeIntervalSince1970: millis / 1000), relativeTo: Date())
+    AssistantTimeFormatters.lock.lock()
+    defer { AssistantTimeFormatters.lock.unlock() }
+    return AssistantTimeFormatters.relative.localizedString(
+        for: Date(timeIntervalSince1970: millis / 1000),
+        relativeTo: Date()
+    )
 }
 
 /// 从 startMillis 到 now 过了几分钟（不为负）
@@ -236,14 +248,29 @@ enum TodoDue {
         var timed: Bool
     }
 
+    private static let formatterLock = NSLock()
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+    private static let isoFractionalFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    private static let isoEncodeFormatter = ISO8601DateFormatter()
+    private static var zhFormatters: [String: DateFormatter] = [:]
+
     static func parse(_ due: String?) -> Parsed? {
         guard let due = due?.trimmingCharacters(in: .whitespaces), !due.isEmpty else { return nil }
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
         if due.contains("T") {
-            let iso = ISO8601DateFormatter()
-            if let date = iso.date(from: due) { return Parsed(date: date, timed: true) }
-            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            return iso.date(from: due).map { Parsed(date: $0, timed: true) }
+            if let date = isoFormatter.date(from: due) { return Parsed(date: date, timed: true) }
+            return isoFractionalFormatter.date(from: due).map { Parsed(date: $0, timed: true) }
         }
+        dayFormatter.timeZone = .current
         return dayFormatter.date(from: String(due.prefix(10))).map { Parsed(date: $0, timed: false) }
     }
 
@@ -270,10 +297,19 @@ enum TodoDue {
     }
 
     private static func zhFormat(_ pattern: String, _ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        let formatter: DateFormatter
+        if let cached = zhFormatters[pattern] {
+            formatter = cached
+        } else {
+            let created = DateFormatter()
+            created.locale = Locale(identifier: "zh_CN")
+            created.dateFormat = pattern
+            zhFormatters[pattern] = created
+            formatter = created
+        }
         formatter.timeZone = .current
-        formatter.dateFormat = pattern
         return formatter.string(from: date)
     }
 
@@ -285,10 +321,14 @@ enum TodoDue {
 
     /// 网关要求带时间的必须带时区，按本机时区写
     static func encode(_ date: Date, timed: Bool) -> String {
-        guard timed else { return dayFormatter.string(from: date) }
-        let iso = ISO8601DateFormatter()
-        iso.timeZone = .current
-        return iso.string(from: date)
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        guard timed else {
+            dayFormatter.timeZone = .current
+            return dayFormatter.string(from: date)
+        }
+        isoEncodeFormatter.timeZone = .current
+        return isoEncodeFormatter.string(from: date)
     }
 
     private static let dayFormatter: DateFormatter = {

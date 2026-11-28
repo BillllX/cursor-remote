@@ -170,7 +170,34 @@ final class JieboTheme {
 }
 
 /// 表面色跟当前配色和系统明暗走。视图继续写 JieboColor.paper，读取时会订上 JieboTheme。
+/// 按 (palette, appearance) 预缓存 Color，避免每次访问新建动态 UIColor 闭包破坏 SwiftUI 差量判等。
 enum JieboColor {
+    private struct PaletteColors {
+        let paper: Color
+        let mist: Color
+        let white: Color
+        let composer: Color
+        let sidebar: Color
+        let userBubble: Color
+        let ink: Color
+        let ink2: Color
+        let dim: Color
+        let line: Color
+        let borderStrong: Color
+        let fillFg: Color
+        let well: Color
+        let hoverStrong: Color
+        let pine: Color
+        let pineDeep: Color
+        let run: Color
+        let runBg: Color
+    }
+
+    private struct CacheKey: Hashable {
+        let palette: JieboPalette
+        let appearance: JieboAppearance
+    }
+
     fileprivate static func isDark(_ traits: UITraitCollection, appearance: JieboAppearance) -> Bool {
         switch appearance {
         case .light: return false
@@ -179,78 +206,100 @@ enum JieboColor {
         }
     }
 
-    private static func surface(_ key: KeyPath<JieboSurfaces, UInt32>) -> Color {
-        let palette = JieboTheme.shared.palette
-        let appearance = JieboTheme.shared.appearance
-        return Color(uiColor: UIColor { traits in
-            let currentPalette = JieboTheme.shared.palette
-            let currentAppearance = JieboTheme.shared.appearance
-            let dark = isDark(traits, appearance: currentAppearance)
-            let ink = dark ? currentPalette.dark : currentPalette.light
-            _ = (palette, appearance)
-            return UIColor(hex: ink[keyPath: key])
-        })
+    private static func resolvedColor(lightHex: UInt32, darkHex: UInt32, appearance: JieboAppearance) -> Color {
+        switch appearance {
+        case .light:
+            return Color(hex: lightHex)
+        case .dark:
+            return Color(hex: darkHex)
+        case .system:
+            if lightHex == darkHex { return Color(hex: lightHex) }
+            let lightUI = UIColor(hex: lightHex)
+            let darkUI = UIColor(hex: darkHex)
+            return Color(uiColor: UIColor { traits in
+                traits.userInterfaceStyle == .dark ? darkUI : lightUI
+            })
+        }
     }
 
-    static var paper: Color { surface(\.bg) }
-    static var mist: Color { surface(\.user) }
-    static var white: Color { surface(\.panel) }
-    static var composer: Color { extra(\.composer) }
-    static var sidebar: Color { surface(\.sidebar) }
-    static var userBubble: Color { surface(\.user) }
-    static var ink: Color { surface(\.text) }
-    static var ink2: Color { surface(\.muted) }
-    static var dim: Color { extra(\.dim) }
-    static var line: Color { surface(\.border) }
-    static var borderStrong: Color { extra(\.borderStrong) }
+    private static let cachedPalettes: [CacheKey: PaletteColors] = {
+        var table: [CacheKey: PaletteColors] = [:]
+        table.reserveCapacity(JieboPalette.allCases.count * JieboAppearance.allCases.count)
+        for palette in JieboPalette.allCases {
+            let light = palette.light
+            let dark = palette.dark
+            let lightExtras = palette.extras(dark: false)
+            let darkExtras = palette.extras(dark: true)
+            let wellRatio = palette == .sticker ? 0.04 : 0.45
+            let lightWell = blend(light.panel, light.border, wellRatio)
+            let darkWell = blend(dark.panel, dark.border, wellRatio)
+            for appearance in JieboAppearance.allCases {
+                let c = { (l: UInt32, d: UInt32) in
+                    resolvedColor(lightHex: l, darkHex: d, appearance: appearance)
+                }
+                let border = c(light.border, dark.border)
+                let accent = c(light.accent, dark.accent)
+                let user = c(light.user, dark.user)
+                table[CacheKey(palette: palette, appearance: appearance)] = PaletteColors(
+                    paper: c(light.bg, dark.bg),
+                    mist: user,
+                    white: c(light.panel, dark.panel),
+                    composer: c(lightExtras.composer, darkExtras.composer),
+                    sidebar: c(light.sidebar, dark.sidebar),
+                    userBubble: user,
+                    ink: c(light.text, dark.text),
+                    ink2: c(light.muted, dark.muted),
+                    dim: c(lightExtras.dim, darkExtras.dim),
+                    line: border,
+                    borderStrong: c(lightExtras.borderStrong, darkExtras.borderStrong),
+                    fillFg: c(light.panel, dark.bg),
+                    well: c(lightWell, darkWell),
+                    hoverStrong: border,
+                    pine: accent,
+                    pineDeep: accent,
+                    run: palette == .sticker ? c(0xC83E22, 0xFF7357) : c(0x8A6526, 0xD4B47A),
+                    runBg: palette == .sticker ? c(0xFFF0EB, 0x34201B) : c(0xF2E8D2, 0x2C2617)
+                )
+            }
+        }
+        return table
+    }()
+
+    private static let cachedShimmer: [JieboAppearance: Color] = {
+        let lightUI = UIColor.white.withAlphaComponent(0.55)
+        let darkUI = UIColor.white.withAlphaComponent(0.12)
+        return [
+            .light: Color(uiColor: lightUI),
+            .dark: Color(uiColor: darkUI),
+            .system: Color(uiColor: UIColor { traits in
+                traits.userInterfaceStyle == .dark ? darkUI : lightUI
+            }),
+        ]
+    }()
+
+    private static func current() -> PaletteColors {
+        let palette = JieboTheme.shared.palette
+        let appearance = JieboTheme.shared.appearance
+        return cachedPalettes[CacheKey(palette: palette, appearance: appearance)]!
+    }
+
+    static var paper: Color { current().paper }
+    static var mist: Color { current().mist }
+    static var white: Color { current().white }
+    static var composer: Color { current().composer }
+    static var sidebar: Color { current().sidebar }
+    static var userBubble: Color { current().userBubble }
+    static var ink: Color { current().ink }
+    static var ink2: Color { current().ink2 }
+    static var dim: Color { current().dim }
+    static var line: Color { current().line }
+    static var borderStrong: Color { current().borderStrong }
     /// 实心按钮上的字。浅色用面板色，深色用页面底。
-    static var fillFg: Color {
-        let palette = JieboTheme.shared.palette
-        let appearance = JieboTheme.shared.appearance
-        return Color(uiColor: UIColor { traits in
-            let currentPalette = JieboTheme.shared.palette
-            let currentAppearance = JieboTheme.shared.appearance
-            let dark = isDark(traits, appearance: currentAppearance)
-            let ink = dark ? currentPalette.dark : currentPalette.light
-            _ = (palette, appearance)
-            return UIColor(hex: dark ? ink.bg : ink.panel)
-        })
-    }
-
-    private static func extra(_ key: KeyPath<(composer: UInt32, dim: UInt32, borderStrong: UInt32), UInt32>) -> Color {
-        let palette = JieboTheme.shared.palette
-        let appearance = JieboTheme.shared.appearance
-        return Color(uiColor: UIColor { traits in
-            let currentPalette = JieboTheme.shared.palette
-            let currentAppearance = JieboTheme.shared.appearance
-            let dark = isDark(traits, appearance: currentAppearance)
-            _ = (palette, appearance)
-            return UIColor(hex: currentPalette.extras(dark: dark)[keyPath: key])
-        })
-    }
+    static var fillFg: Color { current().fillFg }
     /// 缩略图占位、浅胶囊的底：卡片色往细边色靠 45%。浅色比卡片略深，深色比卡片略亮——两种主题下都不会比卡片更黑
-    static var well: Color {
-        let palette = JieboTheme.shared.palette
-        let appearance = JieboTheme.shared.appearance
-        return Color(uiColor: UIColor { traits in
-            let currentPalette = JieboTheme.shared.palette
-            let currentAppearance = JieboTheme.shared.appearance
-            let dark = isDark(traits, appearance: currentAppearance)
-            let ink = dark ? currentPalette.dark : currentPalette.light
-            _ = (palette, appearance)
-            return UIColor(hex: blend(ink.panel, ink.border, currentPalette == .sticker ? 0.04 : 0.45))
-        })
-    }
-
+    static var well: Color { current().well }
     /// 骨架扫光：任何主题下都比底色亮一点（深色里只是一层很淡的白）
-    static var shimmer: Color {
-        let appearance = JieboTheme.shared.appearance
-        return Color(uiColor: UIColor { traits in
-            let dark = isDark(traits, appearance: JieboTheme.shared.appearance)
-            _ = appearance
-            return UIColor.white.withAlphaComponent(dark ? 0.12 : 0.55)
-        })
-    }
+    static var shimmer: Color { cachedShimmer[JieboTheme.shared.appearance]! }
 
     private static func blend(_ a: UInt32, _ b: UInt32, _ t: Double) -> UInt32 {
         func channel(_ shift: UInt32) -> UInt32 {
@@ -261,9 +310,9 @@ enum JieboColor {
         return channel(16) | channel(8) | channel(0)
     }
 
-    static var hoverStrong: Color { surface(\.border) }
-    static var pine: Color { surface(\.accent) }
-    static var pineDeep: Color { surface(\.accent) }
+    static var hoverStrong: Color { current().hoverStrong }
+    static var pine: Color { current().pine }
+    static var pineDeep: Color { current().pineDeep }
     static let pineSoft = Color(light: 0x8FBFB0, dark: 0x8FBFB0)
 
     static let brass = Color(light: 0xC4A36A, dark: 0xC4A36A)
@@ -275,8 +324,8 @@ enum JieboColor {
     static let okBg = Color(light: 0xE1EEE3, dark: 0x16301F)
     static let okBgSoft = Color(light: 0xE5EFE5, dark: 0x14241A)
     /// 贴纸进行中使用火花色，旧主题保留赭金；破坏操作始终用 danger。
-    static var run: Color { JieboTheme.shared.palette == .sticker ? sparkText : Color(light: 0x8A6526, dark: 0xD4B47A) }
-    static var runBg: Color { JieboTheme.shared.palette == .sticker ? Color(light: 0xFFF0EB, dark: 0x34201B) : Color(light: 0xF2E8D2, dark: 0x2C2617) }
+    static var run: Color { current().run }
+    static var runBg: Color { current().runBg }
     static let spark = Color(light: 0xE04F33, dark: 0xFF7357)
     static let sparkText = Color(light: 0xC83E22, dark: 0xFF7357)
     /// 徽章背景单独保持深橙色，确保浅深模式的白色小字都满足对比度要求。
@@ -326,10 +375,32 @@ enum JieboFont {
         mono(scaledPoint(base, sizeCategory: sizeCategory))
     }
 
-    private static func scaledPoint(_ base: CGFloat, sizeCategory: ContentSizeCategory) -> CGFloat {
-        let metrics = UIFontMetrics(forTextStyle: .body)
+    private struct ScaledPointKey: Hashable {
+        let baseBits: UInt64
+        let sizeCategory: ContentSizeCategory
+    }
+
+    private static let bodyMetrics = UIFontMetrics(forTextStyle: .body)
+    private static let scaledPointLock = NSLock()
+    private static var scaledPointCache: [ScaledPointKey: CGFloat] = [:]
+
+    static func scaledPoint(_ base: CGFloat, sizeCategory: ContentSizeCategory) -> CGFloat {
+        let key = ScaledPointKey(baseBits: Double(base).bitPattern, sizeCategory: sizeCategory)
+        scaledPointLock.lock()
+        if let hit = scaledPointCache[key] {
+            scaledPointLock.unlock()
+            return hit
+        }
+        scaledPointLock.unlock()
+
         let trait = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(sizeCategory))
-        return metrics.scaledValue(for: base, compatibleWith: trait)
+        let value = bodyMetrics.scaledValue(for: base, compatibleWith: trait)
+
+        scaledPointLock.lock()
+        if scaledPointCache.count > 256 { scaledPointCache.removeAll(keepingCapacity: true) }
+        scaledPointCache[key] = value
+        scaledPointLock.unlock()
+        return value
     }
 }
 

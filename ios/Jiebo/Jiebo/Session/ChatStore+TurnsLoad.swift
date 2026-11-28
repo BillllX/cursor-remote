@@ -440,7 +440,7 @@ extension ChatStore {
         ChatCache.saveTail(
             tenant: tenantId,
             chatId: chatId,
-            turns: tail.map { $0.json() },
+            turns: tail,
             chatRev: partial?.chatRev,
             nextFrom: cachedNextFrom
         )
@@ -751,7 +751,7 @@ extension ChatStore {
                   })
             else { return }
             let segs = self.bodySegs[chatId].flatMap { $0.rev == rev ? $0.hashes : nil }
-            ChatCache.saveBody(tenant: tenant, chatId: chatId, rev: rev, turns: chat.turns.map { $0.json() }, serverSegs: segs)
+            ChatCache.saveBody(tenant: tenant, chatId: chatId, rev: rev, turns: chat.turns, serverSegs: segs)
         }
     }
 
@@ -778,16 +778,15 @@ extension ChatStore {
         listCacheTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(1500))
             guard let self, !Task.isCancelled, self.tenantId == tenant, self.cachedOnlyIds.isEmpty else { return }
-            let rows: [JSONValue] = self.chats.compactMap { chat in
+            let entries: [ChatCache.ListCacheEntry] = self.chats.compactMap { chat in
                 guard chat.id != "boot", !self.deletedIds.contains(chat.id), self.chatRevs[chat.id] != nil else { return nil }
+                let preview = String(chat.preview.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
                 var slim = chat
-                slim.turnsComplete = false // json() 不写 turns 键
-                guard var object = slim.json().object else { return nil }
-                let preview = chat.preview.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !preview.isEmpty { object["preview"] = .string(String(preview.prefix(200))) }
-                return .object(object)
+                slim.turns = []
+                slim.turnsComplete = false
+                return ChatCache.ListCacheEntry(session: slim, preview: preview)
             }
-            ChatCache.saveList(tenant: tenant, stateRev: self.stateRev, chatRevs: self.chatRevs, chats: rows)
+            ChatCache.saveList(tenant: tenant, stateRev: self.stateRev, chatRevs: self.chatRevs, entries: entries)
         }
     }
 
@@ -796,8 +795,16 @@ extension ChatStore {
         let tenant = tenantId
         guard !tenant.isEmpty else { return }
         let epoch = cacheEpoch
+        let storedCandidate = lastChatKey.flatMap { UserDefaults.standard.string(forKey: $0) }
+        let assistantCandidate = assistantChatId
+        let prefetchTargetId = assistantOnly ? assistantCandidate : (storedCandidate ?? assistantCandidate)
         Task { @MainActor [weak self] in
+            // 先读 list.json，避免与串行队列上的 loadTail 互相阻塞；拿到 list 后再把 tail 读盘与列表解码并发重叠。
             guard let list = await ChatCache.loadList(tenant: tenant) else { return }
+            async let prefetchedTail: ChatCache.Tail? = {
+                guard let id = prefetchTargetId, !id.isEmpty, id != "boot" else { return nil }
+                return await ChatCache.loadTail(tenant: tenant, chatId: id)
+            }()
             let decoded = await Task.detached(priority: .userInitiated) {
                 var seen = Set<String>()
                 return list.chats.compactMap(ChatSession.from).filter {
@@ -807,9 +814,15 @@ extension ChatStore {
             guard let self, self.cacheEpoch == epoch, self.tenantId == tenant, !self.appliedStore,
                   self.activeId == "boot", self.chats.count == 1, self.chats[0].id == "boot",
                   self.chats[0].turns.isEmpty
-            else { return }
+            else {
+                _ = await prefetchedTail
+                return
+            }
             let rows = decoded.filter { !self.deletedIds.contains($0.id) }
-            guard !rows.isEmpty else { return }
+            guard !rows.isEmpty else {
+                _ = await prefetchedTail
+                return
+            }
             let ids = Set(rows.map(\.id))
             // 只在能确定的情况下占 activeId：上次活跃会话就在缓存里，或从没记过、落到助理会话。
             // 其余留在 boot，等 stored_state 后由 restoreLastActiveIfNeeded 照常恢复
@@ -824,14 +837,24 @@ extension ChatStore {
                 target = ids.contains(assistantId) ? assistantId : nil
             }
             guard let targetId = target, var chat = rows.first(where: { $0.id == targetId }) else {
+                _ = await prefetchedTail
                 self.cachedOnlyIds = ids
                 self.chats += rows
                 return
             }
-            guard self.coldCacheStillBoot(epoch: epoch, tenant: tenant), !self.cacheReadingIds.contains(targetId) else { return }
+            guard self.coldCacheStillBoot(epoch: epoch, tenant: tenant), !self.cacheReadingIds.contains(targetId) else {
+                _ = await prefetchedTail
+                return
+            }
             self.cacheReadingIds.insert(targetId)
-            // 尾段很小，先画出来。全文可能要读很多段，不能让它挡住首屏
-            let tail = await ChatCache.loadTail(tenant: tenant, chatId: targetId)
+            // 尾段很小，先画出来（若与预取目标一致则直接复用并发读取结果）。全文可能要读很多段，不能让它挡住首屏
+            let tail: ChatCache.Tail?
+            if targetId == prefetchTargetId {
+                tail = await prefetchedTail
+            } else {
+                _ = await prefetchedTail
+                tail = await ChatCache.loadTail(tenant: tenant, chatId: targetId)
+            }
             guard self.coldCacheStillBoot(epoch: epoch, tenant: tenant) else {
                 self.cacheReadingIds.remove(targetId)
                 return

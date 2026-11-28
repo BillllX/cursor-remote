@@ -39,8 +39,12 @@ struct TurnView: View, Equatable {
         }
     }
 
-    private var assistantText: String { ReplyText.repair(turn.assistant) }
-    private var thinkingText: String { ReplyText.repair(turn.thinking) }
+    private var assistantText: String {
+        turn.assistant.isEmpty ? "" : ReplyText.repair(turn.assistant)
+    }
+    private var thinkingText: String {
+        turn.thinking.isEmpty ? "" : ReplyText.repair(turn.thinking)
+    }
 
     static func == (lhs: TurnView, rhs: TurnView) -> Bool {
         lhs.turn == rhs.turn && lhs.canAnswer == rhs.canAnswer
@@ -53,7 +57,7 @@ struct TurnView: View, Equatable {
     }
 
     private var thinkingShimmerActive: Bool {
-        turn.running && assistantText.isEmpty && turn.tools.isEmpty && turn.task?.nilIfEmpty == nil
+        turn.running && turn.assistant.isEmpty && turn.tools.isEmpty && turn.task?.nilIfEmpty == nil
     }
     private func turnThumb(_ image: PromptImage, index: Int, total: Int) -> some View {
         let base64 = image.data
@@ -254,9 +258,11 @@ struct TurnView: View, Equatable {
             }
             if processTools.count >= 2 {
                 ToolRunSummaryView(tools: processTools, turnRunning: turn.running, durationMs: turn.durationMs)
+                    .equatable()
             } else {
                 ForEach(processTools) { tool in
                     ToolCardView(tool: tool, showBorder: false)
+                        .equatable()
                 }
             }
             if !turn.deferred, !assistantText.isEmpty {
@@ -264,7 +270,7 @@ struct TurnView: View, Equatable {
                         StreamingAssistantText(
                             text: assistantText,
                             live: turn.running,
-                            transform: linkMentions
+                            linkFileMentions: true
                         )
                     }
                     .contextMenu {
@@ -489,19 +495,24 @@ struct TurnView: View, Equatable {
         return allowed
     }()
 
-    private func linkMentions(_ text: String) -> String {
+    static func linkMentions(_ text: String) -> String {
         guard text.contains("@") else { return text }
         let regex = Self.mentionRegex
         let allowed = Self.mentionAllowed
         var inFence = false
         return text.components(separatedBy: "\n").map { line in
-            if line.hasPrefix("```") { inFence.toggle(); return line }
-            guard !inFence, let regex else { return line }
+            let trimmedFence = line.drop { $0 == " " || $0 == "\t" }
+            if trimmedFence.hasPrefix("```") || trimmedFence.hasPrefix("~~~") {
+                inFence.toggle()
+                return line
+            }
+            guard !inFence, let regex, line.contains("@") else { return line }
             // 按反引号切段，只处理非代码段（偶数段）
             let segments = line.components(separatedBy: "`")
             var rebuilt: [String] = []
+            rebuilt.reserveCapacity(segments.count)
             for (index, segment) in segments.enumerated() {
-                guard index % 2 == 0, !segment.isEmpty else {
+                guard index % 2 == 0, segment.contains("@") else {
                     rebuilt.append(segment)
                     continue
                 }
@@ -511,7 +522,7 @@ struct TurnView: View, Equatable {
         }.joined(separator: "\n")
     }
 
-    private func linkMentionsInSegment(_ segment: String, regex: NSRegularExpression, allowed: CharacterSet) -> String {
+    private static func linkMentionsInSegment(_ segment: String, regex: NSRegularExpression, allowed: CharacterSet) -> String {
         let matches = regex.matches(in: segment, range: NSRange(segment.startIndex..., in: segment))
         guard !matches.isEmpty else { return segment }
         var out = ""
@@ -534,14 +545,20 @@ struct TurnView: View, Equatable {
         return out
     }
 
+    private static let knownMentionFiles: Set<String> = [
+        "diff", "readme", "license", "makefile", "dockerfile",
+        "changelog", "gemfile", "procfile", "jenkinsfile",
+    ]
+
     /// 对齐网页 isFileMention：含 . / : 或常见无扩展名文件
     static func isFileMention(_ token: String) -> Bool {
-        if token.lowercased() == "diff" || token.hasSuffix("/") { return true }
-        if token.range(of: #"[./:]"#, options: .regularExpression) != nil { return true }
-        return token.range(
-            of: #"^(readme|license|makefile|dockerfile|changelog|gemfile|procfile|jenkinsfile)(\.[a-z0-9]+)?$"#,
-            options: [.regularExpression, .caseInsensitive]
-        ) != nil
+        if token.hasSuffix("/") { return true }
+        for byte in token.utf8 {
+            if byte == UInt8(ascii: ".") || byte == UInt8(ascii: "/") || byte == UInt8(ascii: ":") {
+                return true
+            }
+        }
+        return knownMentionFiles.contains(token.lowercased())
     }
 }
 

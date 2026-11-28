@@ -318,7 +318,14 @@ extension ChatStore {
     }
 
     /// turnsTouched：调用方已经改了某一轮。流式每几十毫秒进来一次，不再把前面所有回合逐字段比一遍。
-    func patch(_ id: String, turnsTouched: Bool = false, sync: Bool = true, _ update: (ChatSession) -> ChatSession) {
+    /// streamDelta：纯流式增量（正文/思考/工具输出）不改变已结束尾段、输入栏审批/排队态，也不需要触发元数据回推。
+    func patch(
+        _ id: String,
+        turnsTouched: Bool = false,
+        sync: Bool = true,
+        streamDelta: Bool = false,
+        _ update: (ChatSession) -> ChatSession
+    ) {
         guard let index = chats.firstIndex(where: { $0.id == id }) else { return }
         let before = chats[index]
         chats[index] = update(before)
@@ -327,13 +334,18 @@ extension ChatStore {
         // 本地改过的正文不再是那份服务端段哈希对应的内容（清掉后不再比，流式增量只比一次）
         if bodySegs[id] != nil, turnsChanged { bodySegs[id] = nil }
         if turnsChanged { turnRenderRevisions[id, default: 0] &+= 1 }
-        if turnsChanged { scheduleDisplayTail(id) }
-        syncLiveBusy(id)
-        syncComposerChrome(id)
-        // P4b：增量上传只推脏会话。冷启动缓存列表的行只读，不标脏（首个 stored_state 会整份替换）
-        if sync, id != "boot", !cachedOnlyIds.contains(id) {
-            dirtyChatIds.insert(id)
-            scheduleSync()
+        if streamDelta {
+            // 兜底离线提交重连首包直接下发增量时输入栏切换到停止态；常态已忙碌 O(1) 零写入。
+            if !liveBusyIds.contains(id) { syncLiveBusy(id) }
+        } else {
+            if turnsChanged { scheduleDisplayTail(id) }
+            syncLiveBusy(id)
+            syncComposerChrome(id)
+            // P4b：增量上传只推脏会话。冷启动缓存列表的行只读，不标脏（首个 stored_state 会整份替换）
+            if sync, id != "boot", !cachedOnlyIds.contains(id) {
+                dirtyChatIds.insert(id)
+                scheduleSync()
+            }
         }
     }
 
@@ -363,9 +375,9 @@ extension ChatStore {
         scheduleBodyCache(chatId)
     }
 
-    func patchRunning(_ id: String, _ update: (Turn) -> Turn) {
+    func patchRunning(_ id: String, streamDelta: Bool = false, _ update: (Turn) -> Turn) {
         guard chats.first(where: { $0.id == id })?.turns.contains(where: \.running) == true else { return }
-        patch(id, turnsTouched: true) { chat in
+        patch(id, turnsTouched: true, sync: !streamDelta, streamDelta: streamDelta) { chat in
             var next = chat
             if let index = next.turns.lastIndex(where: \.running) {
                 next.turns[index] = update(next.turns[index])

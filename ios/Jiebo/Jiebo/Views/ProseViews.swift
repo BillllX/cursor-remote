@@ -69,7 +69,7 @@ struct CodeBlockView: View {
 
 /// 行内 **加粗** 用 AttributedString。若再套 SwiftUI `.font()`，混排字重时行高会算矮，下一行叠上来。
 private enum ProseInline {
-    enum Kind {
+    enum Kind: Hashable {
         case body
         case heading(level: Int)
         case tableHeader
@@ -77,17 +77,80 @@ private enum ProseInline {
         case tableBody
     }
 
+    private struct CacheKey: Hashable {
+        var text: String
+        var sizeCategory: ContentSizeCategory
+        var kind: Kind
+    }
+
+    private static let lock = NSLock()
+    private static var cache: [CacheKey: AttributedString] = [:]
+    private static var order: [CacheKey] = []
+    private static let maxCacheEntries = 512
+
     static func attributed(_ text: String, sizeCategory: ContentSizeCategory, kind: Kind) -> AttributedString {
-        let options = AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace
-        )
-        guard var result = try? AttributedString(markdown: text, options: options) else {
-            var plain = AttributedString(text)
-            applyFonts(to: &plain, sizeCategory: sizeCategory, kind: kind)
-            return plain
+        let key = CacheKey(text: text, sizeCategory: sizeCategory, kind: kind)
+        lock.lock()
+        if let hit = cache[key] {
+            lock.unlock()
+            return hit
         }
-        applyFonts(to: &result, sizeCategory: sizeCategory, kind: kind)
-        return result
+        lock.unlock()
+
+        let built: AttributedString
+        if !hasMarkdownSyntax(text) {
+            var plain = AttributedString(text)
+            let point = scaledPoint(baseSize(for: kind), sizeCategory: sizeCategory)
+            var container = AttributeContainer()
+            container.font = baseFont(pointSize: point, kind: kind)
+            plain.mergeAttributes(container)
+            built = plain
+        } else {
+            let options = AttributedString.MarkdownParsingOptions(
+                interpretedSyntax: .inlineOnlyPreservingWhitespace
+            )
+            if var result = try? AttributedString(markdown: text, options: options) {
+                applyFonts(to: &result, sizeCategory: sizeCategory, kind: kind)
+                built = result
+            } else {
+                var plain = AttributedString(text)
+                applyFonts(to: &plain, sizeCategory: sizeCategory, kind: kind)
+                built = plain
+            }
+        }
+
+        if text.utf8.count <= 2048 {
+            lock.lock()
+            if cache[key] == nil {
+                if order.count >= maxCacheEntries {
+                    let evicted = order.removeFirst()
+                    cache.removeValue(forKey: evicted)
+                }
+                order.append(key)
+                cache[key] = built
+            }
+            lock.unlock()
+        }
+        return built
+    }
+
+    private static func hasMarkdownSyntax(_ text: String) -> Bool {
+        for byte in text.utf8 {
+            switch byte {
+            case UInt8(ascii: "*"),
+                 UInt8(ascii: "_"),
+                 UInt8(ascii: "`"),
+                 UInt8(ascii: "["),
+                 UInt8(ascii: "~"),
+                 UInt8(ascii: "\\"),
+                 UInt8(ascii: "<"),
+                 UInt8(ascii: "&"):
+                return true
+            default:
+                continue
+            }
+        }
+        return false
     }
 
     private static func applyFonts(
@@ -118,9 +181,7 @@ private enum ProseInline {
     }
 
     private static func scaledPoint(_ base: CGFloat, sizeCategory: ContentSizeCategory) -> CGFloat {
-        let metrics = UIFontMetrics(forTextStyle: .body)
-        let trait = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(sizeCategory))
-        return metrics.scaledValue(for: base, compatibleWith: trait)
+        JieboFont.scaledPoint(base, sizeCategory: sizeCategory)
     }
 
     private static func font(for run: AttributedString.Runs.Element, pointSize: CGFloat, kind: Kind) -> UIFont {
@@ -173,6 +234,7 @@ private enum ProseInline {
 /// 按原文逐行排。整段 Markdown 会把单个换行和行首空格吃掉。
 struct ProseLines: View {
     @Environment(\.sizeCategory) private var sizeCategory
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let text: String
     @ScaledMetric(relativeTo: .body) private var sourceLineSpacing = JieboReading.sourceLineSpacing
     @ScaledMetric(relativeTo: .body) private var blockSpacing = JieboReading.paragraphSpacing
@@ -194,7 +256,13 @@ struct ProseLines: View {
                         }
                     }
                 case .table(let headers, let rows):
-                    HairlineTable(headers: headers, rows: rows)
+                    HairlineTable(
+                        headers: headers,
+                        rows: rows,
+                        sizeCategory: sizeCategory,
+                        dynamicTypeSize: dynamicTypeSize
+                    )
+                    .equatable()
                 }
             }
         }
@@ -411,11 +479,20 @@ private struct ProseLineRow: View, Equatable {
 
 /// 对话里的 Markdown 表。窄表按列并排；列多或格子里有换行时改成逐行展开。
 /// 横滑再配无限宽，后几列会甩到屏幕外，行高却被那边的长文撑出一片空白。
-private struct HairlineTable: View {
-    @Environment(\.sizeCategory) private var sizeCategory
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+private struct HairlineTable: View, Equatable {
     let headers: [String]
     let rows: [[String]]
+    var sizeCategory: ContentSizeCategory = .large
+    var dynamicTypeSize: DynamicTypeSize = .large
+    var palette: JieboPalette = JieboTheme.shared.palette
+    var appearance: JieboAppearance = JieboTheme.shared.appearance
+
+    static func == (lhs: HairlineTable, rhs: HairlineTable) -> Bool {
+        lhs.headers == rhs.headers && lhs.rows == rhs.rows
+            && lhs.sizeCategory == rhs.sizeCategory
+            && lhs.dynamicTypeSize == rhs.dynamicTypeSize
+            && lhs.palette == rhs.palette && lhs.appearance == rhs.appearance
+    }
 
     private static let lineBreak = try! NSRegularExpression(
         pattern: "<br\\s*/?>",
@@ -617,9 +694,17 @@ private struct HairlineTable: View {
     }
 
     static func displayText(_ raw: String) -> String {
-        let range = NSRange(raw.startIndex..<raw.endIndex, in: raw)
-        let text = lineBreak.stringByReplacingMatches(in: raw, range: range, withTemplate: "\n")
-        guard text.contains("&") else { return text }
+        let hasTag = raw.contains("<")
+        let hasEntity = raw.contains("&")
+        if !hasTag, !hasEntity { return raw }
+        let text: String
+        if hasTag {
+            let range = NSRange(raw.startIndex..<raw.endIndex, in: raw)
+            text = lineBreak.stringByReplacingMatches(in: raw, range: range, withTemplate: "\n")
+        } else {
+            text = raw
+        }
+        guard hasEntity else { return text }
         return text
             .replacingOccurrences(of: "&nbsp;", with: " ")
             .replacingOccurrences(of: "&amp;", with: "&")

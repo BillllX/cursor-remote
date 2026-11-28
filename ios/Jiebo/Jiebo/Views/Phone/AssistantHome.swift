@@ -16,7 +16,7 @@ struct AssistantHome: View {
     var body: some View {
         Group {
             if let chatId = store.assistantChatId {
-                ThreadView(chrome: .embedded, chatId: chatId, dock: AnyView(ActionDock()))
+                ThreadView(chrome: .embedded, chatId: chatId, assistantDock: .phone)
                     .environment(\.homeActive, router.selectedTab == .assistant && router.path.isEmpty && !sidebarOpen)
             } else if router.bootstrapped, store.gatewayReady || store.linkState == .offline {
                 unsupportedCard
@@ -25,56 +25,26 @@ struct AssistantHome: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .task(id: syncingChat) {
-            delayedSyncChat = nil
-            guard let id = syncingChat else { return }
-            // 短暂同步由头像圆点提示；持续等待时才展示可操作的重试提示。
-            do { try await Task.sleep(for: .seconds(1)) } catch { return }
-            if syncingChat == id { delayedSyncChat = id }
+        .background {
+            AssistantHomeSyncObserver(delayedSyncChat: $delayedSyncChat)
         }
         .environment(\.assistantReceiptNavigation, AssistantReceiptNavigation(
             openInbox: { router.go(.inbox) },
             openInboxItem: { router.openInboxItem($0) },
             openDelegation: { router.delegationDetail = DelegationRef(id: $0) },
-                openDelegations: { router.go(.worklist(.delegation)) },
-                openAutomation: { router.go(.automation) }
+            openDelegations: { router.go(.worklist(.delegation)) },
+            openAutomation: { router.go(.automation) }
         ))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(JieboColor.paper.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                titleView
-            }
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
+            AssistantHomeToolbar(
+                delayedSyncChat: delayedSyncChat,
+                openSidebar: {
                     withAnimation(JieboMotion.panel(reduceMotion)) { sidebarOpen = true }
-                } label: {
-                    Image(systemName: "sidebar.left")
-                        .frame(minWidth: 44, minHeight: 44)
                 }
-                .accessibilityLabel("打开小驳侧边栏")
-            }
-            if let line = attentionLine {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        if store.linkState == .offline {
-                            Button("重新连接") { store.retryConnection() }
-                        } else if line == ChatStore.syncingThreadTitle, let id = syncingChat {
-                            Button(line) { store.retryThreadSync(id) }
-                        } else if line == store.backgroundAttentionTitle {
-                            Button(line) { store.requestAssistant(force: true) }
-                        } else if line == ChatStore.failedRetryTitle, let id = store.assistantChatId {
-                            Button(line) { store.restoreFailedPromptIfDraftEmpty(chatId: id) }
-                        } else {
-                            Text(line)
-                        }
-                    } label: {
-                        Label(line, systemImage: "info.circle")
-                    }
-                }
-            }
-            ToolbarItem(placement: .topBarTrailing) { inboxButton }
+            )
         }
         .sheet(isPresented: $skillsOpen) { SkillsWorkspaceSheet() }
         .sheet(isPresented: $modelPickerOpen) {
@@ -90,7 +60,12 @@ struct AssistantHome: View {
         .disabled(sidebarOpen)
         .overlay {
             JieboDrawer(isPresented: sidebarOpen, close: { closeSidebar() }) {
-                sidebar
+                AssistantHomeSidebar(
+                    closeSidebar: closeSidebar,
+                    openSkills: { skillsOpen = true },
+                    openModelPicker: { modelPickerOpen = true },
+                    openWorkspace: { switchPhoneSpace?(.workspace) }
+                )
             }
         }
     }
@@ -101,189 +76,6 @@ struct AssistantHome: View {
             guard router.selectedTab == .assistant, router.revision == revision else { return }
             action()
         }
-    }
-
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("小驳").font(JieboFont.text(.title2, weight: .semibold))
-                Spacer()
-                Button { closeSidebar() } label: {
-                    Image(systemName: "xmark").frame(width: 44, height: 44)
-                }
-                .accessibilityLabel("关闭侧边栏")
-            }
-            .padding(.horizontal, 16)
-            List {
-                Section {
-                    sidebarRoute("定时与自动化", symbol: NavigationIconId.schedules.symbol, route: .automation)
-                    sidebarRoute("文件", symbol: NavigationIconId.files.symbol, route: .artifacts)
-                }
-                conversationSection
-                Section("记忆与能力") {
-                    sidebarRoute("记忆与规则", symbol: NavigationIconId.memory.symbol, route: .memory)
-                    Button { closeSidebar { skillsOpen = true } } label: {
-                        Label("技能工厂", systemImage: NavigationIconId.skills.symbol)
-                            .frame(minHeight: 44)
-                    }
-                    sidebarRoute("同事与访问管理", symbol: NavigationIconId.collab.symbol, route: .colleagues)
-                    sidebarRoute("连接与设备权限", symbol: "checkmark.shield", route: .connections)
-                }
-            }
-            .listStyle(.insetGrouped)
-            .font(JieboFont.text(.subheadline))
-            .scrollContentBackground(.hidden)
-            Divider()
-            sidebarRoute("设置", symbol: NavigationIconId.account.symbol, route: .settings)
-                .padding(.horizontal, 16)
-            Button {
-                closeSidebar {
-                    switchPhoneSpace?(.workspace)
-                }
-            } label: {
-                HStack {
-                    Label("工作台", systemImage: "rectangle.3.group")
-                    Spacer()
-                    if store.workspaceUnreadCount > 0 {
-                        PendingBadge(count: store.workspaceUnreadCount)
-                    }
-                }
-                .frame(minHeight: 44)
-                .padding(16)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(PressScaleButtonStyle())
-        }
-        .foregroundStyle(JieboColor.ink)
-        .frame(maxHeight: .infinity)
-        .background(JieboColor.paper)
-    }
-
-    private var conversationSection: some View {
-        Section("当前对话") {
-            if let chatId = store.assistantChatId {
-                conversationOptions(chatId: chatId)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func conversationOptions(chatId: String) -> some View {
-        Button { closeSidebar { modelPickerOpen = true } } label: {
-            HStack(spacing: 12) {
-                Label("模型", systemImage: "cpu")
-                Spacer(minLength: 4)
-                Text(ModelCatalog.label(for: store.model(for: chatId)))
-                    .foregroundStyle(JieboColor.dim)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .accessibilityHidden(true)
-            }
-            .frame(minHeight: 44)
-        }
-        .buttonStyle(PressScaleButtonStyle())
-
-    }
-
-    private func sidebarRoute(_ title: String, symbol: String, route: PhoneRoute, badge: Int = 0) -> some View {
-        Button { closeSidebar { router.go(route) } } label: {
-            HStack(spacing: 12) {
-                Label(title, systemImage: symbol)
-                Spacer(minLength: 4)
-                if badge > 0 { PendingBadge(count: badge) }
-            }
-            .frame(minHeight: 44)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(PressScaleButtonStyle())
-        .accessibilityLabel(badge > 0 ? "\(title)，\(badge) 项待处理" : title)
-    }
-
-    /// 连接、同步或需要人处理时才出字。平常只留圆点，避免每句都占一行。
-    private var syncingChat: String? {
-        guard store.connected, let id = store.assistantChatId, store.isThreadSyncBusy(id) else { return nil }
-        return id
-    }
-
-    private var attentionLine: String? {
-        if !store.connected { return store.linkState == .offline ? store.linkState.title : nil }
-        if let syncingChat, delayedSyncChat == syncingChat { return ChatStore.syncingThreadTitle }
-        if !store.hasApiKey { return ChatStore.missingApiKeyTitle }
-        if let hint = store.approvalHint(for: store.assistantChatId ?? "", surface: .phoneAssistant) {
-            return hint.title
-        }
-        if let title = store.backgroundAttentionTitle {
-            return title
-        }
-        switch store.assistantAvatarPhase {
-        case .failure: return ChatStore.failedRetryTitle
-        default: break
-        }
-        return nil
-    }
-
-    // MARK: 导航栏
-
-    private var titleView: some View {
-        AssistantPlayfulAvatar(phase: store.assistantAvatarPhase, size: 32, completionEvent: store.assistantCompletionEvent)
-            .overlay(alignment: .bottomTrailing) {
-                LinkStatusDot(state: store.linkState, syncing: syncingChat != nil)
-                    .offset(x: 1, y: 2)
-            }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(titleAccessibility)
-        .accessibilityHint("点按和小驳打个招呼")
-    }
-
-    private var titleAccessibility: String {
-        var parts = [store.assistantName, store.assistantAvatarPhase.accessibilityLabel]
-        if let subtitleText { parts.append(subtitleText) }
-        return parts.joined(separator: "，")
-    }
-
-    /// 连接状态由圆点表达；文字与形象使用同一客户端状态映射。
-    private var subtitleText: String? {
-        if store.connected {
-            if !store.hasApiKey { return ChatStore.missingApiKeyTitle }
-            if let hint = store.approvalHint(for: store.assistantChatId ?? "", surface: .phoneAssistant) {
-                return hint.title
-            }
-            switch store.assistantAvatarPhase {
-            case .approval: break
-            case .executing: return "正在执行"
-            case .thinking: return "正在思考"
-            case .listening: return "正在接收输入"
-            case .failure: return store.backgroundAttentionReason ?? "执行没有完成"
-            case .idle, .success, .offline: break
-            }
-            if let reason = store.backgroundAttentionReason { return reason }
-        }
-        return store.linkState.title
-    }
-
-    private var inboxButton: some View {
-        let badge = store.assistantBadgeCount
-        return Button {
-            router.go(.inbox)
-        } label: {
-            Image(systemName: "tray")
-                .font(JieboFont.text(.body, weight: .semibold))
-                .foregroundStyle(JieboColor.ink)
-                .frame(minWidth: 44, minHeight: 44)
-                .overlay(alignment: .topTrailing) {
-                    if badge > 0 {
-                        PendingBadge(count: badge)
-                            .offset(x: 10, y: -8)
-                    }
-                }
-        }
-        .accessibilityLabel(
-            badge > 0
-                ? "收件箱，\(StatusLegendId.attention.accessibilityLabel(count: badge))"
-                : "收件箱"
-        )
     }
 
     // MARK: 降级（§4.1.6）
@@ -316,6 +108,266 @@ struct AssistantHome: View {
         }
         .padding(.horizontal, 32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// 隔离同步延迟检测，避免 AssistantHome 主体订阅 store.chats / isThreadSyncBusy。
+private struct AssistantHomeSyncObserver: View {
+    @Environment(ChatStore.self) private var store
+    @Binding var delayedSyncChat: String?
+
+    private var syncingChat: String? {
+        guard store.connected, let id = store.assistantChatId, store.isThreadSyncBusy(id) else { return nil }
+        return id
+    }
+
+    var body: some View {
+        Color.clear
+            .task(id: syncingChat) {
+                if delayedSyncChat != nil { delayedSyncChat = nil }
+                guard let id = syncingChat else { return }
+                // 短暂同步由头像圆点提示；持续等待时才展示可操作的重试提示。
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                if syncingChat == id { delayedSyncChat = id }
+            }
+    }
+}
+
+/// 隔离导航栏对 avatarPhase / badge / sync 的高频订阅，流式吐字与打字不再触发 AssistantHome 重建 ThreadView。
+private struct AssistantHomeToolbar: ToolbarContent {
+    @Environment(ChatStore.self) private var store
+    let delayedSyncChat: String?
+    let openSidebar: () -> Void
+
+    private var syncingChat: String? {
+        guard store.connected, let id = store.assistantChatId, store.isThreadSyncBusy(id) else { return nil }
+        return id
+    }
+
+    private var attentionLine: String? {
+        if !store.connected { return store.linkState == .offline ? store.linkState.title : nil }
+        if let syncingChat, delayedSyncChat == syncingChat { return ChatStore.syncingThreadTitle }
+        if !store.hasApiKey { return ChatStore.missingApiKeyTitle }
+        if let hint = store.approvalHint(for: store.assistantChatId ?? "", surface: .phoneAssistant) {
+            return hint.title
+        }
+        if let title = store.backgroundAttentionTitle {
+            return title
+        }
+        switch store.assistantAvatarPhase {
+        case .failure: return ChatStore.failedRetryTitle
+        default: break
+        }
+        return nil
+    }
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            AssistantHomeTitleView()
+        }
+        ToolbarItem(placement: .topBarLeading) {
+            Button(action: openSidebar) {
+                Image(systemName: "sidebar.left")
+                    .frame(minWidth: 44, minHeight: 44)
+            }
+            .accessibilityLabel("打开小驳侧边栏")
+        }
+        if let line = attentionLine {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    if store.linkState == .offline {
+                        Button("重新连接") { store.retryConnection() }
+                    } else if line == ChatStore.syncingThreadTitle, let id = syncingChat {
+                        Button(line) { store.retryThreadSync(id) }
+                    } else if line == store.backgroundAttentionTitle {
+                        Button(line) { store.requestAssistant(force: true) }
+                    } else if line == ChatStore.failedRetryTitle, let id = store.assistantChatId {
+                        Button(line) { store.restoreFailedPromptIfDraftEmpty(chatId: id) }
+                    } else {
+                        Text(line)
+                    }
+                } label: {
+                    Label(line, systemImage: "info.circle")
+                }
+            }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            AssistantHomeInboxButton()
+        }
+    }
+}
+
+private struct AssistantHomeTitleView: View {
+    @Environment(ChatStore.self) private var store
+
+    private var syncingChat: String? {
+        guard store.connected, let id = store.assistantChatId, store.isThreadSyncBusy(id) else { return nil }
+        return id
+    }
+
+    private var titleAccessibility: String {
+        var parts = [store.assistantName, store.assistantAvatarPhase.accessibilityLabel]
+        if let subtitleText { parts.append(subtitleText) }
+        return parts.joined(separator: "，")
+    }
+
+    /// 连接状态由圆点表达；文字与形象使用同一客户端状态映射。
+    private var subtitleText: String? {
+        if store.connected {
+            if !store.hasApiKey { return ChatStore.missingApiKeyTitle }
+            if let hint = store.approvalHint(for: store.assistantChatId ?? "", surface: .phoneAssistant) {
+                return hint.title
+            }
+            switch store.assistantAvatarPhase {
+            case .approval: break
+            case .executing: return "正在执行"
+            case .thinking: return "正在思考"
+            case .listening: return "正在接收输入"
+            case .failure: return store.backgroundAttentionReason ?? "执行没有完成"
+            case .idle, .success, .offline: break
+            }
+            if let reason = store.backgroundAttentionReason { return reason }
+        }
+        return store.linkState.title
+    }
+
+    var body: some View {
+        AssistantPlayfulAvatar(phase: store.assistantAvatarPhase, size: 32, completionEvent: store.assistantCompletionEvent)
+            .overlay(alignment: .bottomTrailing) {
+                LinkStatusDot(state: store.linkState, syncing: syncingChat != nil)
+                    .offset(x: 1, y: 2)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(titleAccessibility)
+            .accessibilityHint("点按和小驳打个招呼")
+    }
+}
+
+private struct AssistantHomeInboxButton: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(PhoneRouter.self) private var router
+
+    var body: some View {
+        let badge = store.assistantBadgeCount
+        Button {
+            router.go(.inbox)
+        } label: {
+            Image(systemName: "tray")
+                .font(JieboFont.text(.body, weight: .semibold))
+                .foregroundStyle(JieboColor.ink)
+                .frame(minWidth: 44, minHeight: 44)
+                .overlay(alignment: .topTrailing) {
+                    if badge > 0 {
+                        PendingBadge(count: badge)
+                            .offset(x: 10, y: -8)
+                    }
+                }
+        }
+        .accessibilityLabel(
+            badge > 0
+                ? "收件箱，\(StatusLegendId.attention.accessibilityLabel(count: badge))"
+                : "收件箱"
+        )
+    }
+}
+
+private struct AssistantHomeSidebar: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(PhoneRouter.self) private var router
+    let closeSidebar: (@escaping () -> Void) -> Void
+    let openSkills: () -> Void
+    let openModelPicker: () -> Void
+    let openWorkspace: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("小驳").font(JieboFont.text(.title2, weight: .semibold))
+                Spacer()
+                Button { closeSidebar({}) } label: {
+                    Image(systemName: "xmark").frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("关闭侧边栏")
+            }
+            .padding(.horizontal, 16)
+            List {
+                Section {
+                    sidebarRoute("定时与自动化", symbol: NavigationIconId.schedules.symbol, route: .automation)
+                    sidebarRoute("文件", symbol: NavigationIconId.files.symbol, route: .artifacts)
+                }
+                Section("当前对话") {
+                    if let chatId = store.assistantChatId {
+                        conversationOptions(chatId: chatId)
+                    }
+                }
+                Section("记忆与能力") {
+                    sidebarRoute("记忆与规则", symbol: NavigationIconId.memory.symbol, route: .memory)
+                    Button { closeSidebar(openSkills) } label: {
+                        Label("技能工厂", systemImage: NavigationIconId.skills.symbol)
+                            .frame(minHeight: 44)
+                    }
+                    sidebarRoute("同事与访问管理", symbol: NavigationIconId.collab.symbol, route: .colleagues)
+                    sidebarRoute("连接与设备权限", symbol: "checkmark.shield", route: .connections)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .font(JieboFont.text(.subheadline))
+            .scrollContentBackground(.hidden)
+            Divider()
+            sidebarRoute("设置", symbol: NavigationIconId.account.symbol, route: .settings)
+                .padding(.horizontal, 16)
+            Button {
+                closeSidebar(openWorkspace)
+            } label: {
+                HStack {
+                    Label("工作台", systemImage: "rectangle.3.group")
+                    Spacer()
+                    if store.workspaceUnreadCount > 0 {
+                        PendingBadge(count: store.workspaceUnreadCount)
+                    }
+                }
+                .frame(minHeight: 44)
+                .padding(16)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScaleButtonStyle())
+        }
+        .foregroundStyle(JieboColor.ink)
+        .frame(maxHeight: .infinity)
+        .background(JieboColor.paper)
+    }
+
+    @ViewBuilder
+    private func conversationOptions(chatId: String) -> some View {
+        Button { closeSidebar(openModelPicker) } label: {
+            HStack(spacing: 12) {
+                Label("模型", systemImage: "cpu")
+                Spacer(minLength: 4)
+                Text(ModelCatalog.label(for: store.model(for: chatId)))
+                    .foregroundStyle(JieboColor.dim)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .accessibilityHidden(true)
+            }
+            .frame(minHeight: 44)
+        }
+        .buttonStyle(PressScaleButtonStyle())
+    }
+
+    private func sidebarRoute(_ title: String, symbol: String, route: PhoneRoute, badge: Int = 0) -> some View {
+        Button { closeSidebar { router.go(route) } } label: {
+            HStack(spacing: 12) {
+                Label(title, systemImage: symbol)
+                Spacer(minLength: 4)
+                if badge > 0 { PendingBadge(count: badge) }
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScaleButtonStyle())
+        .accessibilityLabel(badge > 0 ? "\(title)，\(badge) 项待处理" : title)
     }
 }
 

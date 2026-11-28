@@ -3,8 +3,11 @@ import UIKit
 import ImageIO
 
 /// 对话页的外壳：pad = iPad 大标题；phoneLegacy = iPad 窄窗（PhoneWorkbench）的旧手机标题栏；
-/// embedded = iPhone 助理页（PhoneShell）：头部为空、导航栏由宿主管理。
+/// embedded = iPhone/iPad 助理页：头部为空、导航栏由宿主管理。
 enum ThreadChrome { case pad, phoneLegacy, embedded }
+
+/// 仅 .embedded 使用的助理行动区类型：强类型替代 AnyView，保留双端路由隔离与结构 diff。
+enum ThreadAssistantDock { case none, phone, pad }
 
 private struct ThreadChatIdKey: EnvironmentKey {
     static let defaultValue = ""
@@ -35,8 +38,8 @@ struct ThreadView: View {
     /// nil = 工作台 activeId；聊天主页必须显式传助理或工作区 chatId。
     var chatId: String?
     var openDrawer: () -> Void = {}
-    /// 仅 .embedded 使用：渲染在消息列表与输入框之间的插槽（ActionDock）。输入框仍然只有 ThreadView 里这一个。
-    var dock: AnyView? = nil
+    /// 仅 .embedded 使用：在消息列表与输入框之间挂载对应端 ActionDock，避免 AnyView 破坏结构 diff。
+    var assistantDock: ThreadAssistantDock = .none
     @State var composerFocusNonce = 0
     /// 和当前会话对齐之后，新消息才做进入动画。切会话那一帧两者还不一致，避免整列重播。
     @State var motionChatId = ""
@@ -47,16 +50,23 @@ struct ThreadView: View {
     @State var loadingEarlierBatch = false
     /// 网络 prepend 前最上方回合；新页到达后原位复锚，避免列表跳动。
     @State var earlierNetworkAnchorId: String?
+    @State var earlierAnchorMinY: CGFloat = 0
     /// 顶部哨兵进视口只拉一页。离开视口后才允许下一次，避免停在顶部把整段历史连锁拉完。
+    @State var earlierMemoryArmed = true
     @State var earlierNetworkArmed = true
     @State var earlierDiskArmed = true
     @AppStorage(CalendarInvite.dismissedKey) var calendarInviteDismissed = false
 
-    init(chrome: ThreadChrome = .pad, chatId: String? = nil, openDrawer: @escaping () -> Void = {}, dock: AnyView? = nil) {
+    init(
+        chrome: ThreadChrome = .pad,
+        chatId: String? = nil,
+        openDrawer: @escaping () -> Void = {},
+        assistantDock: ThreadAssistantDock = .none
+    ) {
         self.chrome = chrome
         self.chatId = chatId
         self.openDrawer = openDrawer
-        self.dock = dock
+        self.assistantDock = assistantDock
     }
 
     /// 旧写法：窄屏手机标题栏。保留给 PhoneWorkbench 等现有调用点。
@@ -227,8 +237,17 @@ struct ThreadView: View {
                 }
             }
             .animation(JieboMotion.fade(reduceMotion), value: delegated.first?.id)
-            if chrome == .embedded, let dock {
-                dock.environment(\.assistantReadingHistory, !stickToBottom)
+            if chrome == .embedded {
+                switch assistantDock {
+                case .none:
+                    EmptyView()
+                case .phone:
+                    ActionDock()
+                        .environment(\.assistantReadingHistory, !stickToBottom)
+                case .pad:
+                    PadActionDock()
+                        .environment(\.assistantReadingHistory, !stickToBottom)
+                }
             }
             Group {
                 if chrome == .embedded, store.bannerError.isEmpty, let turn = embeddedUndoTurn {
@@ -437,7 +456,8 @@ struct ThreadView: View {
     @State var pinExceeded = false
     @State var pinBaselineMinY: CGFloat?
     @State var pinBaselineReady = false
-    @State var pinnedTurnMinY: CGFloat = 0
+    /// 120Hz 滚动帧内的高频几何采样盒子（非 @Observable，写入不触发 SwiftUI 视图重算）。
+    @State var scrollMetrics = ThreadScrollMetrics()
     /// 程序滚动结束后的短窗口内，相位和 minY 变化不算用户上滑。
     @State var pinScrollGuardUntil = Date.distantPast
     /// 贴底滚动之后，下一次 minY 只用来重记基线，不拿去和旧的钉顶位置比。
@@ -463,6 +483,28 @@ struct ThreadView: View {
         "最近改了哪些文件？",
         "用 Canvas 概括这个仓库",
     ]
+}
+
+/// 滚动期高频采样的几何与快照状态（不挂 @Observable，避免 120Hz 滚动每帧标脏 ThreadView）。
+@MainActor
+final class ThreadScrollMetrics {
+    var pinnedTurnMinY: CGFloat = 0
+    var firstTurnId: String?
+    var firstTurnMinY: CGFloat = 0
+    var lastActiveTurnId: String?
+    var lastActiveLiveTail: UInt64 = 0
+    var lastActiveHeightRevision: UInt64 = 0
+    var lastActiveViewportHeight: CGFloat = 0
+
+    func resetForChatSwitch() {
+        pinnedTurnMinY = 0
+        firstTurnId = nil
+        firstTurnMinY = 0
+        lastActiveTurnId = nil
+        lastActiveLiveTail = 0
+        lastActiveHeightRevision = 0
+        lastActiveViewportHeight = 0
+    }
 }
 
 private struct ThreadSidebarToggleRemoval: ViewModifier {

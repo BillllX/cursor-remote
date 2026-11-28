@@ -41,7 +41,7 @@ struct PadTodayExperience: View {
                     ThreadView(
                         chrome: .embedded,
                         chatId: chatId,
-                        dock: AnyView(PadActionDock())
+                        assistantDock: .pad
                     )
                     .id(chatId)
                 }

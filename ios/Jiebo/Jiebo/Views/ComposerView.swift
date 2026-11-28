@@ -323,7 +323,11 @@ struct ComposerView: View {
               store.isAssistantChat(chatId)
         else { return }
         toggleVoice()
-        AssistantCaptureBridge.remove(id: delivery.capture.id, tenant: delivery.capture.tenant)
+        let captureId = delivery.capture.id
+        let captureTenant = delivery.capture.tenant
+        Task.detached(priority: .utility) {
+            AssistantCaptureBridge.remove(id: captureId, tenant: captureTenant)
+        }
     }
 
     /// 最低支持 iOS 26：助理胶囊仍是浮在内容上的玻璃底。底栏本身用 safeAreaInset，不用 safeAreaBar。
@@ -426,8 +430,7 @@ struct ComposerView: View {
         draftBuffer.pendingChatId = nil
         ignoreDraftEcho = ""
         let current = draftBuffer.text
-        // 发送接口保持兼容；共享 draft 只在这一瞬间作提交参数，不再作为多窗口编辑状态。
-        store.saveDraft(current, forChat: chatId)
+        // 直接进入 submit：成功发送时一次清空草稿与追加回合，不再先 saveDraft 造成二次写 chats 与重复扫描 @ 补全。
         store.submit(chatId: chatId, text: current)
         let next = store.draft(for: chatId)
         sceneSession?.saveDraft(next, for: chatId)

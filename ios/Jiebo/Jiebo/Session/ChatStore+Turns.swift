@@ -151,16 +151,19 @@ extension ChatStore {
         guard !text.isEmpty || !images.isEmpty else { return }
         // 带图 prompt 不进 outbox（base64 太大），掉线时直接拒发
         if !images.isEmpty, !client.isOpen {
+            saveDraft(rawText, forChat: chatId)
             bannerError = Self.offlineImageTitle
             return
         }
         // 自动登录还没完成：send 会丢掉消息，草稿留着
         guard unlocked else {
+            saveDraft(rawText, forChat: chatId)
             flash(linkState == .offline ? "已断开，稍后再发" : "正在连接，稍后再发")
             return
         }
         // 冷启动缓存列表里的会话还没跟服务端对上：只读，草稿留着等同步完再发
         guard !cachedOnlyIds.contains(chatId) else {
+            saveDraft(rawText, forChat: chatId)
             flash("这条对话还没对上服务器，稍后再发")
             return
         }
@@ -168,6 +171,7 @@ extension ChatStore {
         if let target = chats.first(where: { $0.id == chatId }),
            !isAssistantChat(target.id), target.turnsComplete, target.turns.isEmpty,
            isUserRoot(target.cwd?.nilIfEmpty ?? workspaceRoot) {
+            saveDraft(rawText, forChat: chatId)
             flash("先选一个子文件夹，再发。")
             openWorkspaceSwitcher()
             return
@@ -188,12 +192,17 @@ extension ChatStore {
         )
         turn.images = images.map(\.promptImage)
         if chatId == activeId {
-            draft = ""
-            pendingImages = []
+            if !draft.isEmpty { draft = "" }
+            if !pendingImages.isEmpty { pendingImages = [] }
         }
-        imagesByChat[chatId] = nil
-        bannerError = ""
-        notice = ""
+        if imagesByChat[chatId] != nil { imagesByChat[chatId] = nil }
+        if mentionQueryByChat[chatId] != nil { mentionQueryByChat.removeValue(forKey: chatId) }
+        mentionTasksByChat.removeValue(forKey: chatId)?.cancel()
+        if !(mentionSuggestionsByChat[chatId]?.isEmpty ?? true) {
+            mentionSuggestionsByChat[chatId] = []
+        }
+        if !bannerError.isEmpty { bannerError = "" }
+        if !notice.isEmpty { notice = "" }
         patch(chatId) { chat in
             var next = chat
             next.draft = ""

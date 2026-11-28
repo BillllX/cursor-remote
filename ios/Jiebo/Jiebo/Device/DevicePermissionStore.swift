@@ -74,7 +74,9 @@ final class DevicePermissionStore {
             ),
         ]
         let changed = !initialized || zip(permissions, next).contains { $0.status != $1.status }
-        permissions = next
+        if changed {
+            permissions = next
+        }
         initialized = true
         if changed || forceReport {
             reportHandler?(reqId, grants)

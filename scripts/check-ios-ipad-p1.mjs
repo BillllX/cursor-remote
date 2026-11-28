@@ -82,7 +82,7 @@ requireSource(thread, "ThreadSidebarToggleRemoval(enabled: chrome != .embedded)"
 if (count(shell + experience, /\bThreadView\s*\(/g) !== 1) {
   throw new Error("P1 小驳域必须且只能有一个 ThreadView/Composer 来源");
 }
-requireSource(experience, "dock: AnyView(PadActionDock())", "iPad ActionDock 挂载");
+requireSource(experience, "assistantDock: .pad", "iPad ActionDock 挂载");
 const padDock = experience.match(/struct PadActionDock[\s\S]*?\/\/ MARK: - 统一 Inspector/)?.[0] ?? "";
 if (!padDock.includes("@Environment(PadRouter.self)") || padDock.includes("PhoneRouter")) {
   throw new Error("PadActionDock 必须只通过 PadRouter 导航");

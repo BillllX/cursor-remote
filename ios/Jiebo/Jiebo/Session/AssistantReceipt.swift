@@ -94,16 +94,47 @@ struct AssistantReceipt: Identifiable, Hashable {
 }
 
 /// 只记录本人已看到的结果，按网关和租户隔离。重建视图不重播，前后台切换不重播。
+/// 针对 standard UserDefaults 维护内存缓存，避免 SwiftUI 热路径每次重绘读盘解码。
 enum AssistantReceiptMemory {
+    private static let lock = NSLock()
+    private static var standardCache: [String: (ordered: [String], set: Set<String>)] = [:]
+
     static func scope(server: String, tenant: String) -> String {
         "jiebo.receipt.\(server).\(tenant)"
     }
 
     static func contains(_ id: String, scope: String, defaults: UserDefaults = .standard) -> Bool {
-        (defaults.stringArray(forKey: scope) ?? []).contains(id)
+        if defaults === UserDefaults.standard {
+            lock.lock()
+            defer { lock.unlock() }
+            if let entry = standardCache[scope] {
+                return entry.set.contains(id)
+            }
+            let stored = defaults.stringArray(forKey: scope) ?? []
+            let set = Set(stored)
+            standardCache[scope] = (stored, set)
+            return set.contains(id)
+        }
+        return (defaults.stringArray(forKey: scope) ?? []).contains(id)
     }
 
     static func record(_ id: String, scope: String, defaults: UserDefaults = .standard) {
+        if defaults === UserDefaults.standard {
+            lock.lock()
+            defer { lock.unlock() }
+            let entry = standardCache[scope] ?? {
+                let stored = defaults.stringArray(forKey: scope) ?? []
+                return (stored, Set(stored))
+            }()
+            guard !entry.set.contains(id) else {
+                standardCache[scope] = entry
+                return
+            }
+            let next = Array((entry.ordered + [id]).suffix(200))
+            standardCache[scope] = (next, Set(next))
+            defaults.set(next, forKey: scope)
+            return
+        }
         let previous = defaults.stringArray(forKey: scope) ?? []
         guard !previous.contains(id) else { return }
         defaults.set(Array((previous + [id]).suffix(200)), forKey: scope)

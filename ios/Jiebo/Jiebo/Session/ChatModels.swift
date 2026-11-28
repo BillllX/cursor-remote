@@ -75,71 +75,154 @@ func toolFilePath(args: JSONValue?, result: JSONValue?) -> String? {
 
 /// 按工具名判断改/写/删/生图，规则和用例与 shared/toolNames.ts 一致（网关文件清单、网页工具卡片共用）
 enum ToolNames {
-    private static let editWord =
-        "(?:^|[^a-z])(?:edit|replace|patch|multiedit|strreplace|editnotebook|applypatch|searchreplace|editfile)(?:[^a-z]|$)"
-    private static let writeWord = "(?:^|[^a-z])(?:write|writefile|createfile)(?:[^a-z]|$)"
-    private static let createFile = "(?:^|[^a-z])create[^a-z]+files?(?:[^a-z]|$)"
-    private static let imageWord = "(?:^|[^a-z])(?:generateimage|imagegen|generate[^a-z]+image|image[^a-z]+gen)(?:[^a-z]|$)"
-    private static let planOrTodo = "todo|create_?plan"
-    private static let deleteWord = "delete|unlink|remove"
+    private static let camelRe = try! NSRegularExpression(pattern: "([a-z0-9])([A-Z])")
+    private static let editWordRe = try! NSRegularExpression(
+        pattern: "(?:^|[^a-z])(?:edit|replace|patch|multiedit|strreplace|editnotebook|applypatch|searchreplace|editfile)(?:[^a-z]|$)"
+    )
+    private static let writeWordRe = try! NSRegularExpression(pattern: "(?:^|[^a-z])(?:write|writefile|createfile)(?:[^a-z]|$)")
+    private static let createFileRe = try! NSRegularExpression(pattern: "(?:^|[^a-z])create[^a-z]+files?(?:[^a-z]|$)")
+    private static let imageWordRe = try! NSRegularExpression(
+        pattern: "(?:^|[^a-z])(?:generateimage|imagegen|generate[^a-z]+image|image[^a-z]+gen)(?:[^a-z]|$)"
+    )
+    private static let planOrTodoRe = try! NSRegularExpression(pattern: "todo|create_?plan")
+    private static let deleteWordRe = try! NSRegularExpression(pattern: "delete|unlink|remove")
+    private static let deleteShortRe = try! NSRegularExpression(pattern: "delete|unlink")
+
+    private struct Flags {
+        let isEdit: Bool
+        let isWrite: Bool
+        let isDelete: Bool
+        let isImage: Bool
+        let writesFiles: Bool
+    }
+
+    private static let cacheLock = NSLock()
+    private static var flagsCache: [String: Flags] = [:]
 
     /// 驼峰拆成下划线再小写：MultiEdit → multi_edit；按单词匹配，credit 里的 edit 不算
     static func words(_ name: String) -> String {
-        name.replacingOccurrences(of: "([a-z0-9])([A-Z])", with: "$1_$2", options: .regularExpression).lowercased()
+        let range = NSRange(name.startIndex..<name.endIndex, in: name)
+        return camelRe.stringByReplacingMatches(in: name, range: range, withTemplate: "$1_$2").lowercased()
     }
 
-    private static func has(_ pattern: String, _ words: String) -> Bool {
-        words.range(of: pattern, options: .regularExpression) != nil
+    private static func matches(_ regex: NSRegularExpression, _ text: String) -> Bool {
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.firstMatch(in: text, range: range) != nil
+    }
+
+    private static func flags(for name: String) -> Flags {
+        cacheLock.lock()
+        if let hit = flagsCache[name] {
+            cacheLock.unlock()
+            return hit
+        }
+        cacheLock.unlock()
+
+        let n = words(name)
+        let planTodo = matches(planOrTodoRe, n)
+        let edit = !planTodo && matches(editWordRe, n)
+        let write = !planTodo && (matches(writeWordRe, n) || matches(createFileRe, n))
+        let del = matches(deleteShortRe, n)
+        let img = matches(imageWordRe, n)
+        let writes = !planTodo && !matches(deleteWordRe, n) && (edit || write || img)
+        let computed = Flags(isEdit: edit, isWrite: write, isDelete: del, isImage: img, writesFiles: writes)
+
+        cacheLock.lock()
+        if flagsCache.count >= 256 { flagsCache.removeAll(keepingCapacity: true) }
+        flagsCache[name] = computed
+        cacheLock.unlock()
+        return computed
     }
 
     /// 改已有文件的工具：edit、StrReplace、MultiEdit、apply_patch、EditNotebook……
-    static func isEdit(_ name: String) -> Bool {
-        let n = words(name)
-        return !has(planOrTodo, n) && has(editWord, n)
-    }
+    static func isEdit(_ name: String) -> Bool { flags(for: name).isEdit }
 
     /// 新建或整体写入文件的工具：write、createFile、write_file……
-    static func isWrite(_ name: String) -> Bool {
-        let n = words(name)
-        return !has(planOrTodo, n) && (has(writeWord, n) || has(createFile, n))
-    }
+    static func isWrite(_ name: String) -> Bool { flags(for: name).isWrite }
 
     /// 删文件的工具：delete_file、unlink（按子串）
-    static func isDelete(_ name: String) -> Bool {
-        has("delete|unlink", words(name))
-    }
+    static func isDelete(_ name: String) -> Bool { flags(for: name).isDelete }
 
     /// 生成图片的工具：GenerateImage、generate_image、image_gen
-    static func isImage(_ name: String) -> Bool {
-        has(imageWord, words(name))
-    }
+    static func isImage(_ name: String) -> Bool { flags(for: name).isImage }
 
     /// 调用后会在工作区留下文件内容的工具：改、写、生成图片；删除、todo、计划不算
-    static func writesFiles(_ name: String) -> Bool {
-        let n = words(name)
-        if has(planOrTodo, n) || has(deleteWord, n) { return false }
-        return has(editWord, n) || has(writeWord, n) || has(createFile, n) || has(imageWord, n)
-    }
+    static func writesFiles(_ name: String) -> Bool { flags(for: name).writesFiles }
 }
 
 enum ToolKind: String {
     case read, edit, write, shell, search, other
 
+    private enum NameResolution {
+        case resolved(ToolKind)
+        case fallbackToArgs
+    }
+
+    private static let skillRe = try! NSRegularExpression(
+        pattern: "(^|__|[./:])skill_(use|propose|list|verify|mark_used|proposal_)"
+    )
+    private static let todoPlanRe = try! NSRegularExpression(pattern: "todo|createplan")
+    private static let shellRe = try! NSRegularExpression(pattern: "shell|bash|terminal|command")
+    private static let searchRe = try! NSRegularExpression(pattern: "grep|glob|search|find|ripgrep")
+    private static let readRe = try! NSRegularExpression(pattern: "read|cat|open|getfile")
+    private static let todoTaskRe = try! NSRegularExpression(pattern: "todo|task")
+
+    private static let cacheLock = NSLock()
+    private static var nameCache: [String: NameResolution] = [:]
+
+    private static func matches(_ regex: NSRegularExpression, _ text: String) -> Bool {
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.firstMatch(in: text, range: range) != nil
+    }
+
+    private static func resolveName(_ name: String) -> NameResolution {
+        cacheLock.lock()
+        if let hit = nameCache[name] {
+            cacheLock.unlock()
+            return hit
+        }
+        cacheLock.unlock()
+
+        let n = name.lowercased()
+        let resolution: NameResolution
+        if matches(skillRe, n) {
+            resolution = .resolved(.other)
+        } else if matches(todoPlanRe, n) {
+            resolution = .resolved(.other)
+        } else if matches(shellRe, n) {
+            resolution = .resolved(.shell)
+        } else if matches(searchRe, n) {
+            resolution = .resolved(.search)
+        } else if ToolNames.isEdit(name) {
+            resolution = .resolved(.edit)
+        } else if ToolNames.isWrite(name) || ToolNames.isDelete(name) {
+            resolution = .resolved(.write)
+        } else if matches(readRe, n) {
+            resolution = .resolved(.read)
+        } else if matches(todoTaskRe, n) {
+            resolution = .resolved(.other)
+        } else {
+            resolution = .fallbackToArgs
+        }
+
+        cacheLock.lock()
+        if nameCache.count >= 256 { nameCache.removeAll(keepingCapacity: true) }
+        nameCache[name] = resolution
+        cacheLock.unlock()
+        return resolution
+    }
+
     /// 对齐网页 web/lib/chat/toolKinds.ts 的 toolKind
     static func from(name: String, args: JSONValue?) -> ToolKind {
-        let n = name.lowercased()
-        if n.range(of: "(^|__|[./:])skill_(use|propose|list|verify|mark_used|proposal_)", options: .regularExpression) != nil { return .other }
-        if n.range(of: "todo|createplan", options: .regularExpression) != nil { return .other }
-        if n.range(of: "shell|bash|terminal|command", options: .regularExpression) != nil { return .shell }
-        if n.range(of: "grep|glob|search|find|ripgrep", options: .regularExpression) != nil { return .search }
-        if ToolNames.isEdit(name) { return .edit }
-        if ToolNames.isWrite(name) || ToolNames.isDelete(name) { return .write }
-        if n.range(of: "read|cat|open|getfile", options: .regularExpression) != nil { return .read }
-        if n.range(of: "todo|task", options: .regularExpression) != nil { return .other }
-        if let args, !args.string(in: "globPattern", "glob", "glob_pattern", "pattern", "query").isEmpty {
-            return .search
+        switch resolveName(name) {
+        case .resolved(let kind):
+            return kind
+        case .fallbackToArgs:
+            if let args, !args.string(in: "globPattern", "glob", "glob_pattern", "pattern", "query").isEmpty {
+                return .search
+            }
+            return .other
         }
-        return .other
     }
 
     /// 会改文件的工具（对齐网页 mutatingTool：edit/write 才自动开 diff）

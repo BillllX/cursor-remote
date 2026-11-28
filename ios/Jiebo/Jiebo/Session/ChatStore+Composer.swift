@@ -6,7 +6,9 @@ import UIKit
 extension ChatStore {
     func saveDraft(_ value: String) {
         if draft != value { draft = value }
-        updateMentions(for: value)
+        if mentionQueryByChat[activeId] != nil || !(mentionSuggestionsByChat[activeId]?.isEmpty ?? true) || value.contains("@") {
+            updateMentions(for: value)
+        }
         guard let index = chats.firstIndex(where: { $0.id == activeId }) else { return }
         if chats[index].draft != value {
             chats[index].draft = value

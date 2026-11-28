@@ -10,7 +10,9 @@ enum AssistantCaptureDrain {
         defer { running = false }
 
         let tenant = store.tenantId
-        let captures = AssistantCaptureBridge.pending(tenant: tenant)
+        let captures = await Task.detached(priority: .utility) {
+            AssistantCaptureBridge.pending(tenant: tenant)
+        }.value
         guard !captures.isEmpty else { return }
         // 先让当前设备的壳切到小驳域；iPhone 壳会选择主会话，iPad 固定 chatId、不改工作台 activeId。
         NotificationCenter.default.post(name: .assistantCaptureOpenRequested, object: nil)
@@ -36,7 +38,10 @@ enum AssistantCaptureDrain {
             store.submit(chatId: chatId, text: prompt)
             let after = store.chatSession(chatId)?.turns.count ?? 0
             if after > before {
-                AssistantCaptureBridge.remove(id: capture.id, tenant: tenant)
+                let removedId = capture.id
+                await Task.detached(priority: .utility) {
+                    AssistantCaptureBridge.remove(id: removedId, tenant: tenant)
+                }.value
             } else {
                 break
             }
