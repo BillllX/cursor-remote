@@ -23,22 +23,35 @@ struct DelegationListScreen: View {
         ("completed", "已完成"),
     ]
 
-    private var rows: [PersonalTask] {
-        (store.assistantState?.personalTasks ?? []).filter { task in
-            guard AssistantWorkColumn.matching(task.kind) == column else { return false }
-            return true
-        }
+    private struct TaskListSnapshot {
+        let hasPersonalTasks: Bool
+        let isEmpty: Bool
+        let grouped: [String: [PersonalTask]]
+        let legacy: [AssistantDelegation]
     }
 
-    private var legacyRows: [AssistantDelegation] {
-        (store.assistantState?.delegations ?? []).sorted { $0.createdAt > $1.createdAt }
+    private func buildSnapshot() -> TaskListSnapshot {
+        if let personalTasks = store.assistantState?.personalTasks {
+            var grouped: [String: [PersonalTask]] = [:]
+            var total = 0
+            for task in personalTasks where AssistantWorkColumn.matching(task.kind) == column {
+                total += 1
+                grouped[bucket(task), default: []].append(task)
+            }
+            return TaskListSnapshot(hasPersonalTasks: true, isEmpty: total == 0, grouped: grouped, legacy: [])
+        }
+        let legacy = column == .delegation
+            ? (store.assistantState?.delegations ?? []).sorted { $0.createdAt > $1.createdAt }
+            : []
+        return TaskListSnapshot(hasPersonalTasks: false, isEmpty: legacy.isEmpty, grouped: [:], legacy: legacy)
     }
 
     var body: some View {
+        let snapshot = buildSnapshot()
         List {
-            if store.assistantState?.personalTasks != nil {
+            if snapshot.hasPersonalTasks {
                 ForEach(groups, id: \.phase) { group in
-                    let items = rows.filter { bucket($0) == group.phase }
+                    let items = snapshot.grouped[group.phase] ?? []
                     if !items.isEmpty {
                         if group.phase == "completed", !showCompleted {
                             Section {
@@ -74,7 +87,7 @@ struct DelegationListScreen: View {
             } else if column == .delegation {
                 // 老网关没有投影时仍保留委派入口。
                 Section {
-                    ForEach(legacyRows) { row in
+                    ForEach(snapshot.legacy) { row in
                         delegationRow(row)
                             .listRowBackground(JieboColor.white)
                     }
@@ -93,7 +106,7 @@ struct DelegationListScreen: View {
         .overlay {
             if store.assistantState == nil {
                 AssistantLoadingView(title: "正在加载委派…")
-            } else if column != .todo, rows.isEmpty && (column != .delegation || legacyRows.isEmpty || store.assistantState?.personalTasks != nil) {
+            } else if column != .todo, snapshot.isEmpty {
                 ContentUnavailableView(
                     "还没有\(column.title)",
                     systemImage: column.symbol,
@@ -148,11 +161,17 @@ struct DelegationListScreen: View {
     /// 同一标题、同一句失败叠在一起。普通待办标题碰巧相同仍各占一行。
     private func clusters(_ items: [PersonalTask]) -> [TaskCluster] {
         var result: [TaskCluster] = []
+        result.reserveCapacity(items.count)
+        var indexByKey: [String: Int] = [:]
         for task in items {
-            let key = "\(task.title)|\(taskStatus(task))"
-            if collapsesTogether(task),
-               let index = result.lastIndex(where: { "\($0.items[0].title)|\(taskStatus($0.items[0]))" == key }) {
-                result[index].items.append(task)
+            if collapsesTogether(task) {
+                let key = "\(task.title)\u{0}\(taskStatus(task))"
+                if let index = indexByKey[key] {
+                    result[index].items.append(task)
+                } else {
+                    indexByKey[key] = result.count
+                    result.append(TaskCluster(items: [task]))
+                }
             } else {
                 result.append(TaskCluster(items: [task]))
             }

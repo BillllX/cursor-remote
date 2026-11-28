@@ -217,10 +217,13 @@ private struct PhoneDrawer: View {
     private var selectedChatId: String { sceneSession?.workbenchChatId ?? store.activeId }
 
     var body: some View {
+        let chats = workspaceChats
+        let currentTitle = workspaceTitle
+        let activeSelection = selectedChatId
         VStack(alignment: .leading, spacing: 0) {
             brandBar
 
-            workspaceCard
+            workspaceCard(title: currentTitle)
                 .padding(.horizontal, 12)
 
             workspacePrimaryActions
@@ -232,15 +235,15 @@ private struct PhoneDrawer: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    if workspaceChats.isEmpty {
+                    if chats.isEmpty {
                         Text("这里还没有对话")
                             .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.dim)
                             .padding(.horizontal, 20)
                             .padding(.vertical, 10)
                     } else {
-                        ForEach(workspaceChats) { chat in
-                            chatRow(chat)
+                        ForEach(chats) { chat in
+                            chatRow(chat, selected: chat.id == activeSelection)
                         }
                     }
                 }
@@ -321,7 +324,7 @@ private struct PhoneDrawer: View {
 
     // MARK: 当前工作区
 
-    private var workspaceCard: some View {
+    private func workspaceCard(title: String) -> some View {
         Button(action: openWorkspaces) {
             HStack(spacing: 10) {
                 Image(systemName: NavigationIconId.workspace.symbol)
@@ -334,7 +337,7 @@ private struct PhoneDrawer: View {
                     Text("当前文件夹")
                         .font(JieboFont.text(.caption2))
                         .foregroundStyle(JieboColor.dim)
-                    Text(workspaceTitle)
+                    Text(title)
                         .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
@@ -358,7 +361,7 @@ private struct PhoneDrawer: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressScaleButtonStyle())
-        .accessibilityLabel("当前文件夹，\(workspaceTitle)")
+        .accessibilityLabel("当前文件夹，\(title)")
         .accessibilityHint("换一个文件夹")
     }
 
@@ -412,8 +415,7 @@ private struct PhoneDrawer: View {
         .padding(.trailing, 16)
     }
 
-    private func chatRow(_ chat: ChatSession) -> some View {
-        let selected = chat.id == selectedChatId
+    private func chatRow(_ chat: ChatSession, selected: Bool) -> some View {
         let live = store.chatShowsRunning(chat)
         return Button {
             phoneRouter?.invalidatePendingNavigation()
@@ -422,54 +424,14 @@ private struct PhoneDrawer: View {
             store.activateWorkspaceChat(chat.id)
             close()
         } label: {
-            HStack(spacing: 8) {
-                Capsule()
-                    .fill(selected ? JieboColor.pine : Color.clear)
-                    .frame(width: 3, height: 22)
-                    .accessibilityHidden(true)
-                Text(chat.title)
-                    .font(JieboFont.text(.subheadline, weight: chat.unread ? .semibold : .regular))
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                if selected {
-                    Text("当前")
-                        .font(JieboFont.text(.caption2, weight: .semibold))
-                        .foregroundStyle(JieboColor.pine)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(JieboColor.pine.opacity(0.12))
-                        .clipShape(Capsule())
-                        .accessibilityHidden(true)
-                } else if !live, let touched = chat.touchedAt {
-                    AgoLabel(epochMs: touched, font: JieboFont.text(.caption2))
-                }
-                if live {
-                    Text("跑")
-                        .font(JieboFont.text(.caption2, weight: .medium))
-                        .foregroundStyle(JieboColor.run)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(JieboColor.runBg)
-                        .clipShape(Capsule())
-                } else if chat.unread {
-                    Circle().fill(JieboColor.pine).frame(width: 6, height: 6)
-                }
-            }
-            .foregroundStyle(JieboColor.ink)
-            .padding(.horizontal, 12)
-            .frame(minHeight: 44)
-            .background(selected ? JieboColor.pine.opacity(0.1) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                    .stroke(selected ? JieboColor.pine.opacity(0.42) : Color.clear, lineWidth: 1)
+            PhoneDrawerChatRowContent(
+                title: chat.title,
+                unread: chat.unread,
+                touchedAt: chat.touchedAt,
+                selected: selected,
+                live: live
             )
-            .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
-            .hoverEffect(.highlight)
-            .padding(.horizontal, 8)
-            .contentShape(Rectangle())
+            .equatable()
         }
         .buttonStyle(.plain)
         .accessibilityLabel([
@@ -525,6 +487,68 @@ private struct PhoneDrawer: View {
 struct WorkbenchShortcuts: View {
     var body: some View {
         EmptyView()
+    }
+}
+
+/// 手机抽屉会话行内容：Equatable（含主题与外观键），避免流式消息更新导致非活跃行重复布局。
+private struct PhoneDrawerChatRowContent: View, Equatable {
+    let title: String
+    let unread: Bool
+    let touchedAt: Double?
+    let selected: Bool
+    let live: Bool
+    var palette: JieboPalette = JieboTheme.shared.palette
+    var appearance: JieboAppearance = JieboTheme.shared.appearance
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Capsule()
+                .fill(selected ? JieboColor.pine : Color.clear)
+                .frame(width: 3, height: 22)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(JieboFont.text(.subheadline, weight: unread ? .semibold : .regular))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            if selected {
+                Text("当前")
+                    .font(JieboFont.text(.caption2, weight: .semibold))
+                    .foregroundStyle(JieboColor.pine)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(JieboColor.pine.opacity(0.12))
+                    .clipShape(Capsule())
+                    .accessibilityHidden(true)
+            } else if !live, let touched = touchedAt {
+                AgoLabel(epochMs: touched, font: JieboFont.text(.caption2))
+            }
+            if live {
+                Text("跑")
+                    .font(JieboFont.text(.caption2, weight: .medium))
+                    .foregroundStyle(JieboColor.run)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(JieboColor.runBg)
+                    .clipShape(Capsule())
+            } else if unread {
+                Circle().fill(JieboColor.pine).frame(width: 6, height: 6)
+            }
+        }
+        .foregroundStyle(JieboColor.ink)
+        .padding(.horizontal, 12)
+        .frame(minHeight: 44)
+        .background(selected ? JieboColor.pine.opacity(0.1) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
+                .stroke(selected ? JieboColor.pine.opacity(0.42) : Color.clear, lineWidth: 1)
+        )
+        .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
+        .hoverEffect(.highlight)
+        .padding(.horizontal, 8)
+        .contentShape(Rectangle())
     }
 }
 

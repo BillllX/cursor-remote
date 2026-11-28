@@ -9,34 +9,65 @@ struct ArtifactCenterView: View {
     @State private var kindFilter = ArtifactKindFilter.all
     @State private var presentation = ArtifactPresentation.recent
 
-    private var allFiles: [Artifact] {
-        (store.assistantState?.artifacts ?? [])
-            .filter { $0.kind == "file" && kindFilter.matches($0) }
-            .filter { searchText.isEmpty || $0.title.localizedCaseInsensitiveContains(searchText) }
-            .sorted { $0.createdAt > $1.createdAt }
-    }
-
     private func versionKey(_ file: Artifact) -> String {
         guard let path = file.path, let chat = file.sourceChatId else { return file.id }
         return chat + "\n" + path
     }
 
-    private var artifacts: [Artifact] {
-        var seen = Set<String>()
-        return allFiles.filter { seen.insert(versionKey($0)).inserted }
+    private struct ArtifactProjection {
+        let artifacts: [Artifact]
+        let versionsByKey: [String: [Artifact]]
+        let groups: [ArtifactGroup]
     }
 
-    private func versions(_ file: Artifact) -> [Artifact] {
-        allFiles.filter { versionKey($0) == versionKey(file) }
+    private func buildProjection() -> ArtifactProjection {
+        // 单次筛选、排序、去重与历史版本归组，消除 ForEach 每行重复重算 allFiles 的 O(N² log N) 开销
+        let sorted = (store.assistantState?.artifacts ?? [])
+            .filter { item in
+                item.kind == "file"
+                    && kindFilter.matches(item)
+                    && (searchText.isEmpty || item.title.localizedCaseInsensitiveContains(searchText))
+            }
+            .sorted { $0.createdAt > $1.createdAt }
+        var unique: [Artifact] = []
+        unique.reserveCapacity(sorted.count)
+        var versionsByKey: [String: [Artifact]] = [:]
+        versionsByKey.reserveCapacity(sorted.count)
+        for item in sorted {
+            let key = versionKey(item)
+            if versionsByKey[key] == nil {
+                unique.append(item)
+                versionsByKey[key] = [item]
+            } else {
+                versionsByKey[key]?.append(item)
+            }
+        }
+        let groups: [ArtifactGroup]
+        switch presentation {
+        case .recent:
+            groups = [ArtifactGroup(id: "recent", title: "最近", items: unique)]
+        case .type:
+            groups = grouped(unique) { artifact in
+                switch artifact.kind {
+                case "file": return "文件"
+                case "link": return "链接"
+                default: return "捕获"
+                }
+            }
+        case .source:
+            groups = grouped(unique) { $0.sourceTypeTitle }
+        }
+        return ArtifactProjection(artifacts: unique, versionsByKey: versionsByKey, groups: groups)
     }
 
     var body: some View {
+        let projection = buildProjection()
         Group {
             if store.assistantState == nil {
                 AssistantLoadingView(title: "正在加载文件…")
             } else if store.assistantState?.artifacts == nil {
                 ContentUnavailableView("文件中心不可用", systemImage: "square.stack.3d.up", description: Text("当前网关版本还没有提供文件投影。"))
-            } else if artifacts.isEmpty {
+            } else if projection.artifacts.isEmpty {
                 if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     ContentUnavailableView {
                         Label("没有找到文件", systemImage: "magnifyingglass")
@@ -59,14 +90,14 @@ struct ArtifactCenterView: View {
                 }
             } else {
                 List {
-                    ForEach(groups) { group in
+                    ForEach(projection.groups) { group in
                         Section {
                             ForEach(group.items) { artifact in
                                 ArtifactRow(artifact: artifact, onContinue: {
                                     router.popToRoot()
                                     _ = store.continueArtifact(artifact)
                                 })
-                                let history = versions(artifact)
+                                let history = projection.versionsByKey[versionKey(artifact)] ?? []
                                 if history.count > 1 {
                                     DisclosureGroup("历史版本（\(history.count - 1)）") {
                                         ForEach(Array(history.dropFirst())) { previous in
@@ -129,25 +160,8 @@ struct ArtifactCenterView: View {
         .padding(.vertical, 8)
     }
 
-    private var groups: [ArtifactGroup] {
-        switch presentation {
-        case .recent:
-            return [ArtifactGroup(id: "recent", title: "最近", items: artifacts)]
-        case .type:
-            return grouped { artifact in
-                switch artifact.kind {
-                case "file": return "文件"
-                case "link": return "链接"
-                default: return "捕获"
-                }
-            }
-        case .source:
-            return grouped { $0.sourceTypeTitle }
-        }
-    }
-
-    private func grouped(_ key: (Artifact) -> String) -> [ArtifactGroup] {
-        let values = Dictionary(grouping: artifacts, by: key)
+    private func grouped(_ items: [Artifact], by key: (Artifact) -> String) -> [ArtifactGroup] {
+        let values = Dictionary(grouping: items, by: key)
         return values.keys.sorted().map { title in
             ArtifactGroup(id: title, title: title, items: values[title] ?? [])
         }
@@ -205,11 +219,12 @@ private struct ArtifactRow: View {
                     .foregroundStyle(JieboColor.ink2)
                     .frame(width: 24)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(artifact.displayTitle)
+                    let title = artifact.displayTitle
+                    Text(title)
                         .font(JieboFont.text(.body, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(2)
-                    if let path = artifact.path, artifact.displayTitle != (path as NSString).lastPathComponent {
+                    if let path = artifact.path, title != Artifact.pathLeaf(path) {
                         Text(path)
                             .font(JieboFont.monoText(.caption))
                             .foregroundStyle(JieboColor.dim)
@@ -332,10 +347,22 @@ private struct ArtifactRow: View {
 }
 
 private extension Artifact {
+    static func pathLeaf(_ path: String) -> String {
+        var slice = path[...]
+        while slice.count > 1, slice.last == "/" {
+            slice = slice.dropLast()
+        }
+        if let slash = slice.lastIndex(of: "/") {
+            let next = slice.index(after: slash)
+            if next < slice.endIndex { return String(slice[next...]) }
+        }
+        return String(slice)
+    }
+
     /// 路径当标题时只留文件名。已经是人能读的名字就原样显示。
     var displayTitle: String {
         if title.contains("/") {
-            return (title as NSString).lastPathComponent
+            return Self.pathLeaf(title)
         }
         return title
     }
