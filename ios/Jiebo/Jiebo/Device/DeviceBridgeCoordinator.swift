@@ -47,20 +47,26 @@ final class DeviceBridgeCoordinator {
     func setConfirmationPresenter(token: String, active: Bool) {
         presenterOrder &+= 1
         presenterCandidates[token] = AssistantSceneCandidate(token: token, active: active, order: presenterOrder)
-        presenterToken = AssistantSceneElection.presenter(in: Array(presenterCandidates.values))
+        let elected = AssistantSceneElection.presenter(in: Array(presenterCandidates.values))
+        if presenterToken != elected {
+            presenterToken = elected
+        }
         if presenterToken == nil, confirmationContinuation != nil {
             resolveConfirmation(allowed: false)
         }
-        if presenterToken == nil { mailDraft = nil }
+        if presenterToken == nil, mailDraft != nil { mailDraft = nil }
     }
 
     func removeConfirmationPresenter(token: String) {
         presenterCandidates.removeValue(forKey: token)
-        presenterToken = AssistantSceneElection.presenter(in: Array(presenterCandidates.values))
+        let elected = AssistantSceneElection.presenter(in: Array(presenterCandidates.values))
+        if presenterToken != elected {
+            presenterToken = elected
+        }
         if presenterToken == nil, confirmationContinuation != nil {
             resolveConfirmation(allowed: false)
         }
-        if presenterToken == nil { mailDraft = nil }
+        if presenterToken == nil, mailDraft != nil { mailDraft = nil }
     }
 
     func isConfirmationPresenter(token: String) -> Bool {

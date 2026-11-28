@@ -229,8 +229,16 @@ enum DeviceRequestValidator {
         aliases: [String] = [],
         maximumLength: Int
     ) throws -> String? {
-        let raw = ([key] + aliases).compactMap { row[$0] }.first
-        guard let raw else { return nil }
+        var found: JSONValue? = row[key]
+        if found == nil, !aliases.isEmpty {
+            for alias in aliases {
+                if let hit = row[alias] {
+                    found = hit
+                    break
+                }
+            }
+        }
+        guard let raw = found else { return nil }
         if case .null = raw { return nil }
         guard let string = raw.string else { throw DeviceRequestError.invalid("\(key) 必须是字符串。") }
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)

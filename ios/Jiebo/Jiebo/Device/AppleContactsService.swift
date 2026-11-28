@@ -3,25 +3,29 @@ import Foundation
 
 actor AppleContactsService {
     private let store = CNContactStore()
+    private let contactFormatter = CNContactFormatter()
+    private let fetchKeys: [CNKeyDescriptor] = [
+        CNContactIdentifierKey as CNKeyDescriptor,
+        CNContactGivenNameKey as CNKeyDescriptor,
+        CNContactFamilyNameKey as CNKeyDescriptor,
+        CNContactOrganizationNameKey as CNKeyDescriptor,
+        CNContactEmailAddressesKey as CNKeyDescriptor,
+        CNContactPhoneNumbersKey as CNKeyDescriptor,
+    ]
 
     func search(_ request: ContactsSearchRequest) async throws -> JSONValue {
         try await requireAccess()
-        let keys: [CNKeyDescriptor] = [
-            CNContactIdentifierKey as CNKeyDescriptor,
-            CNContactGivenNameKey as CNKeyDescriptor,
-            CNContactFamilyNameKey as CNKeyDescriptor,
-            CNContactOrganizationNameKey as CNKeyDescriptor,
-            CNContactEmailAddressesKey as CNKeyDescriptor,
-            CNContactPhoneNumbersKey as CNKeyDescriptor,
-        ]
         do {
             let contacts = try store.unifiedContacts(
                 matching: CNContact.predicateForContacts(matchingName: request.query),
-                keysToFetch: keys
+                keysToFetch: fetchKeys
             )
-            return .object([
-                "contacts": .array(contacts.prefix(request.limit).map(Self.contactJSON)),
-            ])
+            var out: [JSONValue] = []
+            out.reserveCapacity(min(contacts.count, request.limit))
+            for contact in contacts.prefix(request.limit) {
+                out.append(contactJSON(contact))
+            }
+            return .object(["contacts": .array(out)])
         } catch {
             throw DeviceRequestError.unavailable("搜索通讯录失败，再试一次。")
         }
@@ -54,10 +58,17 @@ actor AppleContactsService {
         }
     }
 
-    private static func contactJSON(_ contact: CNContact) -> JSONValue {
-        let formatter = CNContactFormatter()
-        let displayName = formatter.string(from: contact)
-            ?? [contact.familyName, contact.givenName].filter { !$0.isEmpty }.joined()
+    private func contactJSON(_ contact: CNContact) -> JSONValue {
+        let displayName: String
+        if let formatted = contactFormatter.string(from: contact) {
+            displayName = formatted
+        } else if contact.familyName.isEmpty {
+            displayName = contact.givenName
+        } else if contact.givenName.isEmpty {
+            displayName = contact.familyName
+        } else {
+            displayName = contact.familyName + contact.givenName
+        }
         return .object([
             "identifier": .string(contact.identifier),
             "displayName": .string(displayName.isEmpty ? contact.organizationName : displayName),

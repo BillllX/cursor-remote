@@ -72,33 +72,26 @@ struct DeviceConnectionsScreen: View {
     @Environment(DeviceBridgeCoordinator.self) private var coordinator
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.locale) private var locale
+    @Environment(\.timeZone) private var timeZone
 
     private var permissions: DevicePermissionStore { coordinator.permissionStore }
 
     var body: some View {
+        let palette = JieboTheme.shared.palette
+        let appearance = JieboTheme.shared.appearance
         List {
             Section {
                 ForEach(permissions.permissions) { permission in
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text(permission.title)
-                                .font(JieboFont.text(.subheadline, weight: .semibold))
-                                .foregroundStyle(JieboColor.ink)
-                            Spacer()
-                            Text(permission.statusLabel)
-                                .font(JieboFont.text(.caption))
-                                .foregroundStyle(statusColor(permission.status))
-                        }
-                        Text(permission.purpose)
-                            .font(JieboFont.text(.caption))
-                            .foregroundStyle(JieboColor.dim)
-                        Text("更新于 \(permission.updatedAt.formatted(date: .abbreviated, time: .shortened))")
-                            .font(JieboFont.text(.caption2))
-                            .foregroundStyle(JieboColor.dim)
-                    }
-                    .padding(.vertical, 4)
+                    DevicePermissionRow(
+                        permission: permission,
+                        palette: palette,
+                        appearance: appearance,
+                        locale: locale,
+                        timeZone: timeZone
+                    )
+                    .equatable()
                     .listRowBackground(JieboColor.white)
-                    .accessibilityElement(children: .combine)
                 }
                 Button {
                     if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
@@ -117,21 +110,15 @@ struct DeviceConnectionsScreen: View {
                         .listRowBackground(JieboColor.white)
                 } else {
                     ForEach(permissions.audit) { entry in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(Self.operationLabel(entry.op))
-                                    .foregroundStyle(JieboColor.ink)
-                                Text(entry.at.formatted(date: .abbreviated, time: .shortened))
-                                    .font(JieboFont.text(.caption))
-                                    .foregroundStyle(JieboColor.dim)
-                            }
-                            Spacer()
-                            Text(Self.statusLabel(entry.status))
-                                .font(JieboFont.text(.caption))
-                                .foregroundStyle(entry.status == "ok" ? JieboColor.pine : JieboColor.danger)
-                        }
+                        DeviceAuditRow(
+                            entry: entry,
+                            palette: palette,
+                            appearance: appearance,
+                            locale: locale,
+                            timeZone: timeZone
+                        )
+                        .equatable()
                         .listRowBackground(JieboColor.white)
-                        .accessibilityElement(children: .combine)
                     }
                 }
             } header: {
@@ -151,12 +138,22 @@ struct DeviceConnectionsScreen: View {
         }
     }
 
-    private func statusColor(_ status: String) -> Color {
+    @MainActor
+    fileprivate static let dateTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = .autoupdatingCurrent
+        f.timeZone = .autoupdatingCurrent
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f
+    }()
+
+    fileprivate static func statusColor(_ status: String) -> Color {
         status == "authorized" || status == "limited" ? JieboColor.pine
             : (status == "not_determined" ? JieboColor.dim : JieboColor.danger)
     }
 
-    private static func operationLabel(_ op: String) -> String {
+    fileprivate static func operationLabel(_ op: String) -> String {
         switch op {
         case "calendar_events_list": return "读取日历"
         case "calendar_event_upsert": return "写入日历"
@@ -171,7 +168,7 @@ struct DeviceConnectionsScreen: View {
         }
     }
 
-    private static func statusLabel(_ status: String) -> String {
+    fileprivate static func statusLabel(_ status: String) -> String {
         switch status {
         case "ok": return "成功"
         case "denied": return "权限拒绝"
@@ -181,5 +178,62 @@ struct DeviceConnectionsScreen: View {
         case "timeout": return "确认超时"
         default: return "失败"
         }
+    }
+}
+
+private struct DevicePermissionRow: View, Equatable {
+    let permission: DevicePermissionState
+    /// 参与 .equatable() 判等，确保主题配色、明暗或系统语言/时区切换时触发行重绘。
+    let palette: JieboPalette
+    let appearance: JieboAppearance
+    let locale: Locale
+    let timeZone: TimeZone
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(permission.title)
+                    .font(JieboFont.text(.subheadline, weight: .semibold))
+                    .foregroundStyle(JieboColor.ink)
+                Spacer()
+                Text(permission.statusLabel)
+                    .font(JieboFont.text(.caption))
+                    .foregroundStyle(DeviceConnectionsScreen.statusColor(permission.status))
+            }
+            Text(permission.purpose)
+                .font(JieboFont.text(.caption))
+                .foregroundStyle(JieboColor.dim)
+            Text("更新于 \(DeviceConnectionsScreen.dateTimeFormatter.string(from: permission.updatedAt))")
+                .font(JieboFont.text(.caption2))
+                .foregroundStyle(JieboColor.dim)
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct DeviceAuditRow: View, Equatable {
+    let entry: DeviceAuditEntry
+    /// 参与 .equatable() 判等，确保主题配色、明暗或系统语言/时区切换时触发行重绘。
+    let palette: JieboPalette
+    let appearance: JieboAppearance
+    let locale: Locale
+    let timeZone: TimeZone
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(DeviceConnectionsScreen.operationLabel(entry.op))
+                    .foregroundStyle(JieboColor.ink)
+                Text(DeviceConnectionsScreen.dateTimeFormatter.string(from: entry.at))
+                    .font(JieboFont.text(.caption))
+                    .foregroundStyle(JieboColor.dim)
+            }
+            Spacer()
+            Text(DeviceConnectionsScreen.statusLabel(entry.status))
+                .font(JieboFont.text(.caption))
+                .foregroundStyle(entry.status == "ok" ? JieboColor.pine : JieboColor.danger)
+        }
+        .accessibilityElement(children: .combine)
     }
 }

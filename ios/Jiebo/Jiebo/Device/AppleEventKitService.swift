@@ -3,12 +3,23 @@ import Foundation
 
 actor AppleEventKitService {
     private let store = EKEventStore()
+    private let isoFormatter = ISO8601DateFormatter()
+    private let gregorianCalendar: Calendar = {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .autoupdatingCurrent
+        return cal
+    }()
 
     func listEvents(_ request: CalendarListRequest) async throws -> JSONValue {
         try await requireAccess(to: .event)
         let predicate = store.predicateForEvents(withStart: request.start, end: request.end, calendars: nil)
-        let events = Array(store.events(matching: predicate).prefix(request.limit))
-        return .object(["events": .array(events.map(Self.eventJSON))])
+        let matched = store.events(matching: predicate)
+        var out: [JSONValue] = []
+        out.reserveCapacity(min(matched.count, request.limit))
+        for event in matched.prefix(request.limit) {
+            out.append(eventJSON(event))
+        }
+        return .object(["events": .array(out)])
     }
 
     func upsertEvent(_ draft: CalendarEventDraft) async throws -> String {
@@ -58,10 +69,17 @@ actor AppleEventKitService {
     func listReminders(_ request: RemindersListRequest) async throws -> JSONValue {
         try await requireAccess(to: .reminder)
         let predicate = store.predicateForReminders(in: nil)
-        let reminders = try await fetchReminders(matching: predicate)
-            .filter { request.completed == nil || $0.isCompleted == request.completed }
-            .prefix(request.limit)
-        return .object(["reminders": .array(reminders.map(Self.reminderJSON))])
+        let fetched = try await fetchReminders(matching: predicate)
+        var out: [JSONValue] = []
+        out.reserveCapacity(min(fetched.count, request.limit))
+        for reminder in fetched {
+            if let expected = request.completed, reminder.isCompleted != expected {
+                continue
+            }
+            out.append(reminderJSON(reminder))
+            if out.count >= request.limit { break }
+        }
+        return .object(["reminders": .array(out)])
     }
 
     func upsertReminder(_ draft: ReminderDraft) async throws -> String {
@@ -81,7 +99,7 @@ actor AppleEventKitService {
             reminder.calendar = try reminderCalendar(identifier: draft.calendarId)
         }
         if let due = draft.due {
-            reminder.dueDateComponents = Calendar(identifier: .gregorian).dateComponents(
+            reminder.dueDateComponents = gregorianCalendar.dateComponents(
                 in: TimeZone.current,
                 from: due
             )
@@ -201,7 +219,7 @@ actor AppleEventKitService {
         }
     }
 
-    private static func eventJSON(_ event: EKEvent) -> JSONValue {
+    private func eventJSON(_ event: EKEvent) -> JSONValue {
         let row: [String: JSONValue] = [
             "id": .string(event.eventIdentifier ?? ""),
             "title": .string(event.title ?? ""),
@@ -214,7 +232,7 @@ actor AppleEventKitService {
         return .object(row)
     }
 
-    private static func reminderJSON(_ reminder: EKReminder) -> JSONValue {
+    private func reminderJSON(_ reminder: EKReminder) -> JSONValue {
         var row: [String: JSONValue] = [
             "id": .string(reminder.calendarItemIdentifier),
             "title": .string(reminder.title ?? ""),
@@ -223,19 +241,14 @@ actor AppleEventKitService {
             "due": .null,
         ]
         if let components = reminder.dueDateComponents,
-           let due = Calendar(identifier: .gregorian).date(from: components)
+           let due = gregorianCalendar.date(from: components)
         {
             row["due"] = .string(iso(due))
         }
         return .object(row)
     }
 
-    private static let isoLock = NSLock()
-    private static let isoFormatter = ISO8601DateFormatter()
-
-    private static func iso(_ date: Date) -> String {
-        isoLock.lock()
-        defer { isoLock.unlock() }
-        return isoFormatter.string(from: date)
+    private func iso(_ date: Date) -> String {
+        isoFormatter.string(from: date)
     }
 }

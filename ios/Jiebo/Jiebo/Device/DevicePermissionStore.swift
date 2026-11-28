@@ -37,6 +37,7 @@ final class DevicePermissionStore {
     @ObservationIgnored var reportHandler: ((String?, [JSONValue]) -> Void)?
 
     private let auditKey = "jiebo.device.audit.v1"
+    private let persistQueue = DispatchQueue(label: "ai.jiebo.device.audit.persist", qos: .utility)
     private var initialized = false
 
     init() {
@@ -49,55 +50,67 @@ final class DevicePermissionStore {
     }
 
     func refresh(reqId: String? = nil, forceReport: Bool = false) {
+        let calendarStatus = Self.eventKitStatus(EKEventStore.authorizationStatus(for: .event))
+        let remindersStatus = Self.eventKitStatus(EKEventStore.authorizationStatus(for: .reminder))
+        let contactsStatus = Self.contactsStatus(CNContactStore.authorizationStatus(for: .contacts))
+        if initialized,
+           permissions.count == 3,
+           permissions[0].status == calendarStatus,
+           permissions[1].status == remindersStatus,
+           permissions[2].status == contactsStatus
+        {
+            if forceReport {
+                reportHandler?(reqId, grants)
+            }
+            return
+        }
         let now = Date()
-        let next = [
+        permissions = [
             DevicePermissionState(
                 id: "calendar",
                 title: "日历",
                 purpose: "按你的请求读取日历，确认后新建或修改事件。",
-                status: Self.eventKitStatus(EKEventStore.authorizationStatus(for: .event)),
+                status: calendarStatus,
                 updatedAt: now
             ),
             DevicePermissionState(
                 id: "reminders",
                 title: "提醒事项",
                 purpose: "按你的请求读取提醒，确认后新建或修改条目。",
-                status: Self.eventKitStatus(EKEventStore.authorizationStatus(for: .reminder)),
+                status: remindersStatus,
                 updatedAt: now
             ),
             DevicePermissionState(
                 id: "contacts",
                 title: "通讯录",
                 purpose: "仅在你要求时搜索匹配联系人，不保存联系人正文。",
-                status: Self.contactsStatus(CNContactStore.authorizationStatus(for: .contacts)),
+                status: contactsStatus,
                 updatedAt: now
             ),
         ]
-        let changed = !initialized || zip(permissions, next).contains { $0.status != $1.status }
-        if changed {
-            permissions = next
-        }
         initialized = true
-        if changed || forceReport {
-            reportHandler?(reqId, grants)
-        }
+        reportHandler?(reqId, grants)
     }
 
     func record(op: String, status: String) {
         audit.insert(DeviceAuditEntry(id: UUID(), op: op, status: status, at: Date()), at: 0)
-        audit = Array(audit.prefix(50))
-        if let data = try? JSONEncoder().encode(audit) {
-            UserDefaults.standard.set(data, forKey: auditKey)
+        if audit.count > 50 {
+            audit.removeLast(audit.count - 50)
+        }
+        let snapshot = audit
+        let key = auditKey
+        // 使用串行后台队列严格保序写盘，避免并发 Task.detached 导致旧快照覆盖新快照。
+        persistQueue.async {
+            if let data = try? JSONEncoder().encode(snapshot) {
+                UserDefaults.standard.set(data, forKey: key)
+            }
         }
     }
 
-    private static let isoLock = NSLock()
     private static let isoFormatter = ISO8601DateFormatter()
 
     private static func isoString(_ date: Date) -> String {
-        isoLock.lock()
-        defer { isoLock.unlock() }
-        return isoFormatter.string(from: date)
+        isoFormatter.string(from: date)
     }
 
     var grants: [JSONValue] {
