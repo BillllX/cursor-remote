@@ -16,7 +16,8 @@ enum JieboThumbDecoder {
     }
 
     static func store(_ image: UIImage, key: String) {
-        let cost = image.cgImage.map { $0.bytesPerRow * $0.height } ?? 1
+        let cost = image.cgImage.map { $0.bytesPerRow * $0.height }
+            ?? max(1, Int(image.size.width * image.scale * image.size.height * image.scale * 4))
         cache.setObject(image, forKey: key as NSString, cost: cost)
     }
 
@@ -34,7 +35,8 @@ enum JieboThumbDecoder {
             kCGImageSourceThumbnailMaxPixelSize: max(maxPixel, 1),
         ]
         guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions as CFDictionary) else { return nil }
-        return UIImage(cgImage: cg)
+        let ui = UIImage(cgImage: cg)
+        return ui.preparingForDisplay() ?? ui
     }
 
     /// base64 太长不能整段哈希（每次重算都要扫几 MB）：长度 + 头、中、尾各 48 字节，连续存储时 O(1) 取样

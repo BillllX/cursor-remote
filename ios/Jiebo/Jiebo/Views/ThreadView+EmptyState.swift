@@ -182,6 +182,7 @@ extension ThreadView {
 
     /// 订阅引导只挂在最近一轮记下带日期待办的回执下面，不在每条回执后面重复
     func calendarInviteTurnId(_ turns: [Turn]) -> String? {
+        guard turns.contains(where: TodoReceipt.hasTodoAddTool(in:)) else { return nil }
         guard CalendarInvite.pending(store.assistantState?.calendar, dismissed: calendarInviteDismissed) else { return nil }
         return turns.last(where: { turn in
             TodoReceipt.captured(in: turn, todos: store.assistantState?.todos).contains { !$0.duplicate && $0.due != nil }

@@ -283,12 +283,22 @@ enum DeviceRequestValidator {
         }
     }
 
+    private static let isoLock = NSLock()
+    nonisolated(unsafe) private static let isoWithFraction: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    nonisolated(unsafe) private static let isoRegular: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
     private static func parseISO8601(_ text: String) -> Date? {
-        let withFraction = ISO8601DateFormatter()
-        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = withFraction.date(from: text) { return date }
-        let regular = ISO8601DateFormatter()
-        regular.formatOptions = [.withInternetDateTime]
-        return regular.date(from: text)
+        isoLock.lock()
+        defer { isoLock.unlock() }
+        if let date = isoWithFraction.date(from: text) { return date }
+        return isoRegular.date(from: text)
     }
 }

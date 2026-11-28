@@ -614,7 +614,7 @@ extension View {
     }
 }
 
-/// 思考状态的流光文字（对齐 web 的 .text-shimmer：4s 线性循环，reduceMotion 降级为静态）
+/// 思考状态的流光文字（Core Animation 隐式位移动画，零主线程 TimelineView 回调；reduceMotion 或离屏降级为静态）
 struct ShimmerText: View {
     let text: String
     var font: Font = JieboFont.ui(14)
@@ -622,39 +622,69 @@ struct ShimmerText: View {
     @Environment(\.homeActive) private var homeActive
     @Environment(\.scenePhase) private var scenePhase
 
+    private var isActive: Bool {
+        !reduceMotion && homeActive && scenePhase == .active
+    }
+
     var body: some View {
-        if reduceMotion || !homeActive || scenePhase != .active {
+        if isActive {
+            AnimatedShimmerText(text: text, font: font)
+        } else {
             Text(text)
                 .font(font)
                 .foregroundStyle(JieboColor.ink2)
-        } else {
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-                let t = CGFloat(context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 4) / 4)
-                let center = t * 1.6 - 0.3 // 高亮窗从 -0.3 扫到 1.3
-                // 进出两端时窗口挤在 0/1 上，色标位置必须严格递增
-                let tail = min(1, max(0.02, center + 0.3))
-                let mid = min(max(center, 0.01), tail - 0.01)
-                let lead = min(max(0, center - 0.3), mid - 0.01)
-                ZStack {
-                    Text(text)
-                        .font(font)
-                        .foregroundStyle(JieboColor.dim)
-                    Text(text)
-                        .font(font)
-                        .foregroundStyle(JieboColor.ink)
-                        .mask(
-                            LinearGradient(
-                                stops: [
-                                    .init(color: .clear, location: lead),
-                                    .init(color: .black, location: mid),
-                                    .init(color: .clear, location: tail),
-                                ],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
+        }
+    }
+}
+
+private struct AnimatedShimmerText: View {
+    let text: String
+    let font: Font
+    @State private var sweeping = false
+
+    var body: some View {
+        ZStack {
+            Text(text)
+                .font(font)
+                .foregroundStyle(JieboColor.dim)
+            Text(text)
+                .font(font)
+                .foregroundStyle(JieboColor.ink)
+                .mask {
+                    GeometryReader { geo in
+                        let width = geo.size.width
+                        let bandWidth = max(width * 0.65, 36)
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear, location: 0),
+                                .init(color: .black, location: 0.5),
+                                .init(color: .clear, location: 1),
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
                         )
+                        .frame(width: bandWidth, height: max(geo.size.height, 1))
+                        .offset(x: sweeping ? width + bandWidth * 0.25 : -bandWidth * 1.25)
+                        .animation(
+                            sweeping ? .linear(duration: 2.6).repeatForever(autoreverses: false) : nil,
+                            value: sweeping
+                        )
+                        .task(id: Int(width.rounded())) {
+                            guard width > 0 else { return }
+                            var reset = Transaction()
+                            reset.disablesAnimations = true
+                            withTransaction(reset) { sweeping = false }
+                            await Task.yield()
+                            guard !Task.isCancelled else { return }
+                            sweeping = true
+                        }
+                    }
                 }
-            }
+        }
+        .onDisappear {
+            var reset = Transaction()
+            reset.disablesAnimations = true
+            withTransaction(reset) { sweeping = false }
         }
     }
 }

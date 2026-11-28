@@ -159,8 +159,16 @@ final class ImImageCache {
 
     /// 本机还没发出去的图（outbox 里的文件）
     func local(file: URL, maxPixel: Int) async -> UIImage? {
-        await load(key: file.lastPathComponent, maxPixel: maxPixel) {
+        await load(key: file.path, maxPixel: maxPixel) {
             ImImageDecode.image(at: file, maxPixel: maxPixel)
+        }
+    }
+
+    /// 后台检查 outbox 文件存在并解码，避免在 @MainActor 上同步调 fileExists。
+    func localIfExists(file: URL, maxPixel: Int) async -> UIImage? {
+        await load(key: file.path, maxPixel: maxPixel) {
+            guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+            return ImImageDecode.image(at: file, maxPixel: maxPixel)
         }
     }
 
@@ -229,7 +237,8 @@ enum ImImageDecode {
 
     private static func image(_ source: CGImageSource, maxPixel: Int) -> UIImage? {
         guard let image = cgImage(source, maxPixel: maxPixel) else { return nil }
-        return UIImage(cgImage: image)
+        let ui = UIImage(cgImage: image)
+        return ui.preparingForDisplay() ?? ui
     }
 
     /// 长边不超过 maxPixel、按 EXIF 摆正的位图；ImageIO 直接按目标尺寸解码，不会先解出整张大图

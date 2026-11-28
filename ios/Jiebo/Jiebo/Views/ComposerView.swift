@@ -185,8 +185,8 @@ struct ComposerView: View {
             case .replace(let value):
                 next = value
             case .insertMention(let path):
-                guard let range = current.range(of: #"(^|\s)@(\S*)$"#, options: .regularExpression) else { return }
-                let leading = current[range.lowerBound...].first.map { $0 == " " || $0 == "\n" ? String($0) : "" } ?? ""
+                guard let range = ChatStore.trailingMentionRange(in: current) else { return }
+                let leading = current[range.lowerBound...].first.map { $0 == " " || $0 == "\n" || $0 == "\r\n" ? String($0) : "" } ?? ""
                 var updated = current
                 updated.replaceSubrange(range, with: "\(leading)@\(path) ")
                 next = updated

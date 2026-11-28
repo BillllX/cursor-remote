@@ -24,6 +24,8 @@ struct TurnView: View, Equatable {
     var restoring = false
     /// 这一轮 todo_add 记下的待办（按工具结果里的 id 对上今日里的那条），回执里能撤销和改
     var captured: [TodoReceipt] = []
+    /// 本轮派出的委派列表（由 ThreadView 按 parentTurnId 预分组传入，切断 TurnView 对 store.assistantState 的直接观察）
+    var delegations: [AssistantDelegation] = []
     var calendarInvite: AssistantCalendar? = nil
     var palette: JieboPalette = JieboTheme.shared.palette
     var appearance: JieboAppearance = JieboTheme.shared.appearance
@@ -32,12 +34,6 @@ struct TurnView: View, Equatable {
     @State private var shareItem: ShareItem?
     @State private var viewerItem: AttachmentViewerItem?
     private var chatId: String { environmentChatId.isEmpty ? store.activeId : environmentChatId }
-    private var delegationRows: [AssistantDelegation] {
-        guard store.isAssistantChat(chatId) else { return [] }
-        return (store.assistantState?.delegations ?? []).filter {
-            $0.parentChatId == chatId && $0.parentTurnId == turn.id
-        }
-    }
 
     /// 仅当本轮处于运行中时订阅单会话 ActiveTurnBox；已完成的历史轮次零观察开销。
     private var activeOverlay: ActiveTurnBox? {
@@ -75,7 +71,8 @@ struct TurnView: View, Equatable {
             && lhs.canRestorePrompt == rhs.canRestorePrompt
             && lhs.waitingForLink == rhs.waitingForLink
             && lhs.reviewMark == rhs.reviewMark && lhs.restoring == rhs.restoring
-            && lhs.captured == rhs.captured && lhs.calendarInvite == rhs.calendarInvite
+            && lhs.captured == rhs.captured && lhs.delegations == rhs.delegations
+            && lhs.calendarInvite == rhs.calendarInvite
             && lhs.palette == rhs.palette && lhs.appearance == rhs.appearance
     }
 
@@ -110,8 +107,8 @@ struct TurnView: View, Equatable {
         return tools.filter { !AssistantToolText.isSilent($0) }
     }
 
-    private var processTools: [ToolCall] {
-        visibleTools.filter { tool in
+    private func filterProcessTools(from visible: [ToolCall]) -> [ToolCall] {
+        visible.filter { tool in
             if AskedForm.parse(tool) != nil { return false }
             if captured.contains(where: { $0.callId == tool.callId }) { return false }
             if embedded, AssistantToolText.friendly(tool) != nil { return false }
@@ -269,21 +266,23 @@ struct TurnView: View, Equatable {
                 .onAppear { syncThinkingOpen() }
                 .onChange(of: turn.running) { _, _ in syncThinkingOpen() }
             }
-            ForEach(visibleTools) { tool in
+            let currentVisibleTools = visibleTools
+            let currentProcessTools = filterProcessTools(from: currentVisibleTools)
+            ForEach(currentVisibleTools) { tool in
                 if let asked = AskedForm.parse(tool) {
                     QuestionCardView(asked: asked, canAnswer: canAnswer)
                 } else if embedded, let text = AssistantToolText.friendly(tool) {
                     let id = AssistantToolText.resultObject(tool.result)?["id"]?.string
-                    if AssistantToolText.baseName(tool.name) != "delegate" || !delegationRows.contains(where: { $0.id == id }) {
+                    if AssistantToolText.baseName(tool.name) != "delegate" || !delegations.contains(where: { $0.id == id }) {
                         AssistantActionRow(tool: tool, text: text)
                     }
                 }
             }
-            if processTools.count >= 2 {
-                ToolRunSummaryView(tools: processTools, turnRunning: turn.running, durationMs: turn.durationMs)
+            if currentProcessTools.count >= 2 {
+                ToolRunSummaryView(tools: currentProcessTools, turnRunning: turn.running, durationMs: turn.durationMs)
                     .equatable()
             } else {
-                ForEach(processTools) { tool in
+                ForEach(currentProcessTools) { tool in
                     ToolCardView(tool: tool, showBorder: false)
                         .equatable()
                 }
@@ -373,11 +372,12 @@ struct TurnView: View, Equatable {
                 .accessibilityElement(children: .contain)
             }
             // 顺序：正文 → 文件 → 审阅 → 操作。审阅条是对上面这些文件的决定，放在它们之后
-            let delegated = delegationRows
+            let delegated = delegations
             ForEach(delegated) { item in
                 AssistantDelegationReceipt(item: item, turn: turn, chatId: chatId)
             }
-            let regularFiles = turn.cardFiles.filter { file in
+            let allCardFiles = turn.cardFiles
+            let regularFiles = allCardFiles.filter { file in
                 !delegated.contains { $0.childChatId == file.sourceChatId }
             }
             if !turn.deferred, !regularFiles.isEmpty {
@@ -387,7 +387,7 @@ struct TurnView: View, Equatable {
                 TurnReviewBar(turn: turn)
             }
             if isLastAssistant, !turn.running, !turn.assistant.isEmpty {
-                if let file = turn.cardFiles.first, file.sha != nil {
+                if let file = allCardFiles.first, file.sha != nil {
                     ActionButton(title: file.kind == .html ? "查看看板" : "打开产物", kind: .outline) {
                         receiptNavigation?.preparePreview()
                         store.openTurnFile(file, chatId: chatId)
@@ -515,31 +515,74 @@ struct TurnView: View, Equatable {
         return allowed
     }()
 
+    /// 单行 @ 文件链接化有界缓存：流式刷尾行时，前面已封口且含 @ 的行直接 O(1) 命中，免重复跑正则。
+    private enum LinkMentionLineCache {
+        private static let lock = NSLock()
+        nonisolated(unsafe) private static var entries: [String: String] = [:]
+        private static let maxEntries = 512
+
+        static func get(_ line: String) -> String? {
+            lock.lock()
+            defer { lock.unlock() }
+            return entries[line]
+        }
+
+        static func set(_ value: String, for line: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            if entries.count >= maxEntries {
+                entries.removeAll(keepingCapacity: true)
+            }
+            entries[line] = value
+        }
+    }
+
     static func linkMentions(_ text: String) -> String {
         guard text.contains("@") else { return text }
-        let regex = Self.mentionRegex
+        guard let regex = Self.mentionRegex else { return text }
         let allowed = Self.mentionAllowed
         var inFence = false
-        return text.components(separatedBy: "\n").map { line in
-            let trimmedFence = line.drop { $0 == " " || $0 == "\t" }
+        return text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" }).map { rawLine in
+            let trimmedFence = rawLine.drop { $0 == " " || $0 == "\t" }
             if trimmedFence.hasPrefix("```") || trimmedFence.hasPrefix("~~~") {
                 inFence.toggle()
-                return line
+                return String(rawLine)
             }
-            guard !inFence, let regex, line.contains("@") else { return line }
-            // 按反引号切段，只处理非代码段（偶数段）
-            let segments = line.components(separatedBy: "`")
-            var rebuilt: [String] = []
-            rebuilt.reserveCapacity(segments.count)
-            for (index, segment) in segments.enumerated() {
-                guard index % 2 == 0, segment.contains("@") else {
-                    rebuilt.append(segment)
-                    continue
-                }
-                rebuilt.append(linkMentionsInSegment(segment, regex: regex, allowed: allowed))
-            }
-            return rebuilt.joined(separator: "`")
+            guard !inFence, rawLine.contains("@") else { return String(rawLine) }
+            return linkMentionsInLine(String(rawLine), regex: regex, allowed: allowed)
         }.joined(separator: "\n")
+    }
+
+    /// 供已切出 .prose 块的渲染器使用：免重复围栏扫描，且无 @ 的整段零分配直出。
+    static func linkMentionsProse(_ text: String) -> String {
+        guard text.contains("@") else { return text }
+        guard let regex = Self.mentionRegex else { return text }
+        let allowed = Self.mentionAllowed
+        return text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" }).map { rawLine in
+            guard rawLine.contains("@") else { return String(rawLine) }
+            return linkMentionsInLine(String(rawLine), regex: regex, allowed: allowed)
+        }.joined(separator: "\n")
+    }
+
+    private static func linkMentionsInLine(_ line: String, regex: NSRegularExpression, allowed: CharacterSet) -> String {
+        if let cached = LinkMentionLineCache.get(line) { return cached }
+        // 按反引号切段，只处理非代码段（偶数段）
+        let segments = line.split(separator: "`", omittingEmptySubsequences: false)
+        var rebuilt: [String] = []
+        rebuilt.reserveCapacity(segments.count)
+        for (index, segment) in segments.enumerated() {
+            guard index % 2 == 0, segment.contains("@") else {
+                rebuilt.append(String(segment))
+                continue
+            }
+            rebuilt.append(linkMentionsInSegment(String(segment), regex: regex, allowed: allowed))
+        }
+        let result = rebuilt.joined(separator: "`")
+        // 超长单行（如粘贴日志）不占缓存槽
+        if line.utf8.count <= 2048 {
+            LinkMentionLineCache.set(result, for: line)
+        }
+        return result
     }
 
     private static func linkMentionsInSegment(_ segment: String, regex: NSRegularExpression, allowed: CharacterSet) -> String {

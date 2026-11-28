@@ -606,7 +606,6 @@ final class PersonalRecording {
         guard let root = try? RecordingOutbox.root(tenant: account) else { return ([], 0, 0) }
         let dirs = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.creationDateKey])) ?? []
         var items: [LocalRecordingSummary] = []
-        let iso = ISO8601DateFormatter()
 
         for dir in dirs {
             guard UUID(uuidString: dir.lastPathComponent) != nil else { continue }
@@ -634,7 +633,7 @@ final class PersonalRecording {
             }
 
             let created = (try? dir.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
-            let startedAt = meta?.startedAt ?? iso.string(from: created)
+            let startedAt = meta?.startedAt ?? RecordingFormatting.isoString(from: created)
             let title = (meta?.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
                 ? meta!.title
                 : "本机录音 \(RecordingFormatting.shortDateTime(startedAt))"
@@ -743,7 +742,6 @@ final class PersonalRecording {
                 throw RecordingProblem("登录状态已变化")
             }
 
-            let iso = ISO8601DateFormatter()
             if folder == nil {
                 let sessionId = UUID().uuidString
                 let dir = try RecordingOutbox.root(tenant: account).appendingPathComponent(sessionId)
@@ -751,7 +749,7 @@ final class PersonalRecording {
                 let meta = LocalRecordingMeta(
                     sessionId: sessionId,
                     title: draftTitle.trimmingCharacters(in: .whitespacesAndNewlines),
-                    startedAt: iso.string(from: Date()),
+                    startedAt: RecordingFormatting.isoString(from: Date()),
                     stoppedAt: nil,
                     routeKind: draftRouteKind,
                     workspaceKey: draftRouteKind == .workspace ? draftWorkspaceKey : nil,
@@ -780,7 +778,7 @@ final class PersonalRecording {
                 meta.events.append(LocalRecordingEvent(
                     eventId: "evt-\(meta.events.count + 1)",
                     type: "resume",
-                    startWallTime: iso.string(from: Date()),
+                    startWallTime: RecordingFormatting.isoString(from: Date()),
                     endWallTime: nil,
                     canonicalFrame: currentFrames,
                     reason: nil
@@ -872,7 +870,7 @@ final class PersonalRecording {
         meta.events.append(LocalRecordingEvent(
             eventId: "evt-\(meta.events.count + 1)",
             type: isError ? "recovery_gap" : "interruption",
-            startWallTime: ISO8601DateFormatter().string(from: Date()),
+            startWallTime: RecordingFormatting.isoString(from: Date()),
             endWallTime: nil,
             canonicalFrame: frame,
             reason: reason
@@ -929,7 +927,7 @@ final class PersonalRecording {
                 meta.events.append(LocalRecordingEvent(
                     eventId: "evt-\(meta.events.count + 1)",
                     type: "pause",
-                    startWallTime: ISO8601DateFormatter().string(from: Date()),
+                    startWallTime: RecordingFormatting.isoString(from: Date()),
                     endWallTime: nil,
                     canonicalFrame: Int((elapsedSeconds * RecordingFormatting.canonicalSampleRate).rounded()),
                     reason: nil
@@ -966,7 +964,7 @@ final class PersonalRecording {
 
         do {
             if var meta = activeMeta {
-                meta.stoppedAt = ISO8601DateFormatter().string(from: Date())
+                meta.stoppedAt = RecordingFormatting.isoString(from: Date())
                 meta.partial = partial
                 RecordingOutbox.saveMeta(meta, in: dir)
             }
@@ -1047,7 +1045,7 @@ final class PersonalRecording {
                     }
                     if var meta = RecordingOutbox.loadMeta(in: dir) {
                         meta.partial = true
-                        meta.stoppedAt = ISO8601DateFormatter().string(from: Date())
+                        meta.stoppedAt = RecordingFormatting.isoString(from: Date())
                         RecordingOutbox.saveMeta(meta, in: dir)
                     }
                     try Data([1]).write(to: marker, options: .atomic)
@@ -1095,7 +1093,7 @@ final class PersonalRecording {
             let meta = RecordingOutbox.loadMeta(in: dir) ?? LocalRecordingMeta(
                 sessionId: dir.lastPathComponent,
                 title: "",
-                startedAt: ISO8601DateFormatter().string(from: Date()),
+                startedAt: RecordingFormatting.isoString(from: Date()),
                 stoppedAt: nil,
                 routeKind: .personal,
                 workspaceKey: nil,

@@ -40,7 +40,7 @@ struct StreamingAssistantText: View {
         .onChange(of: text) { old, value in
             latest = value
             guard live else { return }
-            if !value.hasPrefix(old) {
+            if !Self.isLikelyAppend(old: old, new: value) {
                 flushNow(value)
                 return
             }
@@ -73,6 +73,27 @@ struct StreamingAssistantText: View {
         flush?.cancel()
         flush = nil
         rendered = value
+    }
+
+    /// O(1) 流式追加判定：超过 256B 时仅抽检前 64B 与旧尾 64B，避免每 50ms 对数万字节全文跑 hasPrefix。
+    private static func isLikelyAppend(old: String, new: String) -> Bool {
+        let oldCount = old.utf8.count
+        let newCount = new.utf8.count
+        guard newCount >= oldCount else { return false }
+        if oldCount <= 256 { return new.hasPrefix(old) }
+        let sample = 64
+        let oldUtf8 = old.utf8
+        let newUtf8 = new.utf8
+        let oldHeadEnd = oldUtf8.index(oldUtf8.startIndex, offsetBy: sample)
+        let newHeadEnd = newUtf8.index(newUtf8.startIndex, offsetBy: sample)
+        guard oldUtf8[oldUtf8.startIndex..<oldHeadEnd].elementsEqual(newUtf8[newUtf8.startIndex..<newHeadEnd]) else {
+            return false
+        }
+        let tailOffset = oldCount - sample
+        let oldTailStart = oldUtf8.index(oldUtf8.startIndex, offsetBy: tailOffset)
+        let newTailStart = newUtf8.index(newUtf8.startIndex, offsetBy: tailOffset)
+        let newTailEnd = newUtf8.index(newTailStart, offsetBy: sample)
+        return oldUtf8[oldTailStart..<oldUtf8.endIndex].elementsEqual(newUtf8[newTailStart..<newTailEnd])
     }
 }
 
@@ -200,29 +221,17 @@ private struct AssistantMessage: View, Equatable {
             && lhs.appearance == rhs.appearance
     }
 
-    private var renderedText: String {
-        linkFileMentions ? TurnView.linkMentions(text) : text
-    }
-
     var body: some View {
-        let source = renderedText
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(Array(blocks(of: source).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(blocks(of: text).enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .code(let code, let lang):
                     CodeBlockView(code: code, lang: lang)
                 case .liveCode(let code):
-                    Text(code.isEmpty ? " " : code)
-                        .font(JieboFont.mono(13))
-                        .foregroundStyle(JieboColor.ink)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(JieboColor.well.opacity(0.6))
-                        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
+                    LiveCodeBlockView(code: code)
+                        .equatable()
                 case .prose(let prose):
-                    ProseLines(text: prose)
+                    ProseLines(text: linkFileMentions ? TurnView.linkMentionsProse(prose) : prose)
                 }
             }
         }
@@ -238,23 +247,24 @@ private struct AssistantMessage: View, Equatable {
 
     private func blocks(of source: String) -> [Block] {
         var result: [Block] = []
-        var prose: [String] = []
-        var code: [String] = []
+        var prose: [Substring] = []
+        var code: [Substring] = []
         var lang = ""
         var inCode = false
         func flushProse() {
+            guard !prose.isEmpty else { return }
             let joined = prose.joined(separator: "\n")
             if joined.contains(where: { !$0.isNewline && !$0.isWhitespace }) {
                 result.append(.prose(joined))
             }
-            prose = []
+            prose.removeAll(keepingCapacity: true)
         }
-        for line in source.components(separatedBy: "\n") {
+        for line in source.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" }) {
             let trimmedFence = line.drop { $0 == " " || $0 == "\t" }
             if trimmedFence.hasPrefix("```") || trimmedFence.hasPrefix("~~~") {
                 if inCode {
                     result.append(.code(code.joined(separator: "\n"), lang: lang))
-                    code = []
+                    code.removeAll(keepingCapacity: true)
                     lang = ""
                     inCode = false
                 } else {
@@ -273,5 +283,27 @@ private struct AssistantMessage: View, Equatable {
         flushProse()
         if result.isEmpty { result.append(.prose(source)) }
         return result
+    }
+}
+
+private struct LiveCodeBlockView: View, Equatable {
+    let code: String
+    var palette: JieboPalette = JieboTheme.shared.palette
+    var appearance: JieboAppearance = JieboTheme.shared.appearance
+
+    static func == (lhs: LiveCodeBlockView, rhs: LiveCodeBlockView) -> Bool {
+        lhs.code == rhs.code && lhs.palette == rhs.palette && lhs.appearance == rhs.appearance
+    }
+
+    var body: some View {
+        Text(code.isEmpty ? " " : code)
+            .font(JieboFont.mono(13))
+            .foregroundStyle(JieboColor.ink)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(JieboColor.well.opacity(0.6))
+            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
     }
 }

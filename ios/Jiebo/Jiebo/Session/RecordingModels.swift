@@ -504,22 +504,45 @@ enum RecordingFormatting {
         return String(format: "%02d:%02d:%02d", h, m, s)
     }
 
-    static func formatBytes(_ bytes: Int64) -> String {
+    private static let formatterLock = NSLock()
+    nonisolated(unsafe) private static let byteFormatter: ByteCountFormatter = {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useKB, .useMB, .useGB]
         formatter.countStyle = .file
-        return formatter.string(fromByteCount: max(0, bytes))
+        return formatter
+    }()
+    nonisolated(unsafe) private static let isoFractionalParser: ISO8601DateFormatter = {
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return parser
+    }()
+    nonisolated(unsafe) private static let isoPlainFormatter = ISO8601DateFormatter()
+    nonisolated(unsafe) private static let shortZhDateFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "zh_CN")
+        df.timeZone = .autoupdatingCurrent
+        df.dateFormat = "MM月dd日 HH:mm"
+        return df
+    }()
+
+    static func isoString(from date: Date) -> String {
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        return isoPlainFormatter.string(from: date)
+    }
+
+    static func formatBytes(_ bytes: Int64) -> String {
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        return byteFormatter.string(fromByteCount: max(0, bytes))
     }
 
     static func shortDateTime(_ iso: String) -> String {
-        let parser = ISO8601DateFormatter()
-        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = parser.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        let date = isoFractionalParser.date(from: iso) ?? isoPlainFormatter.date(from: iso)
         guard let date else { return iso }
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "zh_CN")
-        df.dateFormat = "MM月dd日 HH:mm"
-        return df.string(from: date)
+        return shortZhDateFormatter.string(from: date)
     }
 
     static func processingLabel(_ state: String, transferState: String? = nil) -> String {

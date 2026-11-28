@@ -223,13 +223,20 @@ struct AdminStatsView: View {
         return "\(Int(n.rounded()))%"
     }
 
-    static func fmtCycle(_ epochMs: Double) -> String {
-        let date = Date(timeIntervalSince1970: epochMs / 1000)
+    private static let cycleFormatterLock = NSLock()
+    nonisolated(unsafe) private static let cycleFormatter: DateFormatter = {
         let fmt = DateFormatter()
         fmt.locale = Locale(identifier: "zh_CN")
         fmt.timeZone = TimeZone(secondsFromGMT: 0)
         fmt.setLocalizedDateFormatFromTemplate("Md")
-        return fmt.string(from: date)
+        return fmt
+    }()
+
+    static func fmtCycle(_ epochMs: Double) -> String {
+        let date = Date(timeIntervalSince1970: epochMs / 1000)
+        cycleFormatterLock.lock()
+        defer { cycleFormatterLock.unlock() }
+        return cycleFormatter.string(from: date)
     }
 
     static func fmtOnDemand(_ row: CursorOnDemand) -> String {

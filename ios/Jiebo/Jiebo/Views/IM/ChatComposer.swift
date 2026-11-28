@@ -885,8 +885,7 @@ private struct ImViewerPage: View {
         failed = false
         if let outgoing = message.outgoing, let dir = ImCache.outboxDir(tenant: im.tenant) {
             let file = dir.appendingPathComponent(outgoing.file)
-            if FileManager.default.fileExists(atPath: file.path),
-               let local = await ImImageCache.shared.local(file: file, maxPixel: Self.maxPixel) {
+            if let local = await ImImageCache.shared.localIfExists(file: file, maxPixel: Self.maxPixel) {
                 image = local
                 return
             }

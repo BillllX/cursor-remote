@@ -275,7 +275,7 @@ struct ProseLines: View {
     }
 
     private var segments: [Segment] {
-        let lines = text.components(separatedBy: "\n")
+        let lines = text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" }).map(String.init)
         var result: [Segment] = []
         var prose: [String] = []
         var index = 0
@@ -502,18 +502,90 @@ private struct HairlineTable: View, Equatable {
         pattern: #"!?\[([^\]]*)\]\([^)]*\)"#
     )
 
+    /// 单次渲染内汇总表头/单元格的归一化文本与列宽判定，避免 unfolds / columnWidths / cellText 重复跑 3 遍正则。
+    private struct TableLayout {
+        let displayHeaders: [String]
+        let displayRows: [[String]]
+        let unfolds: Bool
+        let unfoldedHeaderWidth: CGFloat
+        let columnWidths: [CGFloat]?
+    }
+
+    private func computeLayout() -> TableLayout {
+        let displayHeaders = headers.map(Self.displayText)
+        let displayRows = rows.map { row in row.map(Self.displayText) }
+        var unfolds = headers.count >= 5 || dynamicTypeSize.isAccessibilitySize
+        var visibleRows: [[String]] = []
+        if !unfolds {
+            let needVisibleRows = headers.count > 3
+            if needVisibleRows { visibleRows.reserveCapacity(displayRows.count) }
+            scanRows: for row in displayRows {
+                var vRow: [String] = []
+                if needVisibleRows { vRow.reserveCapacity(row.count) }
+                for cell in row {
+                    let shown = Self.stripMarkdownLinks(cell)
+                    if Self.unfoldsVisible(shown) {
+                        unfolds = true
+                        break scanRows
+                    }
+                    if needVisibleRows { vRow.append(shown) }
+                }
+                if needVisibleRows { visibleRows.append(vRow) }
+            }
+        }
+        let visibleHeaders: [String] = (unfolds || headers.count > 3)
+            ? displayHeaders.map(Self.stripMarkdownLinks)
+            : []
+        let unfoldedHeaderWidth: CGFloat
+        if unfolds {
+            let widest = visibleHeaders.dropFirst()
+                .map { Self.estimatedWidth($0, font: 12) }
+                .max() ?? 56
+            unfoldedHeaderWidth = min(max(widest + 8, 56), 116)
+        } else {
+            unfoldedHeaderWidth = 56
+        }
+        let widths: [CGFloat]?
+        if !unfolds && headers.count > 3 {
+            widths = (0..<headers.count).map { index in
+                let font: CGFloat = index == 0 ? 12 : 16
+                var widest: CGFloat = 0
+                for line in visibleHeaders[index].split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+                    widest = max(widest, Self.estimatedWidth(String(line), font: font))
+                }
+                for vRow in visibleRows {
+                    guard index < vRow.count else { continue }
+                    for line in vRow[index].split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+                        widest = max(widest, Self.estimatedWidth(String(line), font: font))
+                    }
+                }
+                return min(max(widest + 2, 64), 168)
+            }
+        } else {
+            widths = nil
+        }
+        return TableLayout(
+            displayHeaders: displayHeaders,
+            displayRows: displayRows,
+            unfolds: unfolds,
+            unfoldedHeaderWidth: unfoldedHeaderWidth,
+            columnWidths: widths
+        )
+    }
+
     var body: some View {
+        let layout = computeLayout()
         Group {
-            if unfolds {
-                unfolded
-            } else if headers.count > 3 {
+            if layout.unfolds {
+                unfolded(layout: layout)
+            } else if let widths = layout.columnWidths {
                 ScrollView(.horizontal, showsIndicators: true) {
-                    tableBody(widths: columnWidths())
+                    tableBody(layout: layout, widths: widths)
                         .fixedSize(horizontal: true, vertical: true)
                 }
                 .fixedSize(horizontal: false, vertical: true)
             } else {
-                tableBody(widths: nil)
+                tableBody(layout: layout, widths: nil)
             }
         }
         .tint(JieboColor.pine)
@@ -521,24 +593,10 @@ private struct HairlineTable: View, Equatable {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// 五列以上、无障碍超大字号，或任一格长到需要换行：并排会把内容推出屏幕。
-    private var unfolds: Bool {
-        if headers.count >= 5 || dynamicTypeSize.isAccessibilitySize { return true }
-        return rows.contains { row in row.contains { Self.unfoldsCell($0) } }
-    }
-
-    /// 展开态左侧表头列宽：按除首列外的表头实际可见宽度自适应（56~116pt），避免 2 字表头硬占 148pt 挤压窄屏正文
-    private var unfoldedHeaderWidth: CGFloat {
-        let widest = headers.dropFirst()
-            .map { Self.estimatedWidth(Self.visibleText($0), font: 12) }
-            .max() ?? 56
-        return min(max(widest + 8, 56), 116)
-    }
-
-    private var unfolded: some View {
+    private func unfolded(layout: TableLayout) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let caption = headers.first, !caption.isEmpty {
-                Text(inline(caption, kind: .tableHeader))
+            if let caption = layout.displayHeaders.first, !caption.isEmpty {
+                Text(inlineDisplay(caption, kind: .tableHeader))
                     .foregroundStyle(JieboColor.dim)
                     .tracking(0.4)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -547,23 +605,27 @@ private struct HairlineTable: View, Equatable {
                         Rectangle().fill(JieboColor.line).frame(height: 1)
                     }
             }
-            ForEach(Array(rows.enumerated()), id: \.offset) { index, cells in
+            ForEach(Array(layout.displayRows.enumerated()), id: \.offset) { index, cells in
                 VStack(alignment: .leading, spacing: 8) {
-                    let title = Self.displayText(cell(cells, 0))
+                    let title = cell(cells, 0)
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     if !title.isEmpty {
-                        Text(inline(title, kind: .tableBody))
+                        Text(inlineDisplay(title, kind: .tableBody))
                             .foregroundStyle(JieboColor.ink)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    ForEach(Array(headers.dropFirst().enumerated()), id: \.offset) { offset, header in
-                        unfoldedField(header: header, value: cell(cells, offset + 1))
+                    ForEach(Array(layout.displayHeaders.dropFirst().enumerated()), id: \.offset) { offset, header in
+                        unfoldedField(
+                            header: header,
+                            value: cell(cells, offset + 1),
+                            headerWidth: layout.unfoldedHeaderWidth
+                        )
                     }
                 }
                 .padding(.vertical, 10)
                 .overlay(alignment: .bottom) {
-                    if index != rows.count - 1 {
+                    if index != layout.displayRows.count - 1 {
                         Rectangle().fill(JieboColor.line).frame(height: 0.5)
                     }
                 }
@@ -572,15 +634,15 @@ private struct HairlineTable: View, Equatable {
     }
 
     @ViewBuilder
-    private func unfoldedField(header: String, value: String) -> some View {
-        let shown = Self.displayText(value).trimmingCharacters(in: .whitespacesAndNewlines)
+    private func unfoldedField(header: String, value: String, headerWidth: CGFloat) -> some View {
+        let shown = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if !shown.isEmpty {
-            if Self.unfoldsCell(shown) || dynamicTypeSize.isAccessibilitySize {
+            if Self.unfoldsVisible(Self.stripMarkdownLinks(shown)) || dynamicTypeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(inline(header, kind: .tableHeader))
+                    Text(inlineDisplay(header, kind: .tableHeader))
                         .foregroundStyle(JieboColor.dim)
                         .tracking(0.4)
-                    Text(inline(shown, kind: .tableBody))
+                    Text(inlineDisplay(shown, kind: .tableBody))
                         .foregroundStyle(JieboColor.ink)
                         .lineSpacing(3)
                         .fixedSize(horizontal: false, vertical: true)
@@ -589,12 +651,12 @@ private struct HairlineTable: View, Equatable {
                 .accessibilityElement(children: .combine)
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(inline(header, kind: .tableHeader))
+                    Text(inlineDisplay(header, kind: .tableHeader))
                         .foregroundStyle(JieboColor.dim)
                         .tracking(0.4)
                         .fixedSize(horizontal: false, vertical: true)
-                        .frame(width: unfoldedHeaderWidth, alignment: .leading)
-                    Text(inline(shown, kind: .tableBody))
+                        .frame(width: headerWidth, alignment: .leading)
+                    Text(inlineDisplay(shown, kind: .tableBody))
                         .foregroundStyle(JieboColor.ink)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -604,25 +666,12 @@ private struct HairlineTable: View, Equatable {
         }
     }
 
-    private func tableBody(widths: [CGFloat]?) -> some View {
+    private func tableBody(layout: TableLayout, widths: [CGFloat]?) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            row(headers, header: true, last: rows.isEmpty, widths: widths)
-            ForEach(Array(rows.enumerated()), id: \.offset) { index, cells in
-                row(fit(cells), header: false, last: index == rows.count - 1, widths: widths)
+            row(layout.displayHeaders, header: true, last: layout.displayRows.isEmpty, widths: widths)
+            ForEach(Array(layout.displayRows.enumerated()), id: \.offset) { index, cells in
+                row(fit(cells), header: false, last: index == layout.displayRows.count - 1, widths: widths)
             }
-        }
-    }
-
-    /// 横滑里的列必须有确定宽度。无限宽会让整表高度失真，文字挤在左上角。
-    private func columnWidths() -> [CGFloat] {
-        (0..<headers.count).map { index in
-            let font: CGFloat = index == 0 ? 12 : 16
-            let samples = [headers[index]] + rows.map { cell($0, index) }
-            let widest = samples
-                .flatMap { Self.visibleText($0).components(separatedBy: .newlines) }
-                .map { Self.estimatedWidth($0, font: font) }
-                .max() ?? 0
-            return min(max(widest + 2, 64), 168)
         }
     }
 
@@ -666,31 +715,34 @@ private struct HairlineTable: View, Equatable {
     }
 
     private func cellText(_ text: String, kind: ProseInline.Kind, index: Int, header: Bool) -> some View {
-        Text(inline(text, kind: kind))
+        Text(inlineDisplay(text, kind: kind))
             .foregroundStyle(color(index: index, header: header))
             .tracking(header ? 0.4 : 0)
             .multilineTextAlignment(.leading)
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func inline(_ text: String, kind: ProseInline.Kind) -> AttributedString {
-        ProseInline.attributed(Self.displayText(text), sizeCategory: sizeCategory, kind: kind)
+    private func inlineDisplay(_ display: String, kind: ProseInline.Kind) -> AttributedString {
+        ProseInline.attributed(display, sizeCategory: sizeCategory, kind: kind)
     }
 
     /// 单元格里的 br 是换行。并排时这一格会把整行撑得很高，旁边几列又看不见。
     /// 注意：先剥离 [label](url) 的隐藏 URL，避免 @文件 链接把普通短表误判成超宽而强行展开。
-    private static func unfoldsCell(_ raw: String) -> Bool {
-        let shown = visibleText(raw)
+    private static func unfoldsVisible(_ shown: String) -> Bool {
         if shown.contains(where: { $0.isNewline }) { return true }
         return estimatedWidth(shown, font: 16) > 240
     }
 
-    /// 剥掉 Markdown 链接的隐藏 URL，只保留用户肉眼可见的文字用于测宽
-    static func visibleText(_ raw: String) -> String {
-        let text = displayText(raw)
+    /// 剥掉 Markdown 链接的隐藏 URL（输入已做 displayText），只保留用户肉眼可见的文字用于测宽
+    private static func stripMarkdownLinks(_ text: String) -> String {
         guard text.contains("](") else { return text }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         return markdownLink.stringByReplacingMatches(in: text, range: range, withTemplate: "$1")
+    }
+
+    /// 剥掉 Markdown 链接的隐藏 URL，只保留用户肉眼可见的文字用于测宽
+    static func visibleText(_ raw: String) -> String {
+        stripMarkdownLinks(displayText(raw))
     }
 
     static func displayText(_ raw: String) -> String {

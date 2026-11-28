@@ -91,13 +91,22 @@ final class DevicePermissionStore {
         }
     }
 
+    private static let isoLock = NSLock()
+    nonisolated(unsafe) private static let isoFormatter = ISO8601DateFormatter()
+
+    private static func isoString(_ date: Date) -> String {
+        isoLock.lock()
+        defer { isoLock.unlock() }
+        return isoFormatter.string(from: date)
+    }
+
     var grants: [JSONValue] {
         permissions.map { permission in
             .object([
                 "permission": .string(permission.id),
                 "status": .string(permission.status),
                 "canRequest": .bool(permission.status == "not_determined"),
-                "updatedAt": .string(ISO8601DateFormatter().string(from: permission.updatedAt)),
+                "updatedAt": .string(Self.isoString(permission.updatedAt)),
             ])
         }
     }

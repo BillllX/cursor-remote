@@ -230,7 +230,12 @@ actor AppleEventKitService {
         return .object(row)
     }
 
+    private static let isoLock = NSLock()
+    nonisolated(unsafe) private static let isoFormatter = ISO8601DateFormatter()
+
     private static func iso(_ date: Date) -> String {
-        ISO8601DateFormatter().string(from: date)
+        isoLock.lock()
+        defer { isoLock.unlock() }
+        return isoFormatter.string(from: date)
     }
 }

@@ -593,8 +593,7 @@ struct ImMessageImage: View {
         let pixel = Int(Self.maxEdge * displayScale)
         if let outgoing = message.outgoing, let dir = ImCache.outboxDir(tenant: im.tenant) {
             let file = dir.appendingPathComponent(outgoing.thumbFile)
-            if FileManager.default.fileExists(atPath: file.path),
-               let local = await ImImageCache.shared.local(file: file, maxPixel: pixel) {
+            if let local = await ImImageCache.shared.localIfExists(file: file, maxPixel: pixel) {
                 image = local
                 return
             }

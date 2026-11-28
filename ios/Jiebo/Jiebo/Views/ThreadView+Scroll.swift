@@ -47,6 +47,17 @@ extension ThreadView {
                     let turns = Array(allTurns[windowRange])
                     let lastTurnId = allTurns.last?.id
                     let inviteTurnId = calendarInviteTurnId(turns)
+                    let delegationsByTurn: [String: [AssistantDelegation]] = {
+                        guard store.isAssistantChat(resolvedChatId) else { return [:] }
+                        var grouped: [String: [AssistantDelegation]] = [:]
+                        for item in store.assistantState?.delegations ?? []
+                        where item.parentChatId == resolvedChatId {
+                            if let turnId = item.parentTurnId {
+                                grouped[turnId, default: []].append(item)
+                            }
+                        }
+                        return grouped
+                    }()
                     if hiddenCount > 0 {
                         let batch = min(hiddenCount, Self.renderedTurnStep)
                         Button {
@@ -153,6 +164,7 @@ extension ThreadView {
                             turns: turns,
                             lastTurnId: lastTurnId,
                             inviteTurnId: inviteTurnId,
+                            delegations: delegationsByTurn[turn.id] ?? [],
                             proxy: proxy
                         )
                     }
@@ -434,12 +446,16 @@ extension ThreadView {
         turns: [Turn],
         lastTurnId: String?,
         inviteTurnId: String?,
+        delegations: [AssistantDelegation],
         proxy: ScrollViewProxy
     ) -> some View {
         let pinned = pinnedTurnId == turn.id
         let isFirst = index == 0
         let isLast = index == turns.count - 1
         let isGlobalLast = turn.id == lastTurnId
+        let turnCaptured = TodoReceipt.hasTodoAddTool(in: turn)
+            ? TodoReceipt.captured(in: turn, todos: store.assistantState?.todos)
+            : []
         TurnView(
             turn: turn,
             canAnswer: isGlobalLast && !turn.running && !turn.queued,
@@ -462,7 +478,8 @@ extension ThreadView {
                 && !store.runningChatIds.contains(resolvedChatId),
             reviewMark: store.localTurnReviews[turn.id],
             restoring: store.restoringTurnIds.contains(turn.id),
-            captured: TodoReceipt.captured(in: turn, todos: store.assistantState?.todos),
+            captured: turnCaptured,
+            delegations: delegations,
             calendarInvite: turn.id == inviteTurnId ? store.assistantState?.calendar : nil
         )
         .equatable()

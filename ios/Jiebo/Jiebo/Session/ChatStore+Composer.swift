@@ -33,10 +33,25 @@ extension ChatStore {
         externalDraftDelivery = ExternalDraftDelivery(revision: nextRev, chatId: id, kind: kind)
     }
 
+    /// 零正则定位末尾 `(^|\s)@(\S*)$` 区间（含前导空白与 @ 之后的查询切片），避免每次击键构造正则表达式。
+    static func trailingMentionRange(in text: String) -> Range<String.Index>? {
+        var idx = text.endIndex
+        while idx > text.startIndex {
+            let prev = text.index(before: idx)
+            if text[prev].isWhitespace { break }
+            idx = prev
+        }
+        guard idx < text.endIndex, text[idx] == "@" else { return nil }
+        if idx == text.startIndex {
+            return idx..<text.endIndex
+        }
+        return text.index(before: idx)..<text.endIndex
+    }
+
     /// 打字时只更新 @ 候选，不把草稿写进会话列表。
     func updateMentions(for text: String, chatId: String? = nil) {
         let targetId = (chatId?.isEmpty == false ? chatId : nil) ?? activeId
-        guard let range = text.range(of: #"(^|\s)@(\S*)$"#, options: .regularExpression) else {
+        guard let range = Self.trailingMentionRange(in: text) else {
             if mentionQueryByChat[targetId] != nil { mentionQueryByChat.removeValue(forKey: targetId) }
             mentionTasksByChat.removeValue(forKey: targetId)?.cancel()
             if !(mentionSuggestionsByChat[targetId]?.isEmpty ?? true) {
@@ -44,8 +59,8 @@ extension ChatStore {
             }
             return
         }
-        let tail = String(text[range.lowerBound...])
-        let queryString = String(tail.drop(while: { $0 != "@" }).dropFirst())
+        let atIndex = text[range.lowerBound] == "@" ? range.lowerBound : text.index(after: range.lowerBound)
+        let queryString = String(text[text.index(after: atIndex)...])
         guard queryString != mentionQueryByChat[targetId] else { return }
         mentionQueryByChat[targetId] = queryString
         mentionTasksByChat.removeValue(forKey: targetId)?.cancel()
@@ -68,8 +83,8 @@ extension ChatStore {
     func insertMention(_ path: String, chatId: String? = nil) {
         let targetId = (chatId?.isEmpty == false ? chatId : nil) ?? activeId
         let current = draft(for: targetId)
-        if let range = current.range(of: #"(^|\s)@(\S*)$"#, options: .regularExpression) {
-            let leading = current[range.lowerBound...].first.map { $0 == " " || $0 == "\n" ? String($0) : "" } ?? ""
+        if let range = Self.trailingMentionRange(in: current) {
+            let leading = current[range.lowerBound...].first.map { $0 == " " || $0 == "\n" || $0 == "\r\n" ? String($0) : "" } ?? ""
             var next = current
             next.replaceSubrange(range, with: "\(leading)@\(path) ")
             saveDraft(next, forChat: targetId)
@@ -80,15 +95,24 @@ extension ChatStore {
         deliverExternalDraft(.insertMention(path), forChat: targetId)
     }
 
-    /// 候选排序：文件名前缀 > 文件名包含 > 路径包含，同分短路径优先（对齐网页 mentionHits 的意图）
+    /// 候选排序：文件名前缀 > 文件名包含 > 路径包含，同分短路径优先（对齐网页 mentionHits 的意图）。
+    /// 使用 Substring 切片 + 大小写不敏感匹配，省去 (path as NSString).lastPathComponent 与 lowercased() 临时字符串分配。
     static func rankMentions(_ paths: [String], query: String, limit: Int = 8) -> [String] {
-        let q = query.lowercased()
         func score(_ path: String) -> Int {
-            if q.isEmpty { return 0 }
-            let name = (path as NSString).lastPathComponent.lowercased()
-            if name.hasPrefix(q) { return 0 }
-            if name.contains(q) { return 10 }
-            if path.lowercased().contains(q) { return 20 }
+            if query.isEmpty { return 0 }
+            var trimmed = path[...]
+            while trimmed.count > 1 && trimmed.last == "/" {
+                trimmed = trimmed.dropLast()
+            }
+            let name: Substring
+            if let slash = trimmed.lastIndex(of: "/"), slash != trimmed.startIndex || trimmed.count > 1 {
+                name = trimmed[trimmed.index(after: slash)...]
+            } else {
+                name = trimmed
+            }
+            if name.range(of: query, options: [.caseInsensitive, .anchored]) != nil { return 0 }
+            if name.range(of: query, options: .caseInsensitive) != nil { return 10 }
+            if path.range(of: query, options: .caseInsensitive) != nil { return 20 }
             return 99
         }
         var scored: [(path: String, rank: Int)] = []
@@ -567,8 +591,8 @@ extension ChatStore {
 
     /// 剥掉文本尾部进行中的 @查询（保留前面的空白分隔），文件清单点选时防残留
     func stripTrailingQuery(_ text: String) -> String {
-        guard let range = text.range(of: #"(^|\s)@(\S*)$"#, options: .regularExpression) else { return text }
-        let leading = text[range.lowerBound...].first.map { $0 == " " || $0 == "\n" ? String($0) : "" } ?? ""
+        guard let range = Self.trailingMentionRange(in: text) else { return text }
+        let leading = text[range.lowerBound...].first.map { $0 == " " || $0 == "\n" || $0 == "\r\n" ? String($0) : "" } ?? ""
         var out = text
         out.replaceSubrange(range, with: leading)
         return out

@@ -34,9 +34,13 @@ struct LinkStatusDot: View {
         syncing && state == .connected ? "已连接，正在同步聊天记录" : state.title
     }
 
+    private var isAnimating: Bool {
+        !reduceMotion && homeActive && scenePhase == .active && (ripples || breathes)
+    }
+
     var body: some View {
         Group {
-            if reduceMotion || !homeActive || scenePhase != .active || !(ripples || breathes) {
+            if !isAnimating {
                 dot(opacity: 1)
                     .background {
                         if ripples {
@@ -45,26 +49,20 @@ struct LinkStatusDot: View {
                                 .frame(width: size * 1.8, height: size * 1.8)
                         }
                     }
+                    .animation(JieboMotion.fade(reduceMotion), value: state)
             } else {
-                // 6pt 的点 15 帧就够顺，标题栏常驻，不值得按 30 帧重绘
-                TimelineView(.animation(minimumInterval: 1.0 / 15)) { context in
-                    let t = context.date.timeIntervalSinceReferenceDate
-                        .truncatingRemainder(dividingBy: period) / period
-                    dot(opacity: breathes ? 0.65 + 0.35 * cos(t * 2 * .pi) : 1)
-                        .background {
-                            if ripples {
-                                Circle()
-                                    .stroke(color, lineWidth: 1)
-                                    .frame(width: size, height: size)
-                                    .scaleEffect(1 + t * 1.4)
-                                    .opacity(0.55 * (1 - t))
-                            }
-                        }
-                }
+                // 交由 Core Animation 合成循环动画，标题栏常驻时主线程 0 帧回调；按状态与同步态重置身份保证切态即干净重建动画
+                AnimatedLinkStatusDot(
+                    color: color,
+                    size: size,
+                    ripples: ripples,
+                    breathes: breathes,
+                    period: period
+                )
+                .id("\(state)-\(syncing)")
             }
         }
         .frame(width: size + 2, height: size + 2)
-        .animation(JieboMotion.fade(reduceMotion), value: state)
         .accessibilityElement()
         .accessibilityLabel(label)
     }
@@ -74,5 +72,63 @@ struct LinkStatusDot: View {
             .fill(color)
             .frame(width: size, height: size)
             .opacity(opacity)
+    }
+}
+
+private struct AnimatedLinkStatusDot: View {
+    let color: Color
+    let size: CGFloat
+    let ripples: Bool
+    let breathes: Bool
+    let period: TimeInterval
+    @State private var ripplePhase = false
+    @State private var breathePhase = false
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: size, height: size)
+            .opacity(breathes ? (breathePhase ? 0.35 : 1.0) : 1.0)
+            .animation(
+                breathes && breathePhase
+                    ? .easeInOut(duration: period / 2).repeatForever(autoreverses: true)
+                    : nil,
+                value: breathePhase
+            )
+            .background {
+                if ripples {
+                    Circle()
+                        .stroke(color, lineWidth: 1)
+                        .frame(width: size, height: size)
+                        .scaleEffect(ripplePhase ? 2.4 : 1.0)
+                        .opacity(ripplePhase ? 0 : 0.55)
+                        .animation(
+                            ripplePhase
+                                ? .linear(duration: period).repeatForever(autoreverses: false)
+                                : nil,
+                            value: ripplePhase
+                        )
+                }
+            }
+            .task {
+                var reset = Transaction()
+                reset.disablesAnimations = true
+                withTransaction(reset) {
+                    ripplePhase = false
+                    breathePhase = false
+                }
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                if ripples { ripplePhase = true }
+                if breathes { breathePhase = true }
+            }
+            .onDisappear {
+                var reset = Transaction()
+                reset.disablesAnimations = true
+                withTransaction(reset) {
+                    ripplePhase = false
+                    breathePhase = false
+                }
+            }
     }
 }

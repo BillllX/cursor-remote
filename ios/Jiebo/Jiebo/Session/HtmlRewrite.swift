@@ -43,11 +43,13 @@ func mediaSrc(path: String, chatId: String, media: MediaTicket?, rev: String? = 
 }
 
 private let cspMeta = "<meta http-equiv=\"Content-Security-Policy\" content=\"base-uri 'none'; object-src 'none'; form-action 'none'\">"
+private let htmlAssetAttrRegex = try? NSRegularExpression(pattern: #"(?i)(\s)(src|href)=(["'])([^"']*)\3"#, options: [])
+private let htmlStaticExtRegex = try? NSRegularExpression(pattern: #"\.(css|png|jpe?g|gif|webp|svg|ico|woff2?|ttf)(\?|$)"#, options: [])
 
 /// 重写 html 的 src/href（对齐网页 rewriteHtml）：相对资源 → toSrc(工作区路径)，
 /// http 的 src 只放行常见静态扩展，javascript: 剥成空，最后注入 CSP
 func rewriteHtml(source: String, fromFile: String, toSrc: (String) -> String) -> String {
-    guard let regex = try? NSRegularExpression(pattern: #"(?i)(\s)(src|href)=(["'])([^"']*)\3"#, options: []) else { return source }
+    guard let regex = htmlAssetAttrRegex else { return source }
     let nsSource = source as NSString
     let matches = regex.matches(in: source, range: NSRange(location: 0, length: nsSource.length))
     var result = ""
@@ -69,7 +71,9 @@ func rewriteHtml(source: String, fromFile: String, toSrc: (String) -> String) ->
         } else if raw.lowercased().hasPrefix("http://") || raw.lowercased().hasPrefix("https://") {
             if lower == "href" {
                 // 原样保留
-            } else if lower == "src", raw.range(of: #"\.(css|png|jpe?g|gif|webp|svg|ico|woff2?|ttf)(\?|$)"#, options: .regularExpression) != nil {
+            } else if lower == "src",
+                      let extRegex = htmlStaticExtRegex,
+                      extRegex.firstMatch(in: raw, range: NSRange(raw.startIndex..<raw.endIndex, in: raw)) != nil {
                 // 原样保留
             } else {
                 replacement = "\(space)\(attr)=\(quote)\(quote)"

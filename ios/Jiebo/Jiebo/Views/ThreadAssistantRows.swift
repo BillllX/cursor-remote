@@ -15,6 +15,14 @@ struct TodoReceipt: Identifiable, Hashable {
     var known: Bool
     var id: String { callId }
 
+    /// 快速检查本轮是否包含 todo_add 工具；未包含时视图层无需订阅 store.assistantState?.todos。
+    static func hasTodoAddTool(in turn: Turn) -> Bool {
+        turn.tools.contains { tool in
+            tool.name.range(of: "todo_add", options: [.caseInsensitive, .anchored, .backwards]) != nil
+                && AssistantToolText.baseName(tool.name) == "todo_add"
+        }
+    }
+
     static func captured(in turn: Turn, todos: [AssistantTodo]?) -> [TodoReceipt] {
         guard !turn.tools.isEmpty else { return [] }
         return turn.tools.compactMap { tool in

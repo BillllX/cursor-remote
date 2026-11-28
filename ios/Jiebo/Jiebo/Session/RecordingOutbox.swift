@@ -293,7 +293,6 @@ enum RecordingOutbox {
         let sessionURL = endpoint.appendingPathComponent(id)
         let marker = folder.appendingPathComponent("stopped")
         let stopDate = (try? marker.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
-        let iso = ISO8601DateFormatter()
 
         let timelineEvents: [[String: Any]] = meta.events.map { evt in
             var dict: [String: Any] = [
@@ -321,7 +320,7 @@ enum RecordingOutbox {
             "generation": 1,
             "policyHash": hash,
             "startedAt": meta.startedAt,
-            "stoppedAt": meta.stoppedAt ?? iso.string(from: stopDate),
+            "stoppedAt": meta.stoppedAt ?? RecordingFormatting.isoString(from: stopDate),
             "completeCapture": !partial,
             "audioUploaded": meta.syncAudio,
             "expectedTotalFrames": offset,
