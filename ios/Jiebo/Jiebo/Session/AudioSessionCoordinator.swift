@@ -185,7 +185,7 @@ final class AudioSessionCoordinator {
     }
 
     /// 串行后台音频会话队列（供 AudioSessionCoordinator 与 VoiceDictation 共享，避免双队列交叉改写 AVAudioSession）。
-    static let audioQueue = DispatchQueue(label: "ai.jiebo.audio-session.coordinator", qos: .userInitiated)
+    nonisolated static let audioQueue = DispatchQueue(label: "ai.jiebo.audio-session.coordinator", qos: .userInitiated)
 
     private static func applySession(
         category: AVAudioSession.Category,

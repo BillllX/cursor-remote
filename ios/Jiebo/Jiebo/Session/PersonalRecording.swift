@@ -76,6 +76,12 @@ private final class RecordingSegmentWriter: @unchecked Sendable {
         }
     }
 
+    private func markClosed() {
+        lock.lock()
+        closed = true
+        lock.unlock()
+    }
+
     private func markFailed(_ message: String) {
         lock.lock()
         if failed {
@@ -147,9 +153,7 @@ private final class RecordingSegmentWriter: @unchecked Sendable {
 
     /// 停止采集后异步冲刷队列并封口当前段，避免截断尾音且不阻塞主线程。
     func finishAsync() async throws {
-        lock.lock()
-        closed = true
-        lock.unlock()
+        markClosed()
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             writeQueue.async {
