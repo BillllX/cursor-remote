@@ -517,7 +517,7 @@ enum RecordingFormatting {
         return parser
     }()
     nonisolated(unsafe) private static let isoPlainFormatter = ISO8601DateFormatter()
-    nonisolated(unsafe) private static let shortZhDateFormatter: DateFormatter = {
+    private static let shortZhDateFormatter: DateFormatter = {
         let df = DateFormatter()
         df.locale = Locale(identifier: "zh_CN")
         df.timeZone = .autoupdatingCurrent

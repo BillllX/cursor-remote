@@ -193,7 +193,7 @@ struct AssistantReceiptDock: View {
         guard homeActive, scenePhase == .active, let state = store.assistantState else { return false }
         if state.approvals.contains(where: { $0.expiresAt > 0 }) { return true }
         if (state.draftCards ?? []).contains(where: { $0.status == "waiting_user" && $0.expiresAt > 0 }) { return true }
-        if !state.inbox.isEmpty || !state.delegations.isEmpty || !(state.workspaceRuns ?? []).isEmpty { return true }
+        if !state.inbox.isEmpty || !state.delegations.isEmpty { return true }
         return false
     }
 
