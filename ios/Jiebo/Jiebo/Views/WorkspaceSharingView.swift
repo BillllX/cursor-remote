@@ -1,11 +1,17 @@
 import SwiftUI
 
+private struct SharePerson: Identifiable, Equatable {
+    let id: String
+    let name: String
+}
+
 struct ShareWorkspaceSheet: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     let name: String
     let path: String
-    @State private var people: [JSONValue] = []
+    @State private var people: [SharePerson] = []
+    @State private var duplicateNames: Set<String> = []
     @State private var selected: Set<String> = []
     @State private var savedSelection: Set<String> = []
     @State private var loading = true
@@ -14,20 +20,17 @@ struct ShareWorkspaceSheet: View {
     @State private var error = ""
     @State private var saving = false
 
-    private var filtered: [JSONValue] {
+    private var filtered: [SharePerson] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return people.filter { row in
-            needle.isEmpty || [row["name"]?.string, row["id"]?.string]
-                .compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(needle) }
+        guard !needle.isEmpty else { return people }
+        return people.filter { person in
+            person.name.localizedCaseInsensitiveContains(needle)
+                || person.id.localizedCaseInsensitiveContains(needle)
         }
     }
 
-    private var duplicateNames: Set<String> {
-        let groups = Dictionary(grouping: people.compactMap { $0["name"]?.string }, by: { $0 })
-        return Set(groups.filter { $0.value.count > 1 }.keys)
-    }
-
     var body: some View {
+        let visiblePeople = filtered
         NavigationStack {
             List {
                 Section {
@@ -38,36 +41,34 @@ struct ShareWorkspaceSheet: View {
                     JieboListHeader(name)
                 }
                 Section {
-                    ForEach(filtered, id: \.self) { row in
-                        if let id = row["id"]?.string {
-                            let name = row["name"]?.string ?? id
-                            Button {
-                                if selected.contains(id) { selected.remove(id) }
-                                else { selected.insert(id) }
-                            } label: {
-                                HStack(spacing: 10) {
-                                    Image(systemName: NavigationIconId.account.symbol).foregroundStyle(JieboColor.dim)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(name).foregroundStyle(JieboColor.ink)
-                                        if duplicateNames.contains(name) {
-                                            Text(id).font(.caption).foregroundStyle(JieboColor.dim)
-                                        }
-                                    }
-                                    Spacer()
-                                    if selected.contains(id) {
-                                        Image(systemName: "checkmark").foregroundStyle(JieboColor.pine)
+                    ForEach(visiblePeople) { person in
+                        let isSelected = selected.contains(person.id)
+                        Button {
+                            if isSelected { selected.remove(person.id) }
+                            else { selected.insert(person.id) }
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: NavigationIconId.account.symbol).foregroundStyle(JieboColor.dim)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(person.name).foregroundStyle(JieboColor.ink)
+                                    if duplicateNames.contains(person.name) {
+                                        Text(person.id).font(.caption).foregroundStyle(JieboColor.dim)
                                     }
                                 }
-                                .frame(minHeight: 44)
-                                .contentShape(Rectangle())
+                                Spacer()
+                                if isSelected {
+                                    Image(systemName: "checkmark").foregroundStyle(JieboColor.pine)
+                                }
                             }
-                            .buttonStyle(.borderless)
-                            .accessibilityAddTraits(selected.contains(id) ? .isSelected : [])
-                            .disabled(saving)
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.borderless)
+                        .accessibilityAddTraits(isSelected ? .isSelected : [])
+                        .disabled(saving)
                     }
                     if loading { ProgressView("正在读取同事名单…") }
-                    else if filtered.isEmpty && error.isEmpty {
+                    else if visiblePeople.isEmpty && error.isEmpty {
                         Text(people.isEmpty ? "没有可共享的同事" : "没有匹配的同事")
                             .foregroundStyle(JieboColor.dim)
                     }
@@ -105,7 +106,18 @@ struct ShareWorkspaceSheet: View {
         defer { loading = false }
         do {
             let value = try await store.workspaceSharing.request("people", workspace: path)
-            people = value["people"]?.array ?? []
+            let rawPeople = value["people"]?.array ?? []
+            var parsed: [SharePerson] = []
+            parsed.reserveCapacity(rawPeople.count)
+            var nameCounts: [String: Int] = [:]
+            for row in rawPeople {
+                guard let id = row["id"]?.string else { continue }
+                let rawName = row["name"]?.string
+                if let rawName { nameCounts[rawName, default: 0] += 1 }
+                parsed.append(SharePerson(id: id, name: rawName ?? id))
+            }
+            people = parsed
+            duplicateNames = Set(nameCounts.compactMap { $0.value > 1 ? $0.key : nil })
             selected = Set(value["memberIds"]?.array?.compactMap(\.string) ?? [])
             savedSelection = selected
             revision = value["memberRevision"]?.string ?? ""
@@ -126,12 +138,83 @@ struct ShareWorkspaceSheet: View {
     }
 }
 
+private struct SharedFileEntry: Identifiable, Equatable {
+    let name: String
+    let isDirectory: Bool
+    var id: String { "\(isDirectory ? "d" : "f")|\(name)" }
+}
+
+private struct SharedPendingChange: Identifiable, Equatable {
+    let id: Int
+    let path: String
+    let preview: String
+}
+
+private struct SharedFailedChange: Identifiable, Equatable {
+    let id: Int
+    let path: String
+    let error: String
+}
+
+private struct SharedAnswerTurn: Identifiable, Equatable {
+    let id = UUID()
+    let question: String
+    let answer: String
+    let sources: [String]
+    var pendingId: String?
+    var pendingChanges: [SharedPendingChange]
+    var applied: [String]
+    var failed: [SharedFailedChange]
+
+    init(question: String, answer: String, result: JSONValue) {
+        self.question = question
+        self.answer = answer
+        self.sources = result["sources"]?.array?.compactMap(\.string) ?? []
+        if let plan = result["pending"], let planId = plan["id"]?.string {
+            self.pendingId = planId
+            self.pendingChanges = (plan["changes"]?.array ?? []).enumerated().map { idx, change in
+                SharedPendingChange(
+                    id: idx,
+                    path: change["path"]?.string ?? "文件",
+                    preview: change["preview"]?.string ?? ""
+                )
+            }
+        } else {
+            self.pendingId = nil
+            self.pendingChanges = []
+        }
+        self.applied = result["changes"]?["applied"]?.array?.compactMap(\.string) ?? []
+        self.failed = (result["changes"]?["failed"]?.array ?? []).enumerated().map { idx, failure in
+            SharedFailedChange(
+                id: idx,
+                path: failure["path"]?.string ?? "",
+                error: failure["error"]?.string ?? "写入失败"
+            )
+        }
+    }
+
+    mutating func resolve(appliedResult: JSONValue?, discard: Bool) {
+        pendingId = nil
+        pendingChanges = []
+        if !discard, let appliedResult {
+            applied = appliedResult["applied"]?.array?.compactMap(\.string) ?? []
+            failed = (appliedResult["failed"]?.array ?? []).enumerated().map { idx, failure in
+                SharedFailedChange(
+                    id: idx,
+                    path: failure["path"]?.string ?? "",
+                    error: failure["error"]?.string ?? "写入失败"
+                )
+            }
+        }
+    }
+}
+
 struct SharedWorkspaceFileView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     let workspace: SharedWorkspaceRow
     @State private var folder = ""
-    @State private var entries: [JSONValue] = []
+    @State private var entries: [SharedFileEntry] = []
     @State private var truncated = false
     @State private var path = ""
     @State private var draft = ""
@@ -145,7 +228,7 @@ struct SharedWorkspaceFileView: View {
     @State private var historyLoaded = false
     @State private var asking = false
     @State private var askError = ""
-    @State private var answers: [(question: String, answer: String, result: JSONValue)] = []
+    @State private var answers: [SharedAnswerTurn] = []
     @State private var filesOpen = false
     @State private var confirmWrites = true
     @State private var applying = false
@@ -160,28 +243,26 @@ struct SharedWorkspaceFileView: View {
     private var available: Bool { store.workspaceSharing.items.contains { $0.id == workspace.id } }
 
     var body: some View {
+        let currentWorkspace = store.workspaceSharing.items.first { $0.id == workspace.id }
         List {
             if canAsk && !filesOpen {
-                ForEach(answers.indices, id: \.self) { index in
-                    let turn = answers[index]
+                ForEach(answers) { turn in
                     Section {
                         Text(turn.question).font(.headline)
                         ChunkedAssistantMessage(text: turn.answer).equatable()
-                        let sources = turn.result["sources"]?.array?.compactMap(\.string) ?? []
-                        if !sources.isEmpty { Text("读取了 " + sources.joined(separator: "、")).font(.caption) }
-                        if let plan = turn.result["pending"], let id = plan["id"]?.string {
-                            ForEach(plan["changes"]?.array ?? [], id: \.self) { change in
-                                DisclosureGroup(change["path"]?.string ?? "文件") {
-                                    Text(change["preview"]?.string ?? "").textSelection(.enabled)
+                        if !turn.sources.isEmpty { Text("读取了 " + turn.sources.joined(separator: "、")).font(.caption) }
+                        if let id = turn.pendingId {
+                            ForEach(turn.pendingChanges) { change in
+                                DisclosureGroup(change.path) {
+                                    Text(change.preview).textSelection(.enabled)
                                 }
                             }
-                            Button("批准写入") { Task { await resolveChanges(index, id: id) } }.disabled(applying)
-                            Button("拒绝") { Task { await resolveChanges(index, id: id, discard: true) } }.disabled(applying)
+                            Button("批准写入") { Task { await resolveChanges(turn.id, id: id) } }.disabled(applying)
+                            Button("拒绝") { Task { await resolveChanges(turn.id, id: id, discard: true) } }.disabled(applying)
                         }
-                        let applied = turn.result["changes"]?["applied"]?.array?.compactMap(\.string) ?? []
-                        if !applied.isEmpty { Text("已写入 " + applied.joined(separator: "、")).font(.caption) }
-                        ForEach(turn.result["changes"]?["failed"]?.array ?? [], id: \.self) { failure in
-                            Text((failure["path"]?.string ?? "") + " · " + (failure["error"]?.string ?? "写入失败"))
+                        if !turn.applied.isEmpty { Text("已写入 " + turn.applied.joined(separator: "、")).font(.caption) }
+                        ForEach(turn.failed) { failure in
+                            Text(failure.path + " · " + failure.error)
                         }
                     }
                 }
@@ -194,16 +275,14 @@ struct SharedWorkspaceFileView: View {
                 if !folder.isEmpty {
                     Button("返回上一级") { folder = folder.split(separator: "/").dropLast().joined(separator: "/") }.disabled(busy)
                 }
-                ForEach(entries, id: \.self) { item in
-                    if let name = item["name"]?.string {
-                        let target = folder.isEmpty ? name : folder + "/" + name
-                        if item["directory"]?.bool == true {
-                            Button { folder = target } label: { Label(name, systemImage: "folder") }.disabled(busy)
-                        } else {
-                            Button {
-                                if dirty { openTarget = target } else { Task { await open(target) } }
-                            } label: { Label(name, systemImage: "doc") }.disabled(busy)
-                        }
+                ForEach(entries) { item in
+                    let target = folder.isEmpty ? item.name : folder + "/" + item.name
+                    if item.isDirectory {
+                        Button { folder = target } label: { Label(item.name, systemImage: "folder") }.disabled(busy)
+                    } else {
+                        Button {
+                            if dirty { openTarget = target } else { Task { await open(target) } }
+                        } label: { Label(item.name, systemImage: "doc") }.disabled(busy)
                     }
                 }
                 if truncated { Text("这个文件夹只显示前 400 项。").foregroundStyle(.secondary) }
@@ -239,11 +318,11 @@ struct SharedWorkspaceFileView: View {
         .safeAreaInset(edge: .bottom) {
             if canAsk && !filesOpen { sharedComposer }
         }
-        .navigationTitle(store.workspaceSharing.items.first { $0.id == workspace.id }?.name ?? workspace.name)
+        .navigationTitle(currentWorkspace?.name ?? workspace.name)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: folder) { await loadFiles() }
         .task { await loadHistory() }
-        .onChange(of: available) { _, value in if !value { dismiss() } }
+        .onChange(of: currentWorkspace != nil) { _, value in if !value { dismiss() } }
         .alert("放弃未保存的修改？", isPresented: Binding(get: { openTarget != nil }, set: { if !$0 { openTarget = nil } })) {
             Button("取消", role: .cancel) { openTarget = nil }
             Button("打开文件", role: .destructive) {
@@ -291,17 +370,15 @@ struct SharedWorkspaceFileView: View {
         .padding(.horizontal, 12).padding(.vertical, 8)
     }
 
-    private func resolveChanges(_ index: Int, id: String, discard: Bool = false) async {
+    private func resolveChanges(_ turnId: UUID, id: String, discard: Bool = false) async {
         guard !applying else { return }
         applying = true
         defer { applying = false }
         do {
             let applied = try await store.workspaceSharing.request("apply", workspace: workspace.id,
                 fields: ["changeId": .string(id), "discard": .bool(discard)])
-            guard available, answers.indices.contains(index), var result = answers[index].result.object else { return }
-            result.removeValue(forKey: "pending")
-            if !discard { result["changes"] = applied }
-            answers[index].result = .object(result)
+            guard available, let idx = answers.firstIndex(where: { $0.id == turnId && $0.pendingId == id }) else { return }
+            answers[idx].resolve(appliedResult: applied, discard: discard)
             if !discard { await loadFiles() }
         } catch { askError = error.localizedDescription }
     }
@@ -313,7 +390,7 @@ struct SharedWorkspaceFileView: View {
             guard available, !Task.isCancelled else { return }
             answers = (result["turns"]?.array ?? []).compactMap { turn in
                 guard let question = turn["question"]?.string, let answer = turn["answer"]?.string else { return nil }
-                return (question, answer, turn)
+                return SharedAnswerTurn(question: question, answer: answer, result: turn)
             }
             historyLoaded = true
         } catch { askError = error.localizedDescription }
@@ -334,7 +411,7 @@ struct SharedWorkspaceFileView: View {
             if !selectedModel.isEmpty { fields["model"] = .string(selectedModel) }
             let result = try await store.workspaceSharing.request("ask", workspace: workspace.id, fields: fields)
             guard available, let answer = result["answer"]?.string else { return }
-            answers.append((text, answer, result))
+            answers.append(SharedAnswerTurn(question: text, answer: answer, result: result))
             if composerBuffer.text.trimmingCharacters(in: .whitespacesAndNewlines) == text {
                 hasQuestion = false
                 composerBuffer.text = ""
@@ -352,7 +429,10 @@ struct SharedWorkspaceFileView: View {
         do {
             let result = try await store.workspaceSharing.request("files", workspace: workspace.id, fields: ["path": .string(target)])
             guard !Task.isCancelled, available, target == folder else { return }
-            entries = result["items"]?.array ?? []
+            entries = (result["items"]?.array ?? []).compactMap { item in
+                guard let name = item["name"]?.string else { return nil }
+                return SharedFileEntry(name: name, isDirectory: item["directory"]?.bool == true)
+            }
             truncated = result["truncated"]?.bool ?? false
         } catch { if !Task.isCancelled { report(error) } }
     }

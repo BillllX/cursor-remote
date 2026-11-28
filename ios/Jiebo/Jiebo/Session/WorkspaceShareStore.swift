@@ -18,16 +18,19 @@ struct WorkspaceShareFailure: LocalizedError {
 final class WorkspaceShareStore {
     private(set) var items: [SharedWorkspaceRow] = []
     @ObservationIgnored var sendFrame: ((JSONValue) -> Void)?
-    @ObservationIgnored private var pending: [String: CheckedContinuation<JSONValue, Error>] = [:]
+    @ObservationIgnored private var pending: [String: (continuation: CheckedContinuation<JSONValue, Error>, timeout: Task<Void, Never>)] = [:]
     @ObservationIgnored private var listVersion = UUID()
 
     func reset() {
         listVersion = UUID()
-        items = []
+        if !items.isEmpty { items = [] }
         sendFrame = nil
         let requests = pending.values
         pending.removeAll()
-        for request in requests { request.resume(throwing: WorkspaceShareFailure(message: "共享连接已断开")) }
+        for entry in requests {
+            entry.timeout.cancel()
+            entry.continuation.resume(throwing: WorkspaceShareFailure(message: "共享连接已断开"))
+        }
     }
 
     func request(_ action: String, workspace: String? = nil, fields: [String: JSONValue] = [:]) async throws -> JSONValue {
@@ -38,14 +41,17 @@ final class WorkspaceShareStore {
         frame["requestId"] = .string(id)
         frame["action"] = .string(action)
         if let workspace { frame["workspace"] = .string(workspace) }
-        let timeout = action == "ask" ? 100 : 12
+        let timeoutSeconds = action == "ask" ? 100 : 12
         return try await withCheckedThrowingContinuation { continuation in
-            pending[id] = continuation
-            sendFrame(.object(frame))
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(timeout))
-                self?.pending.removeValue(forKey: id)?.resume(throwing: WorkspaceShareFailure(message: "共享请求超时，请重试"))
+            let timeoutTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(timeoutSeconds))
+                guard !Task.isCancelled else { return }
+                self?.pending.removeValue(forKey: id)?.continuation.resume(
+                    throwing: WorkspaceShareFailure(message: "共享请求超时，请重试")
+                )
             }
+            pending[id] = (continuation, timeoutTask)
+            sendFrame(.object(frame))
         }
     }
 
@@ -53,20 +59,29 @@ final class WorkspaceShareStore {
         let version = UUID()
         listVersion = version
         guard let result = try? await request("list"), version == listVersion else { return }
-        items = result["items"]?.array?.compactMap { row in
+        let next = result["items"]?.array?.compactMap { row -> SharedWorkspaceRow? in
             guard let id = row["id"]?.string, let name = row["name"]?.string, let owner = row["ownerName"]?.string else { return nil }
             return SharedWorkspaceRow(id: id, name: name, ownerName: owner)
         } ?? []
+        if next != items { items = next }
     }
 
     func handle(_ frame: JSONValue) {
         if frame["type"]?.string == "workspace_share_changed" {
             Task { await refresh() }
         } else if frame["type"]?.string == "workspace_share_result",
-                  let id = frame["requestId"]?.string, let request = pending.removeValue(forKey: id) {
-            if frame["ok"]?.bool == true { request.resume(returning: frame["data"] ?? .null) }
-            else {
-                request.resume(throwing: WorkspaceShareFailure(message: frame["error"]?.string ?? "共享操作未完成", code: frame["code"]?.string))
+                  let id = frame["requestId"]?.string,
+                  let entry = pending.removeValue(forKey: id) {
+            entry.timeout.cancel()
+            if frame["ok"]?.bool == true {
+                entry.continuation.resume(returning: frame["data"] ?? .null)
+            } else {
+                entry.continuation.resume(
+                    throwing: WorkspaceShareFailure(
+                        message: frame["error"]?.string ?? "共享操作未完成",
+                        code: frame["code"]?.string
+                    )
+                )
             }
         }
     }
