@@ -19,7 +19,7 @@ extension View {
     }
 }
 
-struct FileNode: Identifiable, Hashable {
+struct FileNode: Identifiable, Hashable, Sendable {
     let name: String
     let path: String
     var children: [FileNode]? // nil = 文件
@@ -33,10 +33,13 @@ enum FileTreeBuilder {
     /// 实现用「按首段分组递归」（字典分组，O(n×深度)），比 web 的 level.find（O(n²)）便宜；
     /// 语义等价（真实文件系统不会出现「同名既是文件又是目录」的歧义）。
     static func toTree(_ paths: [String]) -> [FileNode] {
-        let items: [(parts: [Substring], explicitDir: Bool)] = paths.prefix(8000).map { raw in
+        let slice = paths.prefix(8000)
+        var items: [(parts: [Substring], explicitDir: Bool)] = []
+        items.reserveCapacity(slice.count)
+        for raw in slice {
             let explicitDir = raw.hasSuffix("/")
             let parts = raw.split(separator: "/")
-            return (parts, explicitDir)
+            items.append((parts, explicitDir))
         }
         return build(items, depth: 0, prefix: "")
     }
@@ -71,7 +74,7 @@ enum FileTreeBuilder {
     }
 
     /// 展开行（对齐 web rows walk）：目录默认折叠（expandAll 时全展开）；openDirs 有显式值以显式为准
-    struct Row: Identifiable {
+    struct Row: Identifiable, Equatable, Sendable {
         let node: FileNode
         let depth: Int
         var id: String { node.path }
@@ -79,6 +82,7 @@ enum FileTreeBuilder {
 
     static func flatten(_ tree: [FileNode], openDirs: [String: Bool], expandAll: Bool, defaultOpenDepth0: Bool = false) -> [Row] {
         var rows: [Row] = []
+        rows.reserveCapacity(tree.count)
         func walk(_ nodes: [FileNode], depth: Int) {
             for node in nodes {
                 rows.append(Row(node: node, depth: depth))
@@ -95,9 +99,26 @@ enum FileTreeBuilder {
 
 func fileGlyph(_ path: String, isDir: Bool, open: Bool) -> String {
     if isDir { return open ? "folder.fill" : "folder" }
-    let base = path.replacingOccurrences(of: "\\", with: "/").split(separator: "/").last.map(String.init) ?? path
-    if base.lowercased().hasSuffix(".canvas.tsx") { return "square.grid.2x2" }
-    let ext = base.contains(".") ? (base.split(separator: ".").last.map(String.init) ?? "").lowercased() : ""
+    // 纯 Substring 倒序定位路径分隔符与扩展名，避免 8000 行大树滚动时每行分配临时数组与整串拷贝。
+    var trimmed = path[...]
+    while trimmed.count > 1, let last = trimmed.last, last == "/" || last == "\\" {
+        trimmed = trimmed.dropLast()
+    }
+    let base: Substring
+    if let sep = trimmed.lastIndex(where: { $0 == "/" || $0 == "\\" }) {
+        base = trimmed[trimmed.index(after: sep)...]
+    } else {
+        base = trimmed
+    }
+    if base.count >= 11, base.suffix(11).caseInsensitiveCompare(".canvas.tsx") == .orderedSame {
+        return "square.grid.2x2"
+    }
+    let ext: String
+    if let dot = base.lastIndex(of: ".") {
+        ext = base[base.index(after: dot)...].lowercased()
+    } else {
+        ext = ""
+    }
     switch ext {
     case "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs",
          "rs", "go", "java", "kt", "swift", "c", "h", "cpp", "cc", "rb", "php", "py", "pyi":
@@ -123,6 +144,8 @@ func fileGlyph(_ path: String, isDir: Bool, open: Bool) -> String {
 struct FileTreeView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// 所属会话/工作区身份，供 FileTreeRowView.Equatable 感知回调闭包目标会话变化。
+    var scopeId: String = ""
     let paths: [String]
     let truncated: Bool
     let filter: String
@@ -144,8 +167,12 @@ struct FileTreeView: View {
     @State private var rows: [FileTreeBuilder.Row] = []
     @State private var debouncedFilter = ""
     @State private var filterTask: Task<Void, Never>?
+    @State private var rebuildTask: Task<Void, Never>?
+    @State private var rebuildGeneration: UInt64 = 0
 
     var body: some View {
+        let palette = JieboTheme.shared.palette
+        let appearance = JieboTheme.shared.appearance
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if rows.isEmpty {
@@ -156,7 +183,39 @@ struct FileTreeView: View {
                         .padding(.top, 40)
                 } else {
                     ForEach(rows) { row in
-                        rowView(row)
+                        let node = row.node
+                        let isOpen = node.isDir && (expandAll || (openDirs[node.path] ?? false))
+                        let isLoading = node.isDir && isOpen && loadingDirs.contains(node.path) && (node.children?.isEmpty ?? true)
+                        let isDirTruncated = node.isDir && isOpen && truncatedDirs.contains(node.path)
+                        FileTreeRowView(
+                            scopeId: scopeId,
+                            name: node.name,
+                            path: node.path,
+                            isDir: node.isDir,
+                            depth: row.depth,
+                            isOpen: isOpen,
+                            isSelected: selectedPath == node.path,
+                            showFullPath: !debouncedFilter.isEmpty && node.path != node.name,
+                            isLoading: isLoading,
+                            isDirTruncated: isDirTruncated,
+                            dynamicTypeSize: dynamicTypeSize,
+                            reduceMotion: reduceMotion,
+                            palette: palette,
+                            appearance: appearance,
+                            onTap: {
+                                if node.isDir {
+                                    let willOpen = !isOpen
+                                    if willOpen { onExpandDir?(node.path) }
+                                    openDirs[node.path] = willOpen
+                                } else {
+                                    onOpen(node.path)
+                                }
+                            },
+                            onPick: { onPick(node.path) },
+                            onCopyPath: { onCopyPath(node.path) },
+                            onQuickLook: { onQuickLook(node.path) }
+                        )
+                        .equatable()
                     }
                 }
                 if (truncated || truncatedDirs.contains("") || paths.count > 8000) && debouncedFilter.isEmpty {
@@ -184,7 +243,12 @@ struct FileTreeView: View {
         .onChange(of: paths, initial: true) { _, _ in rebuild() }
         .onChange(of: debouncedFilter) { _, _ in rebuild() }
         .onChange(of: openDirs) { _, _ in refreshRows() }
-        .onDisappear { filterTask?.cancel(); filterTask = nil }
+        .onDisappear {
+            filterTask?.cancel()
+            filterTask = nil
+            rebuildTask?.cancel()
+            rebuildTask = nil
+        }
     }
 
     // MARK: 数据
@@ -212,11 +276,57 @@ struct FileTreeView: View {
     }
 
     private func rebuild() {
-        // 搜索对齐 web：substring 过滤 → 建树 → 全展开（不用 rankMentions——打分排序会打乱树序）
+        rebuildTask?.cancel()
+        rebuildTask = nil
+        rebuildGeneration &+= 1
+        let generation = rebuildGeneration
+        let currentPaths = paths
         let q = debouncedFilter
+        let expand = expandAll
+        let snapshotOpenDirs = openDirs
+        // 大仓库（> 800 路径）将过滤 + 建树 + 展开移至后台线程，避免搜索与刷新索引阻塞主线程。
+        if currentPaths.count > 800 {
+            rebuildTask = Task { @MainActor in
+                let worker = Task.detached(priority: .userInitiated) { () -> ([FileNode], [FileTreeBuilder.Row])? in
+                    let filtered: [String]
+                    if q.isEmpty {
+                        filtered = currentPaths
+                    } else {
+                        var matches: [String] = []
+                        for (idx, path) in currentPaths.enumerated() {
+                            if (idx & 255) == 0 && Task.isCancelled { return nil }
+                            if !path.hasSuffix("/") && path.range(of: q, options: .caseInsensitive) != nil {
+                                matches.append(path)
+                            }
+                        }
+                        filtered = matches
+                    }
+                    if Task.isCancelled { return nil }
+                    let built = FileTreeBuilder.toTree(filtered)
+                    if Task.isCancelled { return nil }
+                    let flattened = FileTreeBuilder.flatten(built, openDirs: snapshotOpenDirs, expandAll: expand)
+                    return (built, flattened)
+                }
+                let result = await withTaskCancellationHandler {
+                    await worker.value
+                } onCancel: {
+                    worker.cancel()
+                }
+                guard let result, !Task.isCancelled, rebuildGeneration == generation else { return }
+                tree = result.0
+                if openDirs == snapshotOpenDirs && expandAll == expand {
+                    rows = result.1
+                } else {
+                    refreshRows()
+                }
+                rebuildTask = nil
+            }
+            return
+        }
+        // 搜索对齐 web：substring 过滤 → 建树 → 全展开（不用 rankMentions——打分排序会打乱树序）
         let filtered = q.isEmpty
-            ? paths
-            : paths.filter { !$0.hasSuffix("/") && $0.range(of: q, options: .caseInsensitive) != nil }
+            ? currentPaths
+            : currentPaths.filter { !$0.hasSuffix("/") && $0.range(of: q, options: .caseInsensitive) != nil }
         tree = FileTreeBuilder.toTree(filtered)
         refreshRows()
     }
@@ -224,36 +334,61 @@ struct FileTreeView: View {
     private func refreshRows() {
         rows = FileTreeBuilder.flatten(tree, openDirs: openDirs, expandAll: expandAll)
     }
+}
 
-    // MARK: 行
+/// 文件树单行 Equatable 隔离：选中切换或展开单个目录时，其余可见行零重绘。
+private struct FileTreeRowView: View, Equatable {
+    let scopeId: String
+    let name: String
+    let path: String
+    let isDir: Bool
+    let depth: Int
+    let isOpen: Bool
+    let isSelected: Bool
+    let showFullPath: Bool
+    let isLoading: Bool
+    let isDirTruncated: Bool
+    let dynamicTypeSize: DynamicTypeSize
+    let reduceMotion: Bool
+    /// 供 Equatable 感知主题色盘与明暗外观切换，确保 JieboColor 及时重绘。
+    let palette: JieboPalette
+    let appearance: JieboAppearance
+    let onTap: () -> Void
+    let onPick: () -> Void
+    let onCopyPath: () -> Void
+    let onQuickLook: () -> Void
 
-    @ViewBuilder
-    private func rowView(_ row: FileTreeBuilder.Row) -> some View {
-        let node = row.node
-        let isOpen = node.isDir && (expandAll || (openDirs[node.path] ?? false))
-        let isLoading = node.isDir && isOpen && loadingDirs.contains(node.path) && (node.children?.isEmpty ?? true)
-        let isDirTruncated = node.isDir && isOpen && truncatedDirs.contains(node.path)
-        Button {
-            if node.isDir {
-                let willOpen = !isOpen
-                if willOpen { onExpandDir?(node.path) }
-                openDirs[node.path] = willOpen
-            } else {
-                onOpen(node.path)
-            }
-        } label: {
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.scopeId == rhs.scopeId
+            && lhs.name == rhs.name
+            && lhs.path == rhs.path
+            && lhs.isDir == rhs.isDir
+            && lhs.depth == rhs.depth
+            && lhs.isOpen == rhs.isOpen
+            && lhs.isSelected == rhs.isSelected
+            && lhs.showFullPath == rhs.showFullPath
+            && lhs.isLoading == rhs.isLoading
+            && lhs.isDirTruncated == rhs.isDirTruncated
+            && lhs.dynamicTypeSize == rhs.dynamicTypeSize
+            && lhs.reduceMotion == rhs.reduceMotion
+            && lhs.palette == rhs.palette
+            && lhs.appearance == rhs.appearance
+    }
+
+    var body: some View {
+        Button(action: onTap) {
             HStack(alignment: .center, spacing: 8) {
-                Image(systemName: fileGlyph(node.path, isDir: node.isDir, open: isOpen))
-                    .font(JieboFont.text(.subheadline, weight: node.isDir ? .medium : .regular))
-                    .foregroundStyle(node.isDir ? JieboColor.brass : JieboColor.ink2)
+                Image(systemName: fileGlyph(path, isDir: isDir, open: isOpen))
+                    .font(JieboFont.text(.subheadline, weight: isDir ? .medium : .regular))
+                    .foregroundStyle(isDir ? JieboColor.brass : JieboColor.ink2)
                     .frame(width: 22)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(node.name)
-                        .font(JieboFont.text(.subheadline, weight: node.isDir ? .medium : .regular))
-                        .foregroundStyle(node.isDir ? JieboColor.ink : JieboColor.ink2)
+                    Text(name)
+                        .font(JieboFont.text(.subheadline, weight: isDir ? .medium : .regular))
+                        .foregroundStyle(isDir ? JieboColor.ink : JieboColor.ink2)
                         .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
-                    if !debouncedFilter.isEmpty, node.path != node.name {
-                        Text(node.path)
+                    if showFullPath {
+                        Text(path)
                             .font(JieboFont.monoText(.caption2))
                             .foregroundStyle(JieboColor.dim)
                             .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
@@ -261,7 +396,7 @@ struct FileTreeView: View {
                     }
                 }
                 Spacer(minLength: 0)
-                if node.isDir {
+                if isDir {
                     Image(systemName: "chevron.right")
                         .font(JieboFont.text(.caption2, weight: .semibold))
                         .foregroundStyle(JieboColor.dim)
@@ -269,16 +404,16 @@ struct FileTreeView: View {
                         .animation(JieboMotion.snappy(reduceMotion), value: isOpen)
                 }
             }
-            .padding(.leading, 10 + CGFloat(row.depth) * (dynamicTypeSize.isAccessibilitySize ? 10 : 16))
+            .padding(.leading, 10 + CGFloat(depth) * (dynamicTypeSize.isAccessibilitySize ? 10 : 16))
             .padding(.trailing, 10)
             .padding(.vertical, 6)
             .frame(minHeight: 44)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(selectedPath == node.path ? JieboColor.userBubble : Color.clear)
+                    .fill(isSelected ? JieboColor.userBubble : Color.clear)
             )
             .overlay(alignment: .leading) {
-                if selectedPath == node.path {
+                if isSelected {
                     Capsule()
                         .fill(JieboColor.pine)
                         .frame(width: 3, height: 18)
@@ -286,47 +421,39 @@ struct FileTreeView: View {
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
-            .animation(JieboMotion.fade(reduceMotion), value: selectedPath == node.path)
+            .animation(JieboMotion.fade(reduceMotion), value: isSelected)
             .contentShape(Rectangle())
             .hoverEffect(.highlight)
         }
         .buttonStyle(.plain)
-        .draggableMention(node.isDir ? nil : node.path)
+        .draggableMention(isDir ? nil : path)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(node.isDir ? "文件夹 \(node.name)" : "文件 \(node.name)")
-        .accessibilityValue(accessibilityValue(for: node, isOpen: isOpen))
-        .accessibilityHint(node.isDir ? "轻点展开或收起" : "轻点预览")
-        .accessibilityAddTraits(selectedPath == node.path ? [.isButton, .isSelected] : .isButton)
+        .accessibilityLabel(isDir ? "文件夹 \(name)" : "文件 \(name)")
+        .accessibilityValue(isDir ? (isOpen ? "已展开" : "已收起") : "")
+        .accessibilityHint(isDir ? "轻点展开或收起" : "轻点预览")
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .contextMenu {
-            if node.isDir {
-                Button { onCopyPath(node.path) } label: { Label("复制路径", systemImage: "doc.on.doc") }
+            if isDir {
+                Button(action: onCopyPath) { Label("复制路径", systemImage: "doc.on.doc") }
             } else {
-                Button { onPick(node.path) } label: { Label("引用到草稿", systemImage: "at") }
-                Button { onCopyPath(node.path) } label: { Label("复制路径", systemImage: "doc.on.doc") }
-                Button { onQuickLook(node.path) } label: { Label("用系统打开", systemImage: "arrow.up.forward.app") }
+                Button(action: onPick) { Label("引用到草稿", systemImage: "at") }
+                Button(action: onCopyPath) { Label("复制路径", systemImage: "doc.on.doc") }
+                Button(action: onQuickLook) { Label("用系统打开", systemImage: "arrow.up.forward.app") }
             }
         }
         if isLoading {
             Text("正在加载…")
                 .font(JieboFont.text(.caption))
                 .foregroundStyle(JieboColor.dim)
-                .padding(.leading, 14 + CGFloat(row.depth + 1) * (dynamicTypeSize.isAccessibilitySize ? 10 : 16))
+                .padding(.leading, 14 + CGFloat(depth + 1) * (dynamicTypeSize.isAccessibilitySize ? 10 : 16))
                 .padding(.vertical, 6)
         }
         if isDirTruncated {
             Text("此目录文件较多，仅显示前 1000 项，请用搜索缩小范围。")
                 .font(JieboFont.text(.caption))
                 .foregroundStyle(JieboColor.dim)
-                .padding(.leading, 14 + CGFloat(row.depth + 1) * (dynamicTypeSize.isAccessibilitySize ? 10 : 16))
+                .padding(.leading, 14 + CGFloat(depth + 1) * (dynamicTypeSize.isAccessibilitySize ? 10 : 16))
                 .padding(.vertical, 6)
         }
-    }
-
-    private func accessibilityValue(for node: FileNode, isOpen: Bool) -> String {
-        var values: [String] = []
-        if node.isDir {
-            values.append(isOpen ? "已展开" : "已收起")
-        }
-        return values.joined(separator: "，")
     }
 }

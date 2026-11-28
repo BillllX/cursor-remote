@@ -308,6 +308,7 @@ struct FileBrowserCover: View {
             Divider().overlay(JieboColor.line)
 
             FileTreeView(
+                scopeId: workbenchChatId,
                 paths: store.mergedFileTreePaths(for: workbenchChatId),
                 truncated: store.treeTruncated,
                 filter: filter,

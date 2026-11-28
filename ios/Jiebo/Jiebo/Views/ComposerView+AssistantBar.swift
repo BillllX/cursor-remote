@@ -6,24 +6,8 @@ extension ComposerView {
     /// iPhone 助理：单行胶囊 — ＋（含 ⋯ 项）、输入、话筒/发送
     var assistantCapsuleRow: some View {
         HStack(alignment: .bottom, spacing: 6) {
-            if isAssistantSession, PersonalRecording.shared.folder != nil {
-                Button { personalRecordingOpen = true } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: PersonalRecording.shared.recording ? "record.circle.fill" : "pause.circle.fill")
-                            .font(.system(size: 13, weight: .semibold))
-                        Text(RecordingFormatting.formatSeconds(PersonalRecording.shared.elapsedSeconds))
-                            .font(JieboFont.mono(11))
-                            .monospacedDigit()
-                    }
-                    .foregroundStyle(PersonalRecording.shared.recording ? JieboColor.danger : JieboColor.warnFg)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .background(PersonalRecording.shared.recording ? JieboColor.dangerBg : JieboColor.warnBg, in: Capsule())
-                    .frame(minHeight: 44)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(PressScaleButtonStyle())
-                .accessibilityLabel(PersonalRecording.shared.recording ? "正在录音，点击查看控制面板" : "录音已暂停，点击查看控制面板")
+            if isAssistantSession {
+                ComposerRecordingChip { personalRecordingOpen = true }
             }
             assistantAttachMenu
             entryField(
@@ -187,6 +171,34 @@ extension ComposerView {
         .buttonStyle(PressScaleButtonStyle())
         .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
         .accessibilityLabel(recording ? "结束录音" : "语音输入")
+    }
+}
+
+/// 将长录音胶囊隔离开 ComposerView.body：避免录音期间每秒递增的 elapsedSeconds 触发整条输入栏与 UITextView 全量重绘。
+private struct ComposerRecordingChip: View {
+    let onOpen: () -> Void
+
+    var body: some View {
+        let recorder = PersonalRecording.shared
+        if recorder.folder != nil {
+            Button(action: onOpen) {
+                HStack(spacing: 4) {
+                    Image(systemName: recorder.recording ? "record.circle.fill" : "pause.circle.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(RecordingFormatting.formatSeconds(recorder.elapsedSeconds))
+                        .font(JieboFont.mono(11))
+                        .monospacedDigit()
+                }
+                .foregroundStyle(recorder.recording ? JieboColor.danger : JieboColor.warnFg)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(recorder.recording ? JieboColor.dangerBg : JieboColor.warnBg, in: Capsule())
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScaleButtonStyle())
+            .accessibilityLabel(recorder.recording ? "正在录音，点击查看控制面板" : "录音已暂停，点击查看控制面板")
+        }
     }
 }
 

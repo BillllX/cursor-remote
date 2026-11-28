@@ -67,7 +67,11 @@ struct AssistantReceipt: Identifiable, Hashable {
 
         // 同一轮优先使用持久回执。旧版本的通知用结束时间关联，且不猜测产物。
         let delegations = state.delegations.compactMap { row -> AssistantReceipt? in
-            guard ["done", "failed", "cancelled"].contains(row.status), let ended = row.endedAt else { return nil }
+            switch row.status {
+            case "done", "failed", "cancelled": break
+            default: return nil
+            }
+            guard let ended = row.endedAt else { return nil }
             let attempt = row.attempt ?? 1
             let notice = inboxByDelegationId[row.id]?.first {
                 $0.delegationReceipt?.attempt == attempt ||
@@ -82,7 +86,11 @@ struct AssistantReceipt: Identifiable, Hashable {
                                     deliveredFile: file, sourceChatId: row.childChatId, cancelled: row.status == "cancelled")
         }
         let inbox = state.inbox.compactMap { item -> AssistantReceipt? in
-            guard ["run", "reminder", "brief", "delegation"].contains(item.kind), !item.resolved, item.snoozedUntil == nil else { return nil }
+            switch item.kind {
+            case "run", "reminder", "brief", "delegation": break
+            default: return nil
+            }
+            guard !item.resolved, item.snoozedUntil == nil else { return nil }
             if recentOnly && (item.read || !recent(item.createdAt)) { return nil }
             let artifact = artifactByInboxId[item.id]
             let delivery = item.delegationReceipt

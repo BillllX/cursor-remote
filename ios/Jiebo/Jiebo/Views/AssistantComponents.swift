@@ -259,7 +259,11 @@ enum TodoDue {
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
-    private static let isoEncodeFormatter = ISO8601DateFormatter()
+    private static let isoEncodeFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = .autoupdatingCurrent
+        return formatter
+    }()
     private static var zhFormatters: [String: DateFormatter] = [:]
 
     static func parse(_ due: String?) -> Parsed? {
@@ -270,7 +274,6 @@ enum TodoDue {
             if let date = isoFormatter.date(from: due) { return Parsed(date: date, timed: true) }
             return isoFractionalFormatter.date(from: due).map { Parsed(date: $0, timed: true) }
         }
-        dayFormatter.timeZone = .current
         return dayFormatter.date(from: String(due.prefix(10))).map { Parsed(date: $0, timed: false) }
     }
 
@@ -278,7 +281,7 @@ enum TodoDue {
     static func label(_ due: String?) -> String? {
         guard let due = due?.nilIfEmpty else { return nil }
         guard let parsed = parse(due) else { return due }
-        let calendar = Calendar.current
+        let calendar = Calendar.autoupdatingCurrent
         let day = calendar.startOfDay(for: parsed.date)
         let today = calendar.startOfDay(for: Date())
         let offset = calendar.dateComponents([.day], from: today, to: day).day ?? 0
@@ -305,18 +308,19 @@ enum TodoDue {
         } else {
             let created = DateFormatter()
             created.locale = Locale(identifier: "zh_CN")
+            created.timeZone = .autoupdatingCurrent
             created.dateFormat = pattern
             zhFormatters[pattern] = created
             formatter = created
         }
-        formatter.timeZone = .current
         return formatter.string(from: date)
     }
 
     static func overdue(_ due: String?) -> Bool {
         guard let parsed = parse(due) else { return false }
         if parsed.timed { return parsed.date < Date() }
-        return Calendar.current.startOfDay(for: parsed.date) < Calendar.current.startOfDay(for: Date())
+        let calendar = Calendar.autoupdatingCurrent
+        return calendar.startOfDay(for: parsed.date) < calendar.startOfDay(for: Date())
     }
 
     /// 网关要求带时间的必须带时区，按本机时区写
@@ -324,10 +328,8 @@ enum TodoDue {
         formatterLock.lock()
         defer { formatterLock.unlock() }
         guard timed else {
-            dayFormatter.timeZone = .current
             return dayFormatter.string(from: date)
         }
-        isoEncodeFormatter.timeZone = .current
         return isoEncodeFormatter.string(from: date)
     }
 
@@ -335,7 +337,7 @@ enum TodoDue {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.timeZone = .current
+        formatter.timeZone = .autoupdatingCurrent
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter
     }()
@@ -735,16 +737,11 @@ struct ApprovalCard: View {
         }
     }
 
-    /// 「N 分钟后失效」，每分钟刷新一次（TimelineView，不自己开 Timer）
+    /// 「N 分钟后失效」，复用全局共享 MinuteClock（后台自动停转、多审批卡共享单一定时器且不重绘整张 ApprovalCard）。
     @ViewBuilder
     private var expiryLine: some View {
         if approval.expiresAt > 0 {
-            let expiresAt = approval.expiresAt
-            TimelineView(.periodic(from: .now, by: 60)) { context in
-                Text(Self.expiryText(expiresAt: expiresAt, now: context.date))
-                    .font(JieboFont.text(.caption2))
-                    .foregroundStyle(JieboColor.dim)
-            }
+            ApprovalExpiryLabel(expiresAt: approval.expiresAt)
         }
     }
 
@@ -756,6 +753,30 @@ struct ApprovalCard: View {
         if minutes >= 48 * 60 { return "\(minutes / (24 * 60)) 天后失效" }
         if minutes >= 120 { return "\(minutes / 60) 小时后失效" }
         return "\(minutes) 分钟后失效"
+    }
+
+    /// 独立订阅 MinuteClock，只刷新单行过期倒计时文案，避免每分钟重建整张 ApprovalCard；
+    /// 在屏期间始终保持引用计数，兼容系统时间回拨，离屏或后台时由 MinuteClock 自动停转。
+    private struct ApprovalExpiryLabel: View {
+        let expiresAt: Double
+        @State private var retained = false
+
+        var body: some View {
+            let _ = MinuteClock.shared.tick
+            Text(ApprovalCard.expiryText(expiresAt: expiresAt, now: Date()))
+                .font(JieboFont.text(.caption2))
+                .foregroundStyle(JieboColor.dim)
+                .onAppear {
+                    guard !retained else { return }
+                    retained = true
+                    MinuteClock.shared.retain()
+                }
+                .onDisappear {
+                    guard retained else { return }
+                    retained = false
+                    MinuteClock.shared.release()
+                }
+        }
     }
 
     /// 一行放不下（大字号、窄屏）就竖排，主操作在最上面

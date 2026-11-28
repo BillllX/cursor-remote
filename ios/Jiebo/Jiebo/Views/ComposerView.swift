@@ -69,7 +69,8 @@ struct ComposerView: View {
     var chatModel: String { chrome.model.isEmpty ? store.model : chrome.model }
     var chatImages: [PendingImage] { store.pendingImages(for: chatId) }
     var chatUploads: [UploadItem] {
-        store.uploads.filter { $0.chatId == chatId }
+        guard !store.uploads.isEmpty else { return [] }
+        return store.uploads.filter { $0.chatId == chatId }
     }
 
     var body: some View {
@@ -341,7 +342,7 @@ struct ComposerView: View {
     }
 
     var canSendNow: Bool {
-        chatUploads.isEmpty
+        !store.uploads.contains(where: { $0.chatId == chatId })
             && (hasText || !chatImages.isEmpty)
     }
 

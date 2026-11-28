@@ -74,21 +74,16 @@ extension ComposerView {
     var mentionStrip: some View {
         let suggestions = store.mentionSuggestions(for: chatId)
         if !suggestions.isEmpty {
-            // 同名文件消歧：basename 有重复时显示父目录
-            let names = suggestions.map { ($0 as NSString).lastPathComponent }
-            let duplicated = Set(Dictionary(grouping: names, by: { $0 }).filter { $0.value.count > 1 }.keys)
+            // 同名文件消歧：纯 Substring 单遍统计 basename 次数，零 NSString 桥接与数组分配。
+            let items = Self.mentionDisplayItems(suggestions)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(suggestions, id: \.self) { path in
-                        let name = (path as NSString).lastPathComponent
-                        let label = duplicated.contains(name) && path.contains("/")
-                            ? (path as NSString).deletingLastPathComponent.components(separatedBy: "/").last.map { "\($0)/\(name)" } ?? name
-                            : name
+                    ForEach(items, id: \.path) { item in
                         Button {
                             syncBufferToStore()
-                            store.insertMention(path, chatId: chatId)
+                            store.insertMention(item.path, chatId: chatId)
                         } label: {
-                            Text("@\(label)")
+                            Text("@\(item.label)")
                                 .font(JieboFont.monoText(.caption))
                                 .foregroundStyle(JieboColor.ink)
                                 .lineLimit(1)
@@ -99,13 +94,46 @@ extension ComposerView {
                                 .hitTarget()
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("引用 \(path)")
+                        .accessibilityLabel("引用 \(item.path)")
                     }
                 }
                 .padding(.horizontal, 2)
             }
             .transition(.jieboPanel(from: .top, reduceMotion: reduceMotion).combined(with: .opacity))
         }
+    }
+
+    private static func mentionDisplayItems(_ suggestions: [String]) -> [(path: String, label: String)] {
+        var nameCounts: [Substring: Int] = [:]
+        nameCounts.reserveCapacity(suggestions.count)
+        for path in suggestions {
+            let name = Self.lastPathSegment(path)
+            nameCounts[name, default: 0] += 1
+        }
+        var result: [(path: String, label: String)] = []
+        result.reserveCapacity(suggestions.count)
+        for path in suggestions {
+            let name = Self.lastPathSegment(path)
+            if (nameCounts[name] ?? 0) > 1, let slash = path.lastIndex(of: "/") {
+                let dir = path[..<slash]
+                let parent = dir.lastIndex(of: "/").map { dir[dir.index(after: $0)...] } ?? dir
+                let label = parent.isEmpty ? String(name) : "\(parent)/\(name)"
+                result.append((path, label))
+            } else {
+                result.append((path, String(name)))
+            }
+        }
+        return result
+    }
+
+    private static func lastPathSegment(_ path: String) -> Substring {
+        var trimmed = path[...]
+        while trimmed.count > 1, trimmed.last == "/" {
+            trimmed = trimmed.dropLast()
+        }
+        if trimmed == "/" { return trimmed }
+        guard let slash = trimmed.lastIndex(of: "/") else { return trimmed }
+        return trimmed[trimmed.index(after: slash)...]
     }
 
     @ViewBuilder
