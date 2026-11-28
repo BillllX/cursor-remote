@@ -30,18 +30,29 @@ struct WorkspacePickerSheet: View {
             $0.name.range(of: needle, options: .caseInsensitive) != nil
                 || $0.path.range(of: needle, options: .caseInsensitive) != nil
         }
-        let sections: (recent: [WorkspaceItem], remaining: [WorkspaceItem], duplicates: Set<String>) = {
+        let sections: (recent: [(item: WorkspaceItem, key: String)], remaining: [(item: WorkspaceItem, key: String)], duplicates: Set<String>) = {
             guard needle.isEmpty else { return ([], [], []) }
-            let recentList = Array(all.filter {
-                let key = normPath($0.path)
-                return (stats[key]?.touched ?? 0) > 0 || key == currentNormPath
-            }.prefix(5))
-            let recentPaths = Set(recentList.map { normPath($0.path) })
-            let remainingList = all.filter { !recentPaths.contains(normPath($0.path)) }
+            var recentList: [(item: WorkspaceItem, key: String)] = []
+            recentList.reserveCapacity(5)
+            var recentKeys: Set<String> = []
+            var remainingList: [(item: WorkspaceItem, key: String)] = []
+            remainingList.reserveCapacity(all.count)
             var nameCounts: [String: Int] = [:]
             nameCounts.reserveCapacity(all.count)
-            for item in all { nameCounts[item.name, default: 0] += 1 }
-            let duplicateNames = Set(nameCounts.compactMap { $0.value > 1 ? $0.key : nil })
+            for item in all {
+                let key = normPath(item.path)
+                nameCounts[item.name, default: 0] += 1
+                if recentList.count < 5, (stats[key]?.touched ?? 0) > 0 || key == currentNormPath {
+                    recentList.append((item, key))
+                    recentKeys.insert(key)
+                } else if !recentKeys.contains(key) {
+                    remainingList.append((item, key))
+                }
+            }
+            var duplicateNames: Set<String> = []
+            for (name, count) in nameCounts where count > 1 {
+                duplicateNames.insert(name)
+            }
             return (recentList, remainingList, duplicateNames)
         }()
         let recent = sections.recent
@@ -95,14 +106,13 @@ struct WorkspacePickerSheet: View {
                 } else {
                     if !recent.isEmpty {
                         Section {
-                            ForEach(recent) { item in
-                                let key = normPath(item.path)
+                            ForEach(recent, id: \.item.id) { entry in
                                 row(
-                                    item,
-                                    showPath: duplicates.contains(item.name),
-                                    stat: stats[key],
-                                    current: key == currentNormPath,
-                                    chatCount: countsUnder[key] ?? 0
+                                    entry.item,
+                                    showPath: duplicates.contains(entry.item.name),
+                                    stat: stats[entry.key],
+                                    current: entry.key == currentNormPath,
+                                    chatCount: countsUnder[entry.key] ?? 0
                                 )
                             }
                         } header: {
@@ -112,14 +122,13 @@ struct WorkspacePickerSheet: View {
                     }
                     if !remaining.isEmpty {
                         Section {
-                            ForEach(remaining) { item in
-                                let key = normPath(item.path)
+                            ForEach(remaining, id: \.item.id) { entry in
                                 row(
-                                    item,
-                                    showPath: duplicates.contains(item.name),
-                                    stat: stats[key],
-                                    current: key == currentNormPath,
-                                    chatCount: countsUnder[key] ?? 0
+                                    entry.item,
+                                    showPath: duplicates.contains(entry.item.name),
+                                    stat: stats[entry.key],
+                                    current: entry.key == currentNormPath,
+                                    chatCount: countsUnder[entry.key] ?? 0
                                 )
                             }
                         } header: {
@@ -288,12 +297,7 @@ struct WorkspacePickerSheet: View {
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(2)
                     if let stat, stat.chats > 0 {
-                        TimelineView(.everyMinute) { _ in
-                            Text(detailLine(stat) ?? "")
-                                .font(JieboFont.text(.caption))
-                                .foregroundStyle(JieboColor.dim)
-                                .lineLimit(2)
-                        }
+                        WorkspaceDetailTickLabel(chats: stat.chats, touched: stat.touched)
                     }
                     if showPath {
                         Text(item.path)
@@ -388,5 +392,83 @@ struct WorkspacePickerSheet: View {
                 }
             }
         }
+    }
+}
+
+/// 文件夹副标题时间文本：复用全局共享 MinuteClock 替代每行独立 TimelineView(.everyMinute)，超过 7 天零订阅。
+private struct WorkspaceDetailTickLabel: View {
+    let chats: Int
+    let touched: Double?
+
+    var body: some View {
+        if let touched, AgoLabel.isLiveWindow(touched) {
+            LiveWorkspaceDetailLabel(chats: chats, touched: touched)
+        } else {
+            Text(Self.format(chats: chats, touched: touched))
+                .font(JieboFont.text(.caption))
+                .foregroundStyle(JieboColor.dim)
+                .lineLimit(2)
+        }
+    }
+
+    static func format(chats: Int, touched: Double?) -> String {
+        let when = agoText(touched, long: true)
+        return when.isEmpty ? "\(chats) 个对话" : "\(chats) 个对话 · \(when)"
+    }
+}
+
+private struct LiveWorkspaceDetailLabel: View {
+    let chats: Int
+    let touched: Double
+    @State private var expired = false
+
+    var body: some View {
+        Group {
+            if expired {
+                Text(WorkspaceDetailTickLabel.format(chats: chats, touched: touched))
+                    .font(JieboFont.text(.caption))
+                    .foregroundStyle(JieboColor.dim)
+                    .lineLimit(2)
+            } else {
+                LiveWorkspaceDetailTickText(chats: chats, touched: touched) {
+                    expired = true
+                }
+            }
+        }
+        .onChange(of: touched) { _, next in
+            if expired && AgoLabel.isLiveWindow(next) {
+                expired = false
+            }
+        }
+    }
+}
+
+private struct LiveWorkspaceDetailTickText: View {
+    let chats: Int
+    let touched: Double
+    let onExpire: () -> Void
+    @State private var retained = false
+
+    var body: some View {
+        let tick = MinuteClock.shared.tick
+        Text(WorkspaceDetailTickLabel.format(chats: chats, touched: touched))
+            .font(JieboFont.text(.caption))
+            .foregroundStyle(JieboColor.dim)
+            .lineLimit(2)
+            .onAppear {
+                guard !retained else { return }
+                retained = true
+                MinuteClock.shared.retain()
+            }
+            .onChange(of: tick) { _, _ in
+                if !AgoLabel.isLiveWindow(touched) {
+                    onExpire()
+                }
+            }
+            .onDisappear {
+                guard retained else { return }
+                retained = false
+                MinuteClock.shared.release()
+            }
     }
 }

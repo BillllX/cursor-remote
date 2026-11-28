@@ -428,7 +428,7 @@ private struct DiffLines: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(lines.prefix(200).enumerated()), id: \.offset) { _, line in
                     Text(line.text.isEmpty ? " " : line.text)
                         .font(JieboFont.monoText(.caption))

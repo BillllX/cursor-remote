@@ -9,7 +9,6 @@ struct DelegationDetailSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var stopConfirm = false
     @State private var stopping = false
-    @State private var clockTick = Date()
 
     /// 过程区最多显示的步骤数
     private static let processLimit = 30
@@ -105,19 +104,13 @@ struct DelegationDetailSheet: View {
                 .font(JieboFont.text(.title3, weight: .semibold))
                 .foregroundStyle(JieboColor.ink)
                 .fixedSize(horizontal: false, vertical: true)
-            // 仅进行中的委派每 30 秒刷新已用时；已结束委派不再持有定时器
-            Text(metaLine(row, now: clockTick))
-                .font(JieboFont.text(.caption))
-                .foregroundStyle(JieboColor.dim)
-                .task(id: row.endedAt == nil) {
-                    guard row.endedAt == nil else { return }
-                    clockTick = Date()
-                    while !Task.isCancelled {
-                        try? await Task.sleep(for: .seconds(30))
-                        guard !Task.isCancelled else { return }
-                        clockTick = Date()
-                    }
-                }
+            // 独立子视图订阅共享 MinuteClock，仅刷新单行用时文案，避免每分钟重绘整张详情页。
+            DelegationMetaLabel(
+                workspace: row.workspace,
+                mode: row.mode,
+                createdAt: row.createdAt,
+                endedAt: row.endedAt
+            )
             HStack(spacing: 5) {
                 Circle()
                     .fill(colors.fg)
@@ -131,26 +124,6 @@ struct DelegationDetailSheet: View {
             .background(colors.bg)
             .clipShape(Capsule())
         }
-    }
-
-    /// 「notes · 后台 · 已用时 3 分钟」
-    private func metaLine(_ row: AssistantDelegation, now: Date) -> String {
-        var parts: [String] = []
-        let workspace = workspaceName(row.workspace)
-        if !workspace.isEmpty { parts.append(workspace) }
-        parts.append(row.mode == "foreground" ? "前台" : "后台")
-        let endSeconds: Double = row.endedAt.map { $0 / 1000 } ?? now.timeIntervalSince1970
-        let minutes = max(0, Int((endSeconds - row.createdAt / 1000) / 60))
-        let spent: String
-        if minutes < 1 {
-            spent = "不到 1 分钟"
-        } else if minutes < 60 {
-            spent = "\(minutes) 分钟"
-        } else {
-            spent = "\(minutes / 60) 小时 \(minutes % 60) 分钟"
-        }
-        parts.append((row.endedAt == nil ? "已用时 " : "用时 ") + spent)
-        return parts.joined(separator: " · ")
     }
 
     // MARK: 过程（只读）
@@ -253,5 +226,66 @@ private struct DelegationProcessRow: View, Equatable {
             Spacer(minLength: 0)
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// 委派元信息单行：仅进行中（endedAt == nil）时订阅全局共享 MinuteClock，已结束零订阅且绝不触发整张详情页重绘。
+private struct DelegationMetaLabel: View {
+    let workspace: String
+    let mode: String
+    let createdAt: Double
+    let endedAt: Double?
+
+    var body: some View {
+        if let endedAt {
+            Text(Self.format(workspace: workspace, mode: mode, createdAt: createdAt, endedAt: endedAt, now: Date()))
+                .font(JieboFont.text(.caption))
+                .foregroundStyle(JieboColor.dim)
+        } else {
+            LiveDelegationMetaText(workspace: workspace, mode: mode, createdAt: createdAt)
+        }
+    }
+
+    static func format(workspace: String, mode: String, createdAt: Double, endedAt: Double?, now: Date) -> String {
+        var parts: [String] = []
+        let name = workspaceName(workspace)
+        if !name.isEmpty { parts.append(name) }
+        parts.append(mode == "foreground" ? "前台" : "后台")
+        let endSeconds: Double = endedAt.map { $0 / 1000 } ?? now.timeIntervalSince1970
+        let minutes = max(0, Int((endSeconds - createdAt / 1000) / 60))
+        let spent: String
+        if minutes < 1 {
+            spent = "不到 1 分钟"
+        } else if minutes < 60 {
+            spent = "\(minutes) 分钟"
+        } else {
+            spent = "\(minutes / 60) 小时 \(minutes % 60) 分钟"
+        }
+        parts.append((endedAt == nil ? "已用时 " : "用时 ") + spent)
+        return parts.joined(separator: " · ")
+    }
+}
+
+private struct LiveDelegationMetaText: View {
+    let workspace: String
+    let mode: String
+    let createdAt: Double
+    @State private var retained = false
+
+    var body: some View {
+        let _ = MinuteClock.shared.tick
+        Text(DelegationMetaLabel.format(workspace: workspace, mode: mode, createdAt: createdAt, endedAt: nil, now: Date()))
+            .font(JieboFont.text(.caption))
+            .foregroundStyle(JieboColor.dim)
+            .onAppear {
+                guard !retained else { return }
+                retained = true
+                MinuteClock.shared.retain()
+            }
+            .onDisappear {
+                guard retained else { return }
+                retained = false
+                MinuteClock.shared.release()
+            }
     }
 }

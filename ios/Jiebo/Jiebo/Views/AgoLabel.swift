@@ -108,7 +108,7 @@ struct AgoLabel: View {
     var font: Font
     var long = false
 
-    fileprivate static func isLiveWindow(_ epochMs: Double) -> Bool {
+    static func isLiveWindow(_ epochMs: Double) -> Bool {
         epochMs > 0 && (Date().timeIntervalSince1970 - epochMs / 1000) < 86_400 * 7
     }
 

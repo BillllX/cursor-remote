@@ -645,13 +645,21 @@ struct SearchToolView: View {
                     Spacer()
                 }
             } else {
+                let palette = JieboTheme.shared.palette
+                let appearance = JieboTheme.shared.appearance
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(nameHits, id: \.self) { path in
                             Button {
                                 openHit(path)
                             } label: {
-                                hitLabel(title: path, detail: "文件名")
+                                SearchHitRowView(
+                                    title: path,
+                                    detail: "文件名",
+                                    palette: palette,
+                                    appearance: appearance
+                                )
+                                .equatable()
                             }
                             .buttonStyle(.plain)
                         }
@@ -659,10 +667,13 @@ struct SearchToolView: View {
                             Button {
                                 openHit(hit.path)
                             } label: {
-                                hitLabel(
+                                SearchHitRowView(
                                     title: hit.line > 0 ? "\(hit.path):\(hit.line)" : hit.path,
-                                    detail: hit.text
+                                    detail: hit.text,
+                                    palette: palette,
+                                    appearance: appearance
                                 )
+                                .equatable()
                             }
                             .buttonStyle(.plain)
                         }
@@ -694,8 +705,17 @@ struct SearchToolView: View {
             store.loadPreview(path, diff: false)
         }
     }
+}
 
-    private func hitLabel(title: String, detail: String) -> some View {
+/// 搜索命中单行 Equatable 隔离：加载态翻转或追加结果时，已渲染的未变命中行零重绘。
+private struct SearchHitRowView: View, Equatable {
+    let title: String
+    let detail: String
+    /// 供 Equatable 感知主题色盘与明暗外观切换，确保 JieboColor 及时重绘。
+    let palette: JieboPalette
+    let appearance: JieboAppearance
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(JieboFont.text(.footnote, weight: .medium))

@@ -12,12 +12,14 @@ struct TodayStrip: View {
 
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
+        formatter.timeZone = .autoupdatingCurrent
         formatter.dateFormat = "HH:mm"
         return formatter
     }()
 
     private static let dayFormatter: DateFormatter = {
         let formatter = DateFormatter()
+        formatter.timeZone = .autoupdatingCurrent
         formatter.dateFormat = "M月d日"
         return formatter
     }()
@@ -207,7 +209,7 @@ struct TodayStrip: View {
     }
 
     private var greeting: String {
-        switch Calendar.current.component(.hour, from: Date()) {
+        switch Calendar.autoupdatingCurrent.component(.hour, from: Date()) {
         case 0 ..< 6: return "夜深了"
         case 6 ..< 12: return "早上好"
         case 12 ..< 18: return "下午好"
@@ -215,15 +217,26 @@ struct TodayStrip: View {
         }
     }
 
-    /// 固定价值顺序，组内按新到旧；不会因低价值新消息挤掉待确认草稿。
+    /// 固定价值顺序，组内按新到旧；单遍选出 Top-3，避免对全量事件排序拷贝。
     private func selectedEvents(_ events: [DayThreadEvent]) -> [DayThreadEvent] {
-        events.sorted {
-            let left = eventRank($0)
-            let right = eventRank($1)
-            return left == right ? $0.at > $1.at : left < right
+        var top: [(event: DayThreadEvent, rank: Int)] = []
+        top.reserveCapacity(4)
+        for event in events {
+            let rank = eventRank(event)
+            var insertAt = top.count
+            for i in 0 ..< top.count {
+                let existing = top[i]
+                if rank < existing.rank || (rank == existing.rank && event.at > existing.event.at) {
+                    insertAt = i
+                    break
+                }
+            }
+            if insertAt < 3 {
+                top.insert((event, rank), at: insertAt)
+                if top.count > 3 { top.removeLast() }
+            }
         }
-        .prefix(3)
-        .map { $0 }
+        return top.map(\.event)
     }
 
     private func eventRank(_ event: DayThreadEvent) -> Int {
@@ -242,8 +255,9 @@ struct TodayStrip: View {
             return ("sun.max", event.title, JieboColor.pine, "展开今日简报")
         }
         if event.kind == "receipt" {
-            let failed = ["failed", "interrupted"].contains(event.receipt?.status ?? "")
-            let done = event.receipt?.status == "done"
+            let status = event.receipt?.status ?? ""
+            let failed = status == "failed" || status == "interrupted"
+            let done = status == "done"
             let state = failed ? "失败" : (done ? "已完成" : "已记录")
             let cleanTitle = event.title
                 .replacingOccurrences(of: "已完成：", with: "")
@@ -277,7 +291,9 @@ struct TodayStrip: View {
             router.delegationDetail = DelegationRef(id: delegationId)
         } else if event.kind == "brief" {
             withAnimation(JieboMotion.snappy(reduceMotion)) { expanded = true }
-        } else if event.sources.contains(where: { ["todo", "schedule", "calendar_event"].contains($0.kind) }) {
+        } else if event.sources.contains(where: {
+            $0.kind == "todo" || $0.kind == "schedule" || $0.kind == "calendar_event"
+        }) {
             router.go(.automation)
         } else if let source = event.sources.first(where: { $0.kind == "run" }) {
             router.openWorkTask(event.taskId ?? "run:\(source.id)", column: .delegation)
@@ -291,14 +307,18 @@ struct TodayStrip: View {
     /// 启用的日程里 nextAt 最近的一条；今天「HH:mm 标题」，明天「明天 HH:mm 标题」，更远「M月d日 标题」
     private func nextScheduleLabel(_ state: AssistantState?) -> String? {
         guard let state else { return nil }
-        let upcoming = state.schedules.filter { $0.enabled && ($0.nextAt ?? 0) > 0 }
-        guard let next = upcoming.min(by: { ($0.nextAt ?? 0) < ($1.nextAt ?? 0) }),
-              let millis = next.nextAt
-        else { return nil }
+        var next: AssistantSchedule?
+        for item in state.schedules where item.enabled {
+            guard let ts = item.nextAt, ts > 0 else { continue }
+            if next == nil || ts < (next?.nextAt ?? .greatestFiniteMagnitude) {
+                next = item
+            }
+        }
+        guard let next, let millis = next.nextAt else { return nil }
         let date = Date(timeIntervalSince1970: millis / 1000)
         let rawTitle = next.title.nilIfEmpty ?? "计划"
         let title = rawTitle.count > 18 ? String(rawTitle.prefix(18)) + "…" : rawTitle
-        let calendar = Calendar.current
+        let calendar = Calendar.autoupdatingCurrent
         if calendar.isDateInToday(date) {
             return "\(Self.timeFormatter.string(from: date)) \(title)"
         }
