@@ -5,12 +5,13 @@ struct ImViewerTarget: Identifiable, Hashable {
     var id: String
 }
 
-/// 非 @Observable 滚动采样盒：记录首条消息 ID 与视口内偏移，避免高频写 @State 触发表格重排。
+/// 非 @Observable 滚动采样盒：记录首条消息 ID、视口偏移与底部标志，避免滚动期高频写 @State 触发整页重排。
 @MainActor
 private final class ImScrollMetrics {
     var firstMessageId: String?
     var firstMessageMinY: CGFloat = 0
     var viewportHeight: CGFloat = 0
+    var atBottom = true
 }
 
 /// 和一个人的聊天页：标题是对方昵称，「…」看对方资料。
@@ -19,7 +20,6 @@ struct ChatThreadView: View {
     @Environment(ImStore.self) private var im
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let peer: String
-    @State private var atBottom = true
     @State private var profileOpen = false
     @State private var viewer: ImViewerTarget?
     @State private var scrollMetrics = ImScrollMetrics()
@@ -41,7 +41,7 @@ struct ChatThreadView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    olderHeader(hasMessages: !messages.isEmpty)
+                    ImOlderHeader(convId: convId, hasMessages: !messages.isEmpty)
                     ForEach(Self.rows(messages)) { row in
                         rowView(
                             row,
@@ -54,8 +54,8 @@ struct ChatThreadView: View {
                     Color.clear
                         .frame(height: 1)
                         .id(Self.bottomId)
-                        .onAppear { atBottom = true }
-                        .onDisappear { atBottom = false }
+                        .onAppear { scrollMetrics.atBottom = true }
+                        .onDisappear { scrollMetrics.atBottom = false }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -73,14 +73,14 @@ struct ChatThreadView: View {
             }
             .onChange(of: messages.last?.id) { _, _ in
                 let mineJustSent = messages.last.map { $0.from == im.meId && $0.seq == nil } ?? false
-                guard atBottom || mineJustSent else { return }
+                guard scrollMetrics.atBottom || mineJustSent else { return }
                 withAnimation(JieboMotion.standard(reduceMotion)) {
                     proxy.scrollTo(Self.bottomId, anchor: .bottom)
                 }
             }
             .onChange(of: messages.first?.id) { old, _ in
                 // 往前翻了一页：先对齐 LazyVStack 直接子项确保该行物化，再按扣除底栏后的视口高度原位复锚。
-                guard let old, !atBottom else { return }
+                guard let old, !scrollMetrics.atBottom else { return }
                 let matchedMinY = scrollMetrics.firstMessageId == old ? scrollMetrics.firstMessageMinY : nil
                 let vh = scrollMetrics.viewportHeight
                 Task { @MainActor in
@@ -99,14 +99,7 @@ struct ChatThreadView: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
-                    if im.blocked.contains(peer) {
-                        Text("你已拉黑对方，对方发来的消息不会送到你这里")
-                            .font(JieboFont.text(.caption))
-                            .foregroundStyle(JieboColor.dim)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
-                            .background(JieboColor.sidebar)
-                    }
+                    ImBlockedBanner(peer: peer)
                     ChatComposer(peer: peer, convId: convId, focused: $composerFocused) {
                         withAnimation(JieboMotion.standard(reduceMotion)) {
                             proxy.scrollTo(Self.bottomId, anchor: .bottom)
@@ -161,6 +154,7 @@ struct ChatThreadView: View {
 
     private static func rows(_ messages: [ImLocalMessage]) -> [Row] {
         var out: [Row] = []
+        out.reserveCapacity(messages.count + min(messages.count, 32))
         var previous: Double?
         for item in messages {
             if previous.map({ item.at - $0 > dividerGap }) ?? true {
@@ -246,8 +240,15 @@ struct ChatThreadView: View {
         }
     }
 
-    @ViewBuilder
-    private func olderHeader(hasMessages: Bool) -> some View {
+}
+
+/// 独立订阅翻页加载态，避免其他会话翻页或 olderMore 变动导致整个消息列表重算。
+private struct ImOlderHeader: View {
+    @Environment(ImStore.self) private var im
+    let convId: String
+    let hasMessages: Bool
+
+    var body: some View {
         if im.loadingOlder.contains(convId) || (im.loadingLatest.contains(convId) && !hasMessages) {
             ProgressView()
                 .frame(maxWidth: .infinity)
@@ -271,6 +272,23 @@ struct ChatThreadView: View {
             Color.clear
                 .frame(height: 24)
                 .onAppear { im.loadOlder(convId) }
+        }
+    }
+}
+
+/// 独立订阅拉黑集合，避免无关联系人拉黑变动触发当前会话全量重绘。
+private struct ImBlockedBanner: View {
+    @Environment(ImStore.self) private var im
+    let peer: String
+
+    var body: some View {
+        if im.blocked.contains(peer) {
+            Text("你已拉黑对方，对方发来的消息不会送到你这里")
+                .font(JieboFont.text(.caption))
+                .foregroundStyle(JieboColor.dim)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background(JieboColor.sidebar)
         }
     }
 }
@@ -584,13 +602,19 @@ struct ImMessageImage: View {
     }
 
     private var loadKey: String {
-        "\(message.id)|\(thumbBlob ?? "")|\(im.tickets[message.convId]?.sig ?? "")"
+        // 尚无远端缩略图 blob 时不订阅会话票据，且已展示远端图时免受票据续期反复重跑
+        guard let blob = thumbBlob, !blob.isEmpty else { return "\(message.id)|local" }
+        return "\(message.id)|\(blob)|\(im.tickets[message.convId]?.sig ?? "")"
     }
 
     @MainActor
     private func load(userInitiated: Bool = false) async {
         delayed = false
         let pixel = Int(Self.maxEdge * displayScale)
+        if let thumb = thumbBlob, let hit = ImImageCache.shared.cached(thumb, maxPixel: pixel) {
+            if image !== hit { image = hit }
+            return
+        }
         if let outgoing = message.outgoing, let dir = ImCache.outboxDir(tenant: im.tenant) {
             let file = dir.appendingPathComponent(outgoing.thumbFile)
             if let local = await ImImageCache.shared.localIfExists(file: file, maxPixel: pixel) {
@@ -599,10 +623,6 @@ struct ImMessageImage: View {
             }
         }
         guard let thumb = thumbBlob else { return }
-        if let hit = ImImageCache.shared.cached(thumb, maxPixel: pixel) {
-            image = hit
-            return
-        }
         image = await ImImageCache.shared.image(
             blob: thumb,
             tenant: im.tenant,

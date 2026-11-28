@@ -115,10 +115,12 @@ struct ImVoiceBubble: View {
 
     var body: some View {
         let detail = details
+        let isPlaying = player.playingId == message.id
         VStack(alignment: mine ? .trailing : .leading, spacing: 5) {
             HStack(spacing: 8) {
-                Image(systemName: player.playingId == message.id ? "stop.fill" : "speaker.wave.2.fill")
-                ImWaveform(values: detail.waveform, active: player.playingId == message.id)
+                Image(systemName: isPlaying ? "stop.fill" : "speaker.wave.2.fill")
+                ImWaveform(values: detail.waveform, active: isPlaying)
+                    .equatable()
                 Text("\(max(1, Int(ceil(Double(detail.duration) / 1000))))″")
                     .font(JieboFont.text(.caption, weight: .medium))
                 if !mine, !im.isVoiceHeard(message) {
@@ -153,7 +155,7 @@ struct ImVoiceBubble: View {
     }
 }
 
-private struct ImWaveform: View {
+private struct ImWaveform: View, Equatable {
     let values: [Double]
     let active: Bool
     var body: some View {
@@ -201,6 +203,7 @@ struct ImFileBubble: View {
             }
         }
         .buttonStyle(.plain)
+        .disabled(loading)
         .sheet(item: $preview, onDismiss: {
             if let preview { cleanupPreview(preview.url) }
             preview = nil
@@ -221,34 +224,48 @@ struct ImFileBubble: View {
     }
 
     private func open(_ details: (blob: String?, name: String, size: Double)) {
+        guard !loading else { return }
         loading = true
+        let tenant = im.tenant
+        let convId = message.convId
+        let uploadFile = message.upload?.file
         Task {
             var file: URL?
             if let blob = details.blob {
                 file = await ImAttachmentCache.file(
                     blob: blob,
-                    tenant: im.tenant,
-                    remote: im.mediaURL(convId: message.convId, blob: blob),
+                    tenant: tenant,
+                    remote: im.mediaURL(convId: convId, blob: blob),
                     userInitiated: true
                 )
-            } else if let upload = message.upload, let dir = ImCache.outboxDir(tenant: im.tenant) {
-                let local = dir.appendingPathComponent(upload.file)
-                if FileManager.default.fileExists(atPath: local.path) { file = local }
+            } else if let uploadFile, let dir = ImCache.outboxDir(tenant: tenant) {
+                let local = dir.appendingPathComponent(uploadFile)
+                file = await Task.detached(priority: .userInitiated) {
+                    FileManager.default.fileExists(atPath: local.path) ? local : nil
+                }.value
             }
-            loading = false
             guard let file else {
+                loading = false
                 im.showToast("文件下载失败")
                 return
             }
-            let named = FileManager.default.temporaryDirectory.appendingPathComponent("im-preview-\(UUID().uuidString)-\(details.name)")
-            try? FileManager.default.copyItem(at: file, to: named)
-            preview = PreviewFile(url: FileManager.default.fileExists(atPath: named.path) ? named : file, name: details.name)
+            // 将大文件临时拷贝移出主线程，避免点击预览大附件时界面冻结
+            let fileName = details.name
+            let targetURL = await Task.detached(priority: .userInitiated) { () -> URL in
+                let named = FileManager.default.temporaryDirectory.appendingPathComponent("im-preview-\(UUID().uuidString)-\(fileName)")
+                try? FileManager.default.copyItem(at: file, to: named)
+                return FileManager.default.fileExists(atPath: named.path) ? named : file
+            }.value
+            loading = false
+            preview = PreviewFile(url: targetURL, name: fileName)
         }
     }
 
     private func cleanupPreview(_ file: URL) {
         guard file.lastPathComponent.hasPrefix("im-preview-") else { return }
-        try? FileManager.default.removeItem(at: file)
+        Task.detached(priority: .utility) {
+            try? FileManager.default.removeItem(at: file)
+        }
     }
 }
 
@@ -288,6 +305,10 @@ struct ImLinkBubble: View {
                 .buttonStyle(.plain)
                 .task(id: icon) {
                     guard let icon else { return }
+                    if let hit = ImImageCache.shared.cached(icon, maxPixel: 128) {
+                        iconImage = hit
+                        return
+                    }
                     iconImage = await ImImageCache.shared.image(
                         blob: icon, tenant: im.tenant, remote: im.mediaURL(convId: convId, blob: icon), maxPixel: 128
                     )
@@ -297,15 +318,40 @@ struct ImLinkBubble: View {
     }
 }
 
+/// 位置气泡地图快照内存缓存，避免消息流滚动复用时重复发起 MKMapSnapshotter 瓦片渲染。
+private final class ImMapSnapshotCache: @unchecked Sendable {
+    static let shared = ImMapSnapshotCache()
+    private let cache: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 48
+        return c
+    }()
+
+    func image(for key: String) -> UIImage? {
+        cache.object(forKey: key as NSString)
+    }
+
+    func store(_ image: UIImage, for key: String) {
+        cache.setObject(image, forKey: key as NSString)
+    }
+}
+
 struct ImLocationBubble: View {
     @Environment(\.openURL) private var openURL
+    @Environment(\.displayScale) private var displayScale
+    @Environment(\.colorScheme) private var colorScheme
     let payload: ImBody
     var mine: Bool = false
-    @State private var snapshot: UIImage?
+    @State private var snapshot: (key: String, image: UIImage)?
 
     var body: some View {
         Group {
             if case .location(let lat, let lng, let name, let address) = payload {
+                let scale = min(max(displayScale, 1), 2)
+                let styleTag = colorScheme == .dark ? "d" : "l"
+                let cacheKey = String(format: "%.5f,%.5f@%.0f|%@", lat, lng, scale, styleTag)
+                let cached = ImMapSnapshotCache.shared.image(for: cacheKey)
+                    ?? (snapshot?.key == cacheKey ? snapshot?.image : nil)
                 Menu {
                     if let apple = ImMapOpen.apple(lat: lat, lng: lng, name: name) {
                         Button("Apple 地图") { openURL(apple) }
@@ -316,7 +362,7 @@ struct ImLocationBubble: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 0) {
                         Group {
-                            if let snapshot { Image(uiImage: snapshot).resizable().scaledToFill() }
+                            if let cached { Image(uiImage: cached).resizable().scaledToFill() }
                             else { JieboColor.well.overlay { ProgressView() } }
                         }
                         .frame(width: 260, height: 130).clipped()
@@ -338,31 +384,46 @@ struct ImLocationBubble: View {
                         }
                     }
                 }
-                .task(id: "\(lat),\(lng)") { snapshot = await mapSnapshot(lat: lat, lng: lng) }
+                .task(id: cacheKey) {
+                    if let hit = ImMapSnapshotCache.shared.image(for: cacheKey) {
+                        if snapshot?.key != cacheKey { snapshot = (cacheKey, hit) }
+                        return
+                    }
+                    if let rendered = await mapSnapshot(lat: lat, lng: lng, scale: scale, dark: colorScheme == .dark) {
+                        guard !Task.isCancelled else { return }
+                        ImMapSnapshotCache.shared.store(rendered, for: cacheKey)
+                        snapshot = (cacheKey, rendered)
+                    }
+                }
             }
         }
     }
 
-    private func mapSnapshot(lat: Double, lng: Double) async -> UIImage? {
+    private func mapSnapshot(lat: Double, lng: Double, scale: CGFloat, dark: Bool) async -> UIImage? {
         let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lng)
         let options = MKMapSnapshotter.Options()
         options.region = MKCoordinateRegion(
             center: coordinate,
             latitudinalMeters: 1800, longitudinalMeters: 1800
         )
-        options.size = CGSize(width: 520, height: 260)
-        options.scale = 2
-        guard let snapshot = try? await MKMapSnapshotter(options: options).start() else { return nil }
-        let point = snapshot.point(for: coordinate)
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = snapshot.image.scale
-        return UIGraphicsImageRenderer(size: snapshot.image.size, format: format).image { _ in
-            snapshot.image.draw(at: .zero)
-            let side: CGFloat = 38
-            let rect = CGRect(x: point.x - side / 2, y: point.y - side, width: side, height: side)
-            UIImage(systemName: "mappin.circle.fill")?
-                .withTintColor(.systemRed, renderingMode: .alwaysOriginal)
-                .draw(in: rect)
-        }
+        // 按实际展示尺寸（260×130）与当前深浅色渲染，避免原 520×260@2x 产生 4 倍多余像素与显存开销
+        options.size = CGSize(width: 260, height: 130)
+        options.scale = scale
+        options.traitCollection = UITraitCollection(userInterfaceStyle: dark ? .dark : .light)
+        guard let mapShot = try? await MKMapSnapshotter(options: options).start() else { return nil }
+        let point = mapShot.point(for: coordinate)
+        let baseImage = mapShot.image
+        return await Task.detached(priority: .userInitiated) {
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = baseImage.scale
+            return UIGraphicsImageRenderer(size: baseImage.size, format: format).image { _ in
+                baseImage.draw(at: .zero)
+                let side: CGFloat = 24
+                let rect = CGRect(x: point.x - side / 2, y: point.y - side, width: side, height: side)
+                UIImage(systemName: "mappin.circle.fill")?
+                    .withTintColor(.systemRed, renderingMode: .alwaysOriginal)
+                    .draw(in: rect)
+            }
+        }.value
     }
 }

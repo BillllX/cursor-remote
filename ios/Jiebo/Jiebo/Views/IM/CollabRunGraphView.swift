@@ -21,33 +21,8 @@ struct CollabRunGraphView: View {
                     List(runs) { run in
                         Section {
                             ForEach(run.tasks) { task in
-                                VStack(alignment: .leading, spacing: 7) {
-                                    HStack {
-                                        Text(task.title)
-                                            .font(JieboFont.text(.body, weight: .semibold))
-                                        Spacer()
-                                        Text(statusText(task.status))
-                                            .font(JieboFont.text(.caption, weight: .semibold))
-                                            .foregroundStyle(statusColor(task.status))
-                                    }
-                                    Text(task.workspaceId)
-                                        .font(JieboFont.text(.caption))
-                                        .foregroundStyle(JieboColor.dim)
-                                    if let summary = task.summary?.nilIfEmpty {
-                                        ProseLines(text: ReplyText.repair(summary))
-                                    }
-                                    HStack(spacing: 12) {
-                                        if task.attempt > 0 { Label("第 \(task.attempt) 次", systemImage: "arrow.clockwise") }
-                                        if task.fileCount > 0 { Label("\(task.fileCount) 个文件", systemImage: "doc") }
-                                        if task.needsApproval {
-                                            Label("等待审批", systemImage: "checkmark.shield")
-                                                .foregroundStyle(JieboColor.brass)
-                                        }
-                                    }
-                                    .font(JieboFont.text(.caption))
-                                    .foregroundStyle(JieboColor.dim)
-                                }
-                                .padding(.vertical, 4)
+                                CollabTaskRow(task: task)
+                                    .equatable()
                             }
                         } header: {
                             VStack(alignment: .leading, spacing: 4) {
@@ -94,26 +69,66 @@ struct CollabRunGraphView: View {
     }
 
     private func statusText(_ status: String) -> String {
-        switch status {
-        case "planning": return "规划中"
-        case "pending", "queued": return "等待中"
-        case "running": return "运行中"
-        case "awaiting", "needs_user": return "等待用户"
-        case "blocked": return "已阻塞"
-        case "aggregating", "publishing": return "汇总中"
-        case "completed", "succeeded": return "已完成"
-        case "failed": return "失败"
-        case "cancelled": return "已取消"
-        default: return "未知状态"
-        }
+        collabStatusText(status)
     }
+}
 
-    private func statusColor(_ status: String) -> Color {
-        switch status {
-        case "completed", "succeeded": return JieboColor.pine
-        case "failed": return JieboColor.danger
-        case "awaiting", "needs_user", "blocked": return JieboColor.brass
-        default: return JieboColor.dim
+private struct CollabTaskRow: View, Equatable {
+    let task: CollabRunSnapshot.Task
+    var palette: JieboPalette = JieboTheme.shared.palette
+    var appearance: JieboAppearance = JieboTheme.shared.appearance
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text(task.title)
+                    .font(JieboFont.text(.body, weight: .semibold))
+                Spacer()
+                Text(collabStatusText(task.status))
+                    .font(JieboFont.text(.caption, weight: .semibold))
+                    .foregroundStyle(collabStatusColor(task.status))
+            }
+            Text(task.workspaceId)
+                .font(JieboFont.text(.caption))
+                .foregroundStyle(JieboColor.dim)
+            if let summary = task.summary?.nilIfEmpty {
+                ProseLines(text: ReplyText.repair(summary))
+            }
+            HStack(spacing: 12) {
+                if task.attempt > 0 { Label("第 \(task.attempt) 次", systemImage: "arrow.clockwise") }
+                if task.fileCount > 0 { Label("\(task.fileCount) 个文件", systemImage: "doc") }
+                if task.needsApproval {
+                    Label("等待审批", systemImage: "checkmark.shield")
+                        .foregroundStyle(JieboColor.brass)
+                }
+            }
+            .font(JieboFont.text(.caption))
+            .foregroundStyle(JieboColor.dim)
         }
+        .padding(.vertical, 4)
+    }
+}
+
+private func collabStatusText(_ status: String) -> String {
+    switch status {
+    case "planning": return "规划中"
+    case "pending", "queued": return "等待中"
+    case "running": return "运行中"
+    case "awaiting", "needs_user": return "等待用户"
+    case "blocked": return "已阻塞"
+    case "aggregating", "publishing": return "汇总中"
+    case "completed", "succeeded": return "已完成"
+    case "failed": return "失败"
+    case "cancelled": return "已取消"
+    default: return "未知状态"
+    }
+}
+
+private func collabStatusColor(_ status: String) -> Color {
+    switch status {
+    case "completed", "succeeded": return JieboColor.pine
+    case "failed": return JieboColor.danger
+    case "awaiting", "needs_user", "blocked": return JieboColor.brass
+    default: return JieboColor.dim
     }
 }
