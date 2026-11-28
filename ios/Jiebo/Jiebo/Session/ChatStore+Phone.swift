@@ -19,11 +19,15 @@ extension ChatStore {
         ])
         guard result.ok else { flash(result.error ?? "归档失败，请重试"); return false }
         let archived = Set(eligible.map(\.id))
-        if let state = assistantState {
+        if var state = assistantState {
+            var changed = false
             for index in state.inbox.indices where archived.contains(state.inbox[index].id) {
-                assistantState?.inbox[index].read = true
-                assistantState?.inbox[index].resolved = true
+                state.inbox[index].read = true
+                state.inbox[index].resolved = true
+                changed = true
             }
+            // 批量归档合并为单次写回，避免 N 条通知触发 2N 次 assistantState 拷贝与重绘
+            if changed { assistantState = state }
         }
         syncLocalAssistantMutation()
         requestAssistant(force: true)
@@ -42,9 +46,12 @@ extension ChatStore {
 
     /// 全部标为已读（不带 ids = 全部）。还没登录不改。没连上时先在这台设备标，并说明连上后才告诉服务器。
     func markAllInboxRead() {
-        guard let state = assistantState, state.unreadInbox > 0 else { return }
+        guard var state = assistantState, state.unreadInbox > 0 else { return }
         guard queueInboxRead(id: nil) else { return }
-        for index in assistantState!.inbox.indices { assistantState!.inbox[index].read = true }
+        for index in state.inbox.indices where !state.inbox[index].read {
+            state.inbox[index].read = true
+        }
+        assistantState = state
         syncLocalAssistantMutation()
     }
 

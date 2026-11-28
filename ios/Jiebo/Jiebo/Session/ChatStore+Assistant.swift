@@ -61,7 +61,7 @@ extension ChatStore {
     }
 
     func assistantApprovals(forParent parentId: String) -> [AssistantApproval] {
-        guard let state = assistantState, !parentId.isEmpty else { return [] }
+        guard let state = assistantState, !parentId.isEmpty, !state.approvals.isEmpty else { return [] }
         let delegationIds = Set(state.delegations.filter { $0.parentChatId == parentId }.map(\.id))
         return state.approvals.filter { approval in
             if let delegationId = approval.delegationId, delegationIds.contains(delegationId) { return true }
@@ -231,26 +231,37 @@ extension ChatStore {
             return false
         }
         assistantOp(op, args: args)
-        if let id = args["id"]?.string?.nilIfEmpty {
+        if let id = args["id"]?.string?.nilIfEmpty, var state = assistantState {
+            var mutated = false
             if op == "todo_remove" {
-                assistantState?.todos.removeAll { $0.id == id }
-                assistantState?.personalTasks?.removeAll {
+                let oldTodos = state.todos.count
+                let oldTasks = state.personalTasks?.count ?? 0
+                state.todos.removeAll { $0.id == id }
+                state.personalTasks?.removeAll {
                     $0.id == "todo:\(id)" || $0.sources.contains(where: { $0.kind == "todo" && $0.id == id })
                 }
-                syncLocalAssistantMutation()
+                mutated = state.todos.count != oldTodos || (state.personalTasks?.count ?? 0) != oldTasks
             } else if op == "todo_update" {
                 let updatedText = args["text"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                 let updatedDue = args["due"]?.string
-                if let index = assistantState?.todos.firstIndex(where: { $0.id == id }) {
-                    if let updatedText { assistantState?.todos[index].text = updatedText }
-                    if let updatedDue { assistantState?.todos[index].due = updatedDue.nilIfEmpty }
+                if updatedText != nil || updatedDue != nil {
+                    if let index = state.todos.firstIndex(where: { $0.id == id }) {
+                        if let updatedText { state.todos[index].text = updatedText }
+                        if let updatedDue { state.todos[index].due = updatedDue.nilIfEmpty }
+                        mutated = true
+                    }
+                    if let taskIndex = state.personalTasks?.firstIndex(where: {
+                        $0.id == "todo:\(id)" || $0.sources.contains(where: { $0.kind == "todo" && $0.id == id })
+                    }) {
+                        if let updatedText { state.personalTasks?[taskIndex].title = updatedText }
+                        if let updatedDue { state.personalTasks?[taskIndex].due = updatedDue.nilIfEmpty }
+                        mutated = true
+                    }
                 }
-                if let taskIndex = assistantState?.personalTasks?.firstIndex(where: {
-                    $0.id == "todo:\(id)" || $0.sources.contains(where: { $0.kind == "todo" && $0.id == id })
-                }) {
-                    if let updatedText { assistantState?.personalTasks?[taskIndex].title = updatedText }
-                    if let updatedDue { assistantState?.personalTasks?[taskIndex].due = updatedDue.nilIfEmpty }
-                }
+            }
+            if mutated {
+                // 单次原子写回，避免连续多次修改触发多轮 @Observable 广播与视图重绘
+                assistantState = state
                 syncLocalAssistantMutation()
             }
         }
@@ -268,27 +279,35 @@ extension ChatStore {
             return
         }
         assistantOp(done ? "todo_done" : "todo_undo", args: ["id": .string(id)])
-        if let index = assistantState?.todos.firstIndex(where: { $0.id == id }) {
-            assistantState?.todos[index].done = done
-            assistantState?.todos[index].doneAt = done ? Date().timeIntervalSince1970 * 1000 : nil
-        }
-        if let taskIndex = assistantState?.personalTasks?.firstIndex(where: {
-            $0.id == "todo:\(id)" || $0.sources.contains(where: { $0.kind == "todo" && $0.id == id })
-        }) {
-            assistantState?.personalTasks?[taskIndex].phase = done ? "completed" : "planned"
-            assistantState?.personalTasks?[taskIndex].status = done ? "已完成" : "待办"
-            assistantState?.personalTasks?[taskIndex].actions = [
-                PersonalTaskAction(
-                    label: done ? "标为未完成" : "完成",
-                    op: done ? "todo_undo" : "todo_done",
-                    id: id,
-                    delegationId: nil,
-                    chatId: nil,
-                    callId: nil,
-                    allow: nil,
-                    enabled: nil
-                )
-            ]
+        if var state = assistantState {
+            var changed = false
+            if let index = state.todos.firstIndex(where: { $0.id == id }) {
+                state.todos[index].done = done
+                state.todos[index].doneAt = done ? Date().timeIntervalSince1970 * 1000 : nil
+                changed = true
+            }
+            if let taskIndex = state.personalTasks?.firstIndex(where: {
+                $0.id == "todo:\(id)" || $0.sources.contains(where: { $0.kind == "todo" && $0.id == id })
+            }) {
+                state.personalTasks?[taskIndex].phase = done ? "completed" : "planned"
+                state.personalTasks?[taskIndex].status = done ? "已完成" : "待办"
+                state.personalTasks?[taskIndex].actions = [
+                    PersonalTaskAction(
+                        label: done ? "标为未完成" : "完成",
+                        op: done ? "todo_undo" : "todo_done",
+                        id: id,
+                        delegationId: nil,
+                        chatId: nil,
+                        callId: nil,
+                        allow: nil,
+                        enabled: nil
+                    )
+                ]
+                changed = true
+            }
+            if changed {
+                assistantState = state
+            }
         }
         syncLocalAssistantMutation()
         guard !client.isOpen else { return }
@@ -353,13 +372,17 @@ extension ChatStore {
         guard connected, unlocked else { return false }
         let reqId = UUID().uuidString
         return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            assistantReplyWaiters[reqId] = { ok in continuation.resume(returning: ok) }
-            send(.assistantOp(op: op, args: args, reqId: reqId))
-            // 强引用：store 活到超时，保证 continuation 一定被 resume
-            Task { @MainActor in
+            // 收到回包或断线立即取消超时任务，避免强持有与空等计时器堆积
+            let timeoutTask = Task { @MainActor in
                 try? await Task.sleep(for: timeout)
+                guard !Task.isCancelled else { return }
                 self.assistantReplyWaiters.removeValue(forKey: reqId)?(false)
             }
+            assistantReplyWaiters[reqId] = { ok in
+                timeoutTask.cancel()
+                continuation.resume(returning: ok)
+            }
+            send(.assistantOp(op: op, args: args, reqId: reqId))
         }
     }
 
@@ -372,15 +395,17 @@ extension ChatStore {
         guard connected, unlocked else { return (false, "还没连上", nil) }
         let reqId = UUID().uuidString
         return await withCheckedContinuation { continuation in
-            assistantDataWaiters[reqId] = { ok, error, data in
-                continuation.resume(returning: (ok, error, data))
-            }
-            send(.assistantOp(op: op, args: args, reqId: reqId))
-            Task { @MainActor in
+            let timeoutTask = Task { @MainActor in
                 try? await Task.sleep(for: timeout)
+                guard !Task.isCancelled else { return }
                 guard let waiter = self.assistantDataWaiters.removeValue(forKey: reqId) else { return }
                 waiter(false, "没有等到服务器回应", nil)
             }
+            assistantDataWaiters[reqId] = { ok, error, data in
+                timeoutTask.cancel()
+                continuation.resume(returning: (ok, error, data))
+            }
+            send(.assistantOp(op: op, args: args, reqId: reqId))
         }
     }
 
@@ -628,12 +653,33 @@ extension ChatStore {
 
     var assistantChatActive: Bool { isAssistantChat(activeId) }
 
-    /// 置顶入口的一行摘要：最后一条消息；正文没加载时用网关下发的摘要
+    /// 置顶入口的一行摘要（最多 200 字符）：最后一条消息；正文没加载时用网关下发的摘要
     var assistantPreview: String {
         guard let chat = assistantChat else { return "" }
         let turn = chat.turns.last
         let last: String = turn?.assistant.nilIfEmpty ?? turn?.user.nilIfEmpty ?? chat.serverPreview?.nilIfEmpty ?? ""
-        return last.split(whereSeparator: \.isNewline).joined(separator: " ")
+        guard !last.isEmpty else { return "" }
+        // 一行摘要只需截断前 200 个字符并折叠换行，避免对数万字回复全量 split + joined
+        var out = String()
+        out.reserveCapacity(min(last.utf8.count, 200))
+        var count = 0
+        var pendingSpace = false
+        for ch in last {
+            if ch.isNewline {
+                if count > 0 { pendingSpace = true }
+                continue
+            }
+            if pendingSpace {
+                out.append(" ")
+                count += 1
+                pendingSpace = false
+                if count >= 200 { break }
+            }
+            out.append(ch)
+            count += 1
+            if count >= 200 { break }
+        }
+        return out
     }
 
     /// 切到助理会话。旧网关没有助理会话时只提示，不再打开工作台里的助理层。

@@ -116,8 +116,10 @@ extension ChatStore {
             send(.workspaceAgentViewing(chatId: reportChatId))
             if item.unread > 0 || item.readSeq < item.finishedSeq {
                 if let idx = workspaceAgents.firstIndex(where: { $0.path == item.path }) {
-                    workspaceAgents[idx].unread = 0
-                    workspaceAgents[idx].readSeq = max(workspaceAgents[idx].readSeq, item.finishedSeq)
+                    var updated = workspaceAgents[idx]
+                    updated.unread = 0
+                    updated.readSeq = max(updated.readSeq, item.finishedSeq)
+                    workspaceAgents[idx] = updated
                 }
                 send(.workspaceAgentRead(chatId: reportChatId, seq: item.finishedSeq))
             }

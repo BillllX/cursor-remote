@@ -12,9 +12,13 @@ extension ChatStore {
     }
 
     func canUndo(_ chatId: String) -> Bool {
-        guard !isBusy(chatId), let chat = chatSession(chatId) else { return false }
-        guard chat.turnsComplete, !chat.turns.contains(where: \.deferred) else { return false }
-        return chat.turns.contains { !$0.running && !$0.queued }
+        guard let chat = chatSession(chatId), !chatShowsRunning(chat), chat.turnsComplete else { return false }
+        var hasSettled = false
+        for turn in chat.turns {
+            if turn.deferred { return false }
+            if !turn.running && !turn.queued { hasSettled = true }
+        }
+        return hasSettled
     }
 
     func undoLast(chatId: String? = nil) {
@@ -164,26 +168,27 @@ extension ChatStore {
         finish(next.hit ? nil : "没有可还原的改动")
     }
 
+    /// 按唯一 turnId 原地写入文件审阅结果；目标不存在或无任何状态变更时跳过无意义重绘与落盘。
     func markTurnReview(_ turnId: String, review: String, onlyEmpty: Bool, chatId: String? = nil) {
         guard let index = chats.firstIndex(where: { $0.id == (chatId ?? activeId) }) else { return }
+        guard let turnIndex = chats[index].turns.firstIndex(where: { $0.id == turnId }) else { return }
         var chat = chats[index]
         var reviews: [[String: JSONValue]] = []
         var untaggable = false
-        chat.turns = chat.turns.map { turn in
-            guard turn.id == turnId else { return turn }
-            let ids = turn.reviewCallIds
-            if ids.isEmpty, !turn.files.isEmpty { untaggable = true }
-            var next = turn
-            next.tools = turn.tools.map { tool in
-                var copy = tool
-                guard ids.contains(copy.callId) else { return copy }
-                if onlyEmpty, !(copy.review ?? "").isEmpty { return copy }
-                copy.review = review
-                reviews.append(["callId": .string(copy.callId), "review": .string(review)])
-                return copy
+        var turn = chat.turns[turnIndex]
+        let ids = turn.reviewCallIds
+        if ids.isEmpty, !turn.files.isEmpty { untaggable = true }
+        if !ids.isEmpty {
+            for toolIndex in turn.tools.indices {
+                let callId = turn.tools[toolIndex].callId
+                guard ids.contains(callId) else { continue }
+                if onlyEmpty, !(turn.tools[toolIndex].review ?? "").isEmpty { continue }
+                turn.tools[toolIndex].review = review
+                reviews.append(["callId": .string(callId), "review": .string(review)])
             }
-            return next
         }
+        guard !reviews.isEmpty || untaggable else { return }
+        chat.turns[turnIndex] = turn
         chats[index] = chat
         bodySegs[chat.id] = nil // 本地写了保留/还原标记，正文与段哈希不再对应
         turnRenderRevisions[chat.id, default: 0] &+= 1
