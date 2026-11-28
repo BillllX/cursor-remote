@@ -103,6 +103,7 @@ struct TodayStrip: View {
 
     private func eventRow(_ event: DayThreadEvent) -> some View {
         let display = eventDisplay(event)
+        let timeText = Self.timeFormatter.string(from: Date(timeIntervalSince1970: event.at / 1000))
         return Button {
             open(event)
         } label: {
@@ -126,7 +127,7 @@ struct TodayStrip: View {
                             .multilineTextAlignment(.leading)
                             .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 2)
                     }
-                    Text(Self.timeFormatter.string(from: Date(timeIntervalSince1970: event.at / 1000)))
+                    Text(timeText)
                         .font(JieboFont.text(.caption2))
                         .foregroundStyle(JieboColor.dim)
                 }
@@ -143,7 +144,7 @@ struct TodayStrip: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressScaleButtonStyle())
-        .accessibilityLabel([display.title, event.body, Self.timeFormatter.string(from: Date(timeIntervalSince1970: event.at / 1000))]
+        .accessibilityLabel([display.title, event.body, timeText]
             .compactMap { $0?.nilIfEmpty }
             .joined(separator: "，"))
         .accessibilityHint(display.hint)

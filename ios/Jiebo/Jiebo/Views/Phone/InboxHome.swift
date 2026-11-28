@@ -16,35 +16,60 @@ struct InboxHome: View {
 
     private var state: AssistantState? { store.assistantState }
 
-    private var approvals: [AssistantApproval] {
-        (state?.approvals ?? []).sorted { $0.createdAt > $1.createdAt }
+    private struct InboxSnapshot {
+        let approvals: [AssistantApproval]
+        let drafts: [DraftCard]
+        let usesDrafts: Bool
+        let pendingCount: Int
+        let items: [AssistantInboxItem]
+        let groupedItems: [String: [AssistantInboxItem]]
     }
 
-    private var drafts: [DraftCard] {
-        var seen = Set<String>()
-        return (state?.draftCards ?? [])
+    private func buildSnapshot() -> InboxSnapshot {
+        let sortedApprovals = (state?.approvals ?? []).sorted { $0.createdAt > $1.createdAt }
+        var seenDraftKeys = Set<String>()
+        let sortedDrafts = (state?.draftCards ?? [])
             .sorted { $0.createdAt > $1.createdAt }
             .filter { row in
                 let key = row.sources.first(where: { $0.kind == "approval" }).map { "approval:\($0.id)" } ?? "draft:\(row.id)"
-                return seen.insert(key).inserted
+                return seenDraftKeys.insert(key).inserted
             }
-    }
-
-    private var usesDrafts: Bool { state?.draftCards != nil }
-    private var pendingCount: Int { usesDrafts ? drafts.count : approvals.count }
-
-    private var items: [AssistantInboxItem] {
-        (state?.inbox ?? [])
+        let usesDrafts = state?.draftCards != nil
+        let pendingCount = usesDrafts ? sortedDrafts.count : sortedApprovals.count
+        var approvalDelegationIds = Set<String>()
+        var approvalChatIds = Set<String>()
+        if !showHistory {
+            for approval in sortedApprovals {
+                if let delegationId = approval.delegationId { approvalDelegationIds.insert(delegationId) }
+                if let chatId = approval.chatId { approvalChatIds.insert(chatId) }
+            }
+        }
+        let sortedItems = (state?.inbox ?? [])
             .filter { item in
+                guard showHistory || item.needsAttention else { return false }
                 guard !showHistory, item.kind == "approval", item.decisionKind == nil else { return true }
                 // 审批已有实体卡时，不再把同一条 approval inbox 通知重复列在下方。
-                return !approvals.contains { approval in
-                    (item.delegationId != nil && item.delegationId == approval.delegationId)
-                        || (item.chatId != nil && item.chatId == approval.chatId)
-                }
+                let matchedDelegation = item.delegationId.map { approvalDelegationIds.contains($0) } ?? false
+                let matchedChat = item.chatId.map { approvalChatIds.contains($0) } ?? false
+                return !matchedDelegation && !matchedChat
             }
-            .filter { showHistory || $0.needsAttention }
             .sorted { $0.createdAt > $1.createdAt }
+        var grouped: [String: [AssistantInboxItem]] = [:]
+        if showHistory {
+            grouped["全部消息"] = sortedItems
+        } else {
+            for item in sortedItems {
+                grouped[category(item), default: []].append(item)
+            }
+        }
+        return InboxSnapshot(
+            approvals: sortedApprovals,
+            drafts: sortedDrafts,
+            usesDrafts: usesDrafts,
+            pendingCount: pendingCount,
+            items: sortedItems,
+            groupedItems: grouped
+        )
     }
 
     var body: some View {
@@ -56,7 +81,14 @@ struct InboxHome: View {
     }
 
     private var notices: some View {
-        List {
+        // 单次求值快照，避免列表分组、多选、overlay 与 toolbar 反复重排 approvals/drafts/items
+        let snapshot = buildSnapshot()
+        let approvals = snapshot.approvals
+        let drafts = snapshot.drafts
+        let usesDrafts = snapshot.usesDrafts
+        let pendingCount = snapshot.pendingCount
+        let items = snapshot.items
+        return List {
             Section {
                 Picker("消息范围", selection: $showHistory) {
                     Text("全部消息").tag(true)
@@ -101,7 +133,7 @@ struct InboxHome: View {
                 }
             }
             ForEach(noticeGroups, id: \.self) { group in
-                let grouped = items.filter { showHistory || category($0) == group }
+                let grouped = snapshot.groupedItems[group] ?? []
                 if !grouped.isEmpty {
                     Section {
                         ForEach(grouped) { item in

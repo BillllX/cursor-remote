@@ -48,6 +48,19 @@ struct AssistantReceipt: Identifiable, Hashable {
     static func results(in state: AssistantState?, now: Double, recentOnly: Bool = true) -> [AssistantReceipt] {
         guard let state else { return [] }
         let artifacts = state.artifacts ?? []
+        var artifactByInboxId: [String: Artifact] = [:]
+        artifactByInboxId.reserveCapacity(artifacts.count)
+        for item in artifacts where item.kind == "file" && item.sha != nil && item.sourceChatId != nil {
+            if let inboxId = item.provenance?.inboxId, artifactByInboxId[inboxId] == nil {
+                artifactByInboxId[inboxId] = item
+            }
+        }
+        var inboxByDelegationId: [String: [AssistantInboxItem]] = [:]
+        for item in state.inbox {
+            if let delegationId = item.delegationId {
+                inboxByDelegationId[delegationId, default: []].append(item)
+            }
+        }
         func recent(_ timestamp: Double) -> Bool {
             now - timestamp <= 600_000 && timestamp <= now + 60_000
         }
@@ -56,9 +69,9 @@ struct AssistantReceipt: Identifiable, Hashable {
         let delegations = state.delegations.compactMap { row -> AssistantReceipt? in
             guard ["done", "failed", "cancelled"].contains(row.status), let ended = row.endedAt else { return nil }
             let attempt = row.attempt ?? 1
-            let notice = state.inbox.first {
-                $0.delegationId == row.id && ($0.delegationReceipt?.attempt == attempt ||
-                    ($0.delegationReceipt == nil && $0.createdAt >= ended))
+            let notice = inboxByDelegationId[row.id]?.first {
+                $0.delegationReceipt?.attempt == attempt ||
+                    ($0.delegationReceipt == nil && $0.createdAt >= ended)
             }
             guard notice == nil, !recentOnly || recent(ended) else { return nil }
             let file = row.status == "done" ? row.deliveredFiles?.first { $0.sha != nil } : nil
@@ -71,9 +84,7 @@ struct AssistantReceipt: Identifiable, Hashable {
         let inbox = state.inbox.compactMap { item -> AssistantReceipt? in
             guard ["run", "reminder", "brief", "delegation"].contains(item.kind), !item.resolved, item.snoozedUntil == nil else { return nil }
             if recentOnly && (item.read || !recent(item.createdAt)) { return nil }
-            let artifact = artifacts.first {
-                $0.kind == "file" && $0.sha != nil && $0.sourceChatId != nil && $0.provenance?.inboxId == item.id
-            }
+            let artifact = artifactByInboxId[item.id]
             let delivery = item.delegationReceipt
             let file = delivery?.status == "done" ? delivery?.files.first { $0.sha != nil } : nil
             let id = item.delegationId.flatMap { delegationId in

@@ -394,13 +394,9 @@ struct AssistantModelPicker: View {
     @State private var query = ""
     @State private var vendor: String?
 
-    private var groups: [ModelCatalog.Group] {
-        ModelCatalog.groups(from: ModelCatalog.withCurrentModel(models, current: selected))
-    }
-
-    private var results: [ModelCatalog.Item] {
+    private func filteredModels(from catalogGroups: [ModelCatalog.Group]) -> [ModelCatalog.Item] {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return groups.filter { vendor == nil || $0.vendor == vendor }.flatMap { group in
+        return catalogGroups.filter { vendor == nil || $0.vendor == vendor }.flatMap { group in
             group.models.filter {
                 term.isEmpty || $0.name.localizedCaseInsensitiveContains(term)
                     || $0.id.localizedCaseInsensitiveContains(term)
@@ -410,9 +406,12 @@ struct AssistantModelPicker: View {
     }
 
     var body: some View {
+        // 单次分组并筛选，消除搜索每敲一字时重复构造 ModelCatalog.groups(from:)
+        let catalogGroups = ModelCatalog.groups(from: ModelCatalog.withCurrentModel(models, current: selected))
+        let matchedModels = filteredModels(from: catalogGroups)
         NavigationStack {
             ScrollView {
-                if results.isEmpty {
+                if matchedModels.isEmpty {
                     ContentUnavailableView {
                         Label("没有找到模型", systemImage: "magnifyingglass")
                     } description: {
@@ -424,7 +423,7 @@ struct AssistantModelPicker: View {
                     LazyVGrid(columns: typeSize.isAccessibilitySize
                               ? [GridItem(.flexible())]
                               : [GridItem(.adaptive(minimum: 150), alignment: .top)], spacing: 12) {
-                        ForEach(results) { model in modelButton(model) }
+                        ForEach(matchedModels) { model in modelButton(model) }
                     }
                     .padding(16)
                 }
@@ -433,7 +432,7 @@ struct AssistantModelPicker: View {
             .navigationTitle("选择模型")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, prompt: "搜索模型名称或厂商")
-            .safeAreaInset(edge: .top, spacing: 0) { filters }
+            .safeAreaInset(edge: .top, spacing: 0) { filters(groups: catalogGroups) }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
@@ -442,7 +441,7 @@ struct AssistantModelPicker: View {
         }
     }
 
-    private var filters: some View {
+    private func filters(groups: [ModelCatalog.Group]) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Label("当前：\(ModelCatalog.label(for: selected))", systemImage: "cpu")
                 .font(JieboFont.text(.subheadline, weight: .medium))
