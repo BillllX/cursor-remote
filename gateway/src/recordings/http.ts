@@ -9,6 +9,7 @@ import { resolve } from "node:path";
 import { saveMemory } from "../assistant/memory.ts";
 import { log } from "../log.ts";
 import { parseRange } from "../media.ts";
+import { sliceOffsetPage } from "../pagination.ts";
 import { isInside } from "../pathInside.ts";
 import { allTenants, resolveTenant, type Tenant } from "../tenants.ts";
 import { getAsrAdapter } from "./asr.ts";
@@ -522,6 +523,43 @@ export async function handleRecordingsUploadHttp(
         return sendJson(req, res, 202, out.session);
       }
       return sendJson(req, res, 200, out.result);
+    }
+
+    // GET /sessions/{id}/segments?cursor=&limit=&q=（逐字稿段落分页接口，免长录音一次传输全部段落）
+    const segmentsMatch = /^\/sessions\/([^/]+)\/segments$/.exec(rel);
+    if (method === "GET" && segmentsMatch) {
+      const sessionId = decodeURIComponent(segmentsMatch[1]!);
+      const tenant = requireLoginTenant(req, tenants);
+      const store = getRecordingStore(tenant);
+      const out = store.getResult(sessionId);
+      if (!out.ready) {
+        return sendJson(req, res, 202, out.session);
+      }
+      const cursor = url.searchParams.get("cursor") || undefined;
+      const limitRaw = url.searchParams.get("limit");
+      const limit = limitRaw ? Number(limitRaw) : undefined;
+      const q = (url.searchParams.get("q") || "").trim().toLowerCase();
+      const allSegments = out.result.segments ?? [];
+      const filtered = q
+        ? allSegments.filter(
+            (seg) =>
+              seg.text.toLowerCase().includes(q) ||
+              (seg.speakerLocalId ? seg.speakerLocalId.toLowerCase().includes(q) : false),
+          )
+        : allSegments;
+      const paged = sliceOffsetPage(filtered, {
+        cursor,
+        limit: Number.isFinite(limit) ? limit : undefined,
+        defaultLimit: 80,
+        maxLimit: 200,
+      });
+      return sendJson(req, res, 200, {
+        sessionId,
+        items: paged.items,
+        total: paged.total,
+        hasMore: paged.hasMore,
+        ...(paged.nextCursor ? { nextCursor: paged.nextCursor } : {}),
+      });
     }
 
     // GET /sessions/{id}/deletion

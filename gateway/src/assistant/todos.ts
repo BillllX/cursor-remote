@@ -35,6 +35,18 @@ export function listTodos(ref: TenantRef, opts: { includeDone?: boolean } = {}) 
   return [...open, ...done];
 }
 
+/** 分页浏览接口专用：返回完整待办列表（未完成在前、已完成按完成时间倒序在后），不受 30 条截断限制。 */
+export function listAllTodos(ref: TenantRef, filter?: "all" | "open" | "done"): Todo[] {
+  const todos = readJson<TodosFile>(file(ref), { todos: [] }).todos;
+  const open = todos.filter((todo) => !todo.done).sort((a, b) => b.createdAt - a.createdAt);
+  const done = todos
+    .filter((todo) => todo.done)
+    .sort((a, b) => (b.doneAt ?? b.createdAt) - (a.doneAt ?? a.createdAt));
+  if (filter === "open") return open;
+  if (filter === "done") return done;
+  return [...open, ...done];
+}
+
 const DUE_ERROR = "due 要写成 YYYY-MM-DD，或带时区的 ISO 时间（如 2026-10-03T09:00:00+08:00）。";
 
 /** 校验 due，返回规范后的 due 和到点提醒时间；空串表示没有日期 */

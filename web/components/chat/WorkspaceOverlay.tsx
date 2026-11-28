@@ -1,11 +1,14 @@
 // 新对话：选择工作区弹层
-import { type Dispatch, Fragment, type RefObject, type SetStateAction } from "react";
+import { type Dispatch, Fragment, type RefObject, type SetStateAction, useEffect, useState } from "react";
 import type { ClientMessage } from "@shared/protocol";
 import { fmtAgo } from "../../lib/chat/format";
 import { relToCwd, sameCwd } from "../../lib/chat/workspace";
+import { PaginationBar } from "../PaginationBar";
 import { FolderMark } from "./FolderMark";
 import { Highlight } from "./markdown";
 import styles from "./WorkspaceOverlay.module.css";
+
+const WORKSPACE_PAGE_SIZE = 30;
 
 type WorkspaceOverlayProps = {
   workspaceMenuOpen: boolean;
@@ -65,6 +68,16 @@ export function WorkspaceOverlay({
   setWorkspaceNameDraft,
   workspaceExact,
 }: WorkspaceOverlayProps) {
+  const [visibleLimit, setVisibleLimit] = useState(WORKSPACE_PAGE_SIZE);
+  useEffect(() => {
+    setVisibleLimit(WORKSPACE_PAGE_SIZE);
+  }, [workspaceQuery, workspaceMenuOpen]);
+  useEffect(() => {
+    if (workspacePick >= visibleLimit) {
+      setVisibleLimit(Math.ceil((workspacePick + 1) / WORKSPACE_PAGE_SIZE) * WORKSPACE_PAGE_SIZE);
+    }
+  }, [workspacePick, visibleLimit]);
+  const shownChoices = workspaceChoices.slice(0, visibleLimit);
   return (
     <div
       className={`search-overlay${workspaceMenuOpen ? " open" : ""}`}
@@ -116,9 +129,9 @@ export function WorkspaceOverlay({
           }}
         />
         <div className="search-list workspace-choices" id="workspace-choices" role="listbox" aria-label="工作区">
-          {workspaceChoices.map((item, index) => (
+          {shownChoices.map((item, index) => (
             <Fragment key={item.path}>
-              {index === 0 || item.recent !== workspaceChoices[index - 1].recent ? (
+              {index === 0 || item.recent !== shownChoices[index - 1].recent ? (
                 <div className={styles.section} role="presentation">
                   {item.recent ? "最近用过" : "全部工作区"}
                 </div>
@@ -155,6 +168,17 @@ export function WorkspaceOverlay({
               </button>
             </Fragment>
           ))}
+          {workspaceChoices.length > shownChoices.length ? (
+            <PaginationBar
+              hasMore
+              loadedCount={shownChoices.length}
+              totalCount={workspaceChoices.length}
+              label="加载更多工作区"
+              compact
+              autoLoad
+              onLoadMore={() => setVisibleLimit((prev) => prev + WORKSPACE_PAGE_SIZE)}
+            />
+          ) : null}
           {!workspaceChoices.length ? (
             <div className={styles.empty}>
               {otherMenuWorkspaces.length ? "没有匹配的工作区" : "还没有工作区，先新建一个"}

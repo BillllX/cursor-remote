@@ -1,12 +1,15 @@
 // 侧栏对话列表：按工作区分组，底部“更多工作区”
-import type { Dispatch, JSX, RefObject, SetStateAction } from "react";
+import { useState, type Dispatch, type JSX, type RefObject, type SetStateAction } from "react";
 import { fmtAgo } from "../../../lib/chat/format";
 import { showsUnread } from "../../../lib/chat/sessions";
 import type { Chat } from "../../../lib/chat/types";
 import { normPath, relToCwd, sameCwd } from "../../../lib/chat/workspace";
+import { PaginationBar } from "../../PaginationBar";
 import { FolderMark } from "../FolderMark";
 import { ChatMore } from "./ChatMore";
 import styles from "./ChatList.module.css";
+
+const CHAT_GROUP_PAGE_SIZE = 20;
 
 type ChatListProps = {
   sidebarGroups: {
@@ -79,6 +82,7 @@ export function ChatList({
   setMoreOpen,
   openNewChatMenu,
 }: ChatListProps) {
+  const [groupLimits, setGroupLimits] = useState<Record<string, number>>({});
   return (
     <div className="chats">
       {sidebarGroups.length ? null : (
@@ -170,64 +174,86 @@ export function ChatList({
                 : null}
             </div>
             {open
-              ? group.chats.map((chat) => (
-                  <div
-                    key={chat.id}
-                    className={`chat-item${chat.id === activeId ? " active" : ""}${chat.turns.some((turn) => turn.running) ? " busy" : ""}${showsUnread(chat, activeId) ? " unread" : ""}`}
-                  >
-                    {renameId === chat.id ? (
-                      <input
-                        className="chat-rename"
-                        value={renameDraft}
-                        autoFocus
-                        onChange={(event) => setRenameDraft(event.target.value)}
-                        onBlur={commitRename}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            commitRename();
+              ? (() => {
+                  const baseLimit = groupLimits[key] ?? CHAT_GROUP_PAGE_SIZE;
+                  const activeIdx = group.chats.findIndex((c) => c.id === activeId);
+                  const limit = activeIdx >= baseLimit ? activeIdx + 1 : baseLimit;
+                  const shownChats = group.chats.slice(0, limit);
+                  return (
+                    <>
+                      {shownChats.map((chat) => (
+                        <div
+                          key={chat.id}
+                          className={`chat-item${chat.id === activeId ? " active" : ""}${chat.turns.some((turn) => turn.running) ? " busy" : ""}${showsUnread(chat, activeId) ? " unread" : ""}`}
+                        >
+                          {renameId === chat.id ? (
+                            <input
+                              className="chat-rename"
+                              value={renameDraft}
+                              autoFocus
+                              onChange={(event) => setRenameDraft(event.target.value)}
+                              onBlur={commitRename}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  commitRename();
+                                }
+                                if (event.key === "Escape") {
+                                  event.preventDefault();
+                                  renameSkipRef.current = true;
+                                  setRenameId(null);
+                                }
+                              }}
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              className="chat-item-main"
+                              title="单击打开，双击改名"
+                              onClick={() => selectChat(chat)}
+                              onDoubleClick={(event) => {
+                                event.preventDefault();
+                                startRename(chat);
+                              }}
+                            >
+                              <span className="chat-item-title">{chat.title}</span>
+                              {chat.turns.some((turn) => turn.running) ? (
+                                <span className="chat-mark run">跑</span>
+                              ) : showsUnread(chat, activeId) ? (
+                                <span className="chat-mark unread">新</span>
+                              ) : null}
+                              {chat.touchedAt ? <span className="chat-item-time">{fmtAgo(chat.touchedAt)}</span> : null}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="chat-item-x"
+                            title="删除会话"
+                            aria-label="删除会话"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              deleteChat(chat.id);
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                      {group.chats.length > shownChats.length ? (
+                        <PaginationBar
+                          hasMore
+                          loadedCount={shownChats.length}
+                          totalCount={group.chats.length}
+                          label="加载更多对话"
+                          compact
+                          onLoadMore={() =>
+                            setGroupLimits((prev) => ({ ...prev, [key]: limit + CHAT_GROUP_PAGE_SIZE }))
                           }
-                          if (event.key === "Escape") {
-                            event.preventDefault();
-                            renameSkipRef.current = true;
-                            setRenameId(null);
-                          }
-                        }}
-                      />
-                    ) : (
-                      <button
-                        type="button"
-                        className="chat-item-main"
-                        title="单击打开，双击改名"
-                        onClick={() => selectChat(chat)}
-                        onDoubleClick={(event) => {
-                          event.preventDefault();
-                          startRename(chat);
-                        }}
-                      >
-                        <span className="chat-item-title">{chat.title}</span>
-                        {chat.turns.some((turn) => turn.running) ? (
-                          <span className="chat-mark run">跑</span>
-                        ) : showsUnread(chat, activeId) ? (
-                          <span className="chat-mark unread">新</span>
-                        ) : null}
-                        {chat.touchedAt ? <span className="chat-item-time">{fmtAgo(chat.touchedAt)}</span> : null}
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="chat-item-x"
-                      title="删除会话"
-                      aria-label="删除会话"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        deleteChat(chat.id);
-                      }}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))
+                        />
+                      ) : null}
+                    </>
+                  );
+                })()
               : null}
           </div>
         );

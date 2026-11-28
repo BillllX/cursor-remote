@@ -100,6 +100,7 @@ type DataAction =
       kind: "overview" | "scope" | "search" | "mutation";
       scopeId?: string;
       query?: string;
+      append?: boolean;
     }
   | { type: "result"; message: AssistantResultMessage };
 
@@ -115,6 +116,7 @@ function dataReducer(state: ReturnType<typeof initialMemoryCenterData>, action: 
           kind: action.kind,
           scopeId: action.scopeId,
           query: action.query,
+          append: action.append,
         },
         { replaceSameKind: true },
       );
@@ -171,6 +173,8 @@ export function useMemoryCenter({ active, send, lastResult, resultTick }: Option
   const mountedRef = useRef(true);
   const uiRef = useRef(ui);
   uiRef.current = ui;
+  const dataRef = useRef(data);
+  dataRef.current = data;
   const activityRef = useRef(activity);
   activityRef.current = activity;
   const searchDebouncerRef = useRef<ReturnType<typeof createSearchDebouncer> | null>(null);
@@ -193,12 +197,13 @@ export function useMemoryCenter({ active, send, lastResult, resultTick }: Option
           scope?: string;
           kind?: SearchableMemoryCenterKind;
           state?: MemoryCenterState;
-        } = { query: trimmed };
+          limit?: number;
+        } = { query: trimmed, limit: 30 };
         if (current.searchScopeFilter !== "all") args.scope = current.searchScopeFilter;
         if (current.searchKindFilter !== "all") args.kind = current.searchKindFilter;
         if (current.searchStateFilter !== "all") args.state = current.searchStateFilter;
         const msg = buildAssistantOpMessage("memory_center_search", args);
-        dispatchData({ type: "register", reqId: msg.reqId!, kind: "search", query: trimmed });
+        dispatchData({ type: "register", reqId: msg.reqId!, kind: "search", query: trimmed, append: false });
         send(msg);
       },
       SEARCH_DEBOUNCE_MS,
@@ -239,13 +244,21 @@ export function useMemoryCenter({ active, send, lastResult, resultTick }: Option
     if (activityOps.has(lastResult.op)) {
       setActivity({
         type: "patch",
-        fn: (state) =>
-          applyActivityResult(state, lastResult, {
-            appendActivity: activityAppendRef.current,
-            activityGeneration: state.activityGeneration,
-            suggestionsGeneration: state.suggestionsGeneration,
-            activityCursor: activityAppendRef.current ? state.activityCursor : null,
-          }) ?? state,
+        fn: (state) => {
+          const appendSuggestions = lastResult.reqId
+            ? Boolean(suggestionsAppendByReqRef.current.get(lastResult.reqId))
+            : false;
+          if (lastResult.reqId) suggestionsAppendByReqRef.current.delete(lastResult.reqId);
+          return (
+            applyActivityResult(state, lastResult, {
+              appendActivity: activityAppendRef.current,
+              appendSuggestions,
+              activityGeneration: state.activityGeneration,
+              suggestionsGeneration: state.suggestionsGeneration,
+              activityCursor: activityAppendRef.current ? state.activityCursor : null,
+            }) ?? state
+          );
+        },
       });
       if (lastResult.op === "memory_center_restore" && lastResult.ok && lastResult.data?.scope) {
         sendGet(lastResult.data.scope);
@@ -269,20 +282,53 @@ export function useMemoryCenter({ active, send, lastResult, resultTick }: Option
   );
 
   const sendGet = useCallback(
-    (scopeId?: string) => {
+    (scopeId?: string, opts?: { cursor?: string; limit?: number; append?: boolean }) => {
       const msg = scopeId
-        ? buildAssistantOpMessage("memory_center_get", { scope: scopeId })
+        ? buildAssistantOpMessage("memory_center_get", {
+            scope: scopeId,
+            limit: opts?.limit ?? 50,
+            ...(opts?.cursor ? { cursor: opts.cursor } : {}),
+          })
         : buildAssistantOpMessage("memory_center_get");
       dispatchData({
         type: "register",
         reqId: msg.reqId!,
         kind: scopeId ? "scope" : "overview",
         scopeId,
+        append: Boolean(opts?.append),
       });
       send(msg);
     },
     [send],
   );
+
+  const loadMoreScopeItems = useCallback(() => {
+    const detail = dataRef.current.detail;
+    if (!detail?.itemsHasMore || !detail.itemsNextCursor || dataRef.current.loadingScope) return;
+    sendGet(detail.scope.id, { cursor: detail.itemsNextCursor, limit: 50, append: true });
+  }, [sendGet]);
+
+  const loadMoreSearch = useCallback(() => {
+    const search = dataRef.current.search;
+    if (!search?.hasMore || !search.nextCursor || dataRef.current.loadingSearch) return;
+    const current = uiRef.current;
+    const trimmed = current.searchInput.trim();
+    if (!trimmed) return;
+    const args: {
+      query: string;
+      scope?: string;
+      kind?: SearchableMemoryCenterKind;
+      state?: MemoryCenterState;
+      cursor?: string;
+      limit?: number;
+    } = { query: trimmed, cursor: search.nextCursor, limit: 30 };
+    if (current.searchScopeFilter !== "all") args.scope = current.searchScopeFilter;
+    if (current.searchKindFilter !== "all") args.kind = current.searchKindFilter;
+    if (current.searchStateFilter !== "all") args.state = current.searchStateFilter;
+    const msg = buildAssistantOpMessage("memory_center_search", args);
+    dispatchData({ type: "register", reqId: msg.reqId!, kind: "search", query: trimmed, append: true });
+    send(msg);
+  }, [send]);
 
   const retryOverview = useCallback(() => sendGet(), [sendGet]);
 
@@ -381,6 +427,7 @@ export function useMemoryCenter({ active, send, lastResult, resultTick }: Option
   }, []);
 
   const activityAppendRef = useRef(false);
+  const suggestionsAppendByReqRef = useRef(new Map<string, boolean>());
 
   const loadActivity = useCallback(
     (append?: boolean) => {
@@ -401,14 +448,32 @@ export function useMemoryCenter({ active, send, lastResult, resultTick }: Option
     [send, activityScopeFilter, activityActionFilter],
   );
 
-  const loadSuggestions = useCallback((refresh = true) => {
-    const msg = buildAssistantOpMessage("memory_center_suggestions_get");
-    setActivity({
-      type: "patch",
-      fn: (s) => registerActivityPending(s, { reqId: msg.reqId!, kind: "suggestions" }, { refreshSuggestions: refresh }),
-    });
-    send(msg);
-  }, [send]);
+  const loadSuggestions = useCallback(
+    (refresh = true, append = false) => {
+      const args: import("@shared/protocol").AssistantOpArgsMap["memory_center_suggestions_get"] = { limit: 40 };
+      if (append && activityRef.current.suggestionsCursor) args.cursor = activityRef.current.suggestionsCursor;
+      const msg = buildAssistantOpMessage("memory_center_suggestions_get", args);
+      if (msg.reqId) suggestionsAppendByReqRef.current.set(msg.reqId, append);
+      setActivity({
+        type: "patch",
+        fn: (s) =>
+          registerActivityPending(
+            s,
+            { reqId: msg.reqId!, kind: "suggestions" },
+            { refreshSuggestions: refresh && !append, appendSuggestions: append },
+          ),
+      });
+      send(msg);
+    },
+    [send],
+  );
+
+  const loadMoreSuggestions = useCallback(() => {
+    if (!activityRef.current.suggestions?.hasMore || !activityRef.current.suggestionsCursor || activityRef.current.loadingSuggestions) {
+      return;
+    }
+    loadSuggestions(false, true);
+  }, [loadSuggestions]);
 
   const restoreActivity = useCallback(
     (entry: MemoryCenterActivityEntry) => {
@@ -471,6 +536,9 @@ export function useMemoryCenter({ active, send, lastResult, resultTick }: Option
     setActivityActionFilter,
     loadActivity,
     loadSuggestions,
+    loadMoreSuggestions,
+    loadMoreScopeItems,
+    loadMoreSearch,
     restoreActivity,
     answerSuggestion,
     acceptAllLowRisk,

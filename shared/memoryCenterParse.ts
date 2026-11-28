@@ -128,7 +128,11 @@ export function parseMemoryCenterSuggestionsData(raw: unknown): MemoryCenterSugg
     entries.push(row as unknown as MemoryCenterSuggestionEntry);
   }
   const truncated = typeof raw.truncated === "boolean" ? raw.truncated : undefined;
-  return { generatedAt, lastRunAt, entries, truncated };
+  const total = typeof raw.total === "number" && Number.isFinite(raw.total) ? raw.total : undefined;
+  const hasMore = typeof raw.hasMore === "boolean" ? raw.hasMore : undefined;
+  const nextCursor = optString(raw, "nextCursor");
+  if (raw.nextCursor !== undefined && raw.nextCursor !== null && !nextCursor) return null;
+  return { generatedAt, lastRunAt, entries, truncated, total, hasMore, nextCursor };
 }
 
 export function parseMemoryCenterSuggestionAnswerData(raw: unknown): MemoryCenterSuggestionAnswerData | null {

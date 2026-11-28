@@ -25,6 +25,7 @@ export type PendingRequest = {
   kind: MemoryCenterRequestKind;
   scopeId?: string;
   query?: string;
+  append?: boolean;
 };
 
 export type MemoryCenterDataState = {
@@ -214,7 +215,14 @@ export function applyMemoryCenterResult(
   }
   if (message.op === "memory_center_search" && message.data) {
     if (message.reqId !== data.activeSearchReqId) return next;
-    return { ...next, search: message.data, searchError: "" };
+    const merged: MemoryCenterSearchData =
+      pending.append && data.search
+        ? {
+            ...message.data,
+            hits: [...data.search.hits, ...message.data.hits],
+          }
+        : message.data;
+    return { ...next, search: merged, searchError: "" };
   }
   return next;
 }
@@ -289,6 +297,28 @@ function applyGetResult(
   if (pending.kind !== "scope" || pending.reqId !== dataBefore.activeScopeReqId) return data;
   if (pending.scopeId && payload.detail.scope.id !== pending.scopeId) return data;
   if (dataBefore.activeScopeId && payload.detail.scope.id !== dataBefore.activeScopeId) return data;
+  if (pending.append && dataBefore.detail && dataBefore.detail.scope.id === payload.detail.scope.id) {
+    const existingKeys = new Set(
+      dataBefore.detail.items.map((item) => item.id ?? `${item.section ?? ""}:${item.revision}`),
+    );
+    const extra = payload.detail.items.filter(
+      (item) => !existingKeys.has(item.id ?? `${item.section ?? ""}:${item.revision}`),
+    );
+    return {
+      ...data,
+      detail: {
+        ...dataBefore.detail,
+        scope: payload.detail.scope,
+        items: [...dataBefore.detail.items, ...extra],
+        itemsTruncated: payload.detail.itemsTruncated,
+        itemsTotal: payload.detail.itemsTotal ?? dataBefore.detail.itemsTotal,
+        itemsHasMore: payload.detail.itemsHasMore,
+        itemsNextCursor: payload.detail.itemsNextCursor,
+      },
+      detailPayloadTruncated: Boolean(dataBefore.detailPayloadTruncated || payload.payloadTruncated),
+      scopeError: "",
+    };
+  }
   return {
     ...data,
     detail: payload.detail,

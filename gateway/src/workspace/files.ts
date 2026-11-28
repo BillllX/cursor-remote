@@ -20,6 +20,7 @@ import { isPolicyProtectedPath } from "../../../shared/policy.ts";
 import { formatBytes, isByteKind, kindFromPath, mimeOf, sizeLimit } from "../../../shared/preview.ts";
 import type { ServerMessage } from "../../../shared/protocol.ts";
 import { log } from "../log.ts";
+import { sliceOffsetPage } from "../pagination.ts";
 import { relEscapes } from "../pathInside.ts";
 import { filePayload } from "../media.ts";
 import { cwdOf } from "../runtime/slots.ts";
@@ -706,10 +707,34 @@ export function filesMessage(
   }
   const overhead = Buffer.byteLength(JSON.stringify({ type: "files", ...cleanBase, truncated: true }));
   const fitted = fitWorkspaceFiles(listed, conn?.maxMessageBytes ?? 0, overhead);
-  return { type: "files", ...cleanBase, paths: fitted.paths, status: fitted.status, truncated: fitted.truncated };
+  const byteTrimmed = fitted.paths.length < listed.paths.length;
+  let nextCursor = listed.nextCursor;
+  if (byteTrimmed) {
+    if (listed.nextCursor && fitted.paths.length > 0) {
+      const prevEnd = Number(listed.nextCursor);
+      const start = Number.isFinite(prevEnd) ? Math.max(0, prevEnd - listed.paths.length) : 0;
+      nextCursor = String(start + fitted.paths.length);
+    } else if (listed.total !== undefined && fitted.paths.length > 0) {
+      const start = Math.max(0, listed.total - listed.paths.length);
+      nextCursor = String(start + fitted.paths.length);
+    } else {
+      nextCursor = undefined;
+    }
+  }
+  const hasMore = Boolean((listed.hasMore || byteTrimmed) && nextCursor);
+  return {
+    type: "files",
+    ...cleanBase,
+    paths: fitted.paths,
+    status: fitted.status,
+    truncated: fitted.truncated || Boolean(listed.hasMore || byteTrimmed),
+    ...(listed.total !== undefined ? { total: listed.total } : {}),
+    ...(listed.hasMore !== undefined || byteTrimmed ? { hasMore } : {}),
+    ...(hasMore && nextCursor ? { nextCursor } : {}),
+  };
 }
 
-function parseSearchHits(raw: string): { path: string; line: number; text: string }[] {
+function parseSearchHits(raw: string, maxHits = 100): { path: string; line: number; text: string }[] {
   const hits: { path: string; line: number; text: string }[] = [];
   for (const row of raw.split("\n")) {
     if (!row) continue;
@@ -720,7 +745,7 @@ function parseSearchHits(raw: string): { path: string; line: number; text: strin
       line: Number(match[2]),
       text: match[3].replace(/\s+/g, " ").trim().slice(0, 140),
     });
-    if (hits.length >= 100) break;
+    if (hits.length >= maxHits) break;
   }
   return hits;
 }
@@ -1132,14 +1157,14 @@ const DIR_LIST_CAP = 1000;
 export async function listWorkspaceDirForClientAsync(
   cwd: string,
   rawDir: string,
-  opt: AsyncOpt = {},
+  opt: AsyncOpt & { cursor?: string; limit?: number } = {},
 ): Promise<WorkspaceFiles> {
   const clean = rawDir
     .replace(/\\/g, "/")
     .replace(/^\/+|\/+$/g, "")
     .trim();
   const relDir = clean ? workspacePath(cwd, clean) : "";
-  if (clean && !relDir) return { paths: [], status: {}, truncated: false };
+  if (clean && !relDir) return { paths: [], status: {}, truncated: false, total: 0, hasMore: false };
   const targetAbs = relDir ? resolve(cwd, relDir) : cwd;
   const prefix = relDir ? `${relDir}/` : "";
   throwIfAborted(opt.signal);
@@ -1147,15 +1172,20 @@ export async function listWorkspaceDirForClientAsync(
   try {
     names = await fsReaddir(targetAbs);
   } catch {
-    return { paths: [], status: {}, truncated: false };
+    return { paths: [], status: {}, truncated: false, total: 0, hasMore: false };
   }
   const visible = names.filter((name) => !WALK_SKIP.has(name)).sort((a, b) => a.localeCompare(b));
-  const truncated = visible.length > DIR_LIST_CAP;
-  const sliced = visible.slice(0, DIR_LIST_CAP);
-  const kinds = await mapBatches(sliced, (name) => statKind(resolve(targetAbs, name)), opt.signal);
+  const hasExplicitPaging = opt.cursor !== undefined || opt.limit !== undefined;
+  const paged = sliceOffsetPage(visible, {
+    cursor: opt.cursor,
+    limit: opt.limit,
+    defaultLimit: hasExplicitPaging ? 200 : DIR_LIST_CAP,
+    maxLimit: DIR_LIST_CAP,
+  });
+  const kinds = await mapBatches(paged.items, (name) => statKind(resolve(targetAbs, name)), opt.signal);
   const dirs: string[] = [];
   const files: string[] = [];
-  sliced.forEach((name, i) => {
+  paged.items.forEach((name, i) => {
     const kind = kinds[i];
     if (kind === "dir") dirs.push(`${prefix}${name}/`);
     else if (kind === "file") files.push(`${prefix}${name}`);
@@ -1167,7 +1197,14 @@ export async function listWorkspaceDirForClientAsync(
       if (cached.status[file]) status[file] = cached.status[file];
     }
   }
-  return { paths: [...dirs, ...files], status, truncated };
+  return {
+    paths: [...dirs, ...files],
+    status,
+    truncated: paged.hasMore,
+    total: paged.total,
+    hasMore: paged.hasMore,
+    ...(paged.nextCursor ? { nextCursor: paged.nextCursor } : {}),
+  };
 }
 
 /** listWorkspaceFilesForClient 的异步版（文件树、@ 补全、推送用） */
@@ -1339,14 +1376,18 @@ const SEARCH_DEADLINE_MS = 8000;
 export function searchWorkspaceAsync(
   cwd: string,
   query: string,
-  opt: AsyncOpt = {},
+  opt: AsyncOpt & { maxHits?: number } = {},
 ): Promise<{ path: string; line: number; text: string }[]> {
   const needle = query.trim();
   if (!needle || needle.length > 200) return Promise.resolve([]);
-  return heavy(cwd, opt, (signal) => searchOf(cwd, needle, signal));
+  const maxHits =
+    typeof opt.maxHits === "number" && Number.isFinite(opt.maxHits) && opt.maxHits > 0
+      ? Math.min(Math.floor(opt.maxHits), 500)
+      : 100;
+  return heavy(cwd, opt, (signal) => searchOf(cwd, needle, signal, maxHits));
 }
 
-async function searchOf(cwd: string, needle: string, signal: AbortSignal | undefined) {
+async function searchOf(cwd: string, needle: string, signal: AbortSignal | undefined, maxHits = 100) {
   const globs = [
     "--glob",
     "!.git/**",
@@ -1381,11 +1422,11 @@ async function searchOf(cwd: string, needle: string, signal: AbortSignal | undef
       ],
       { cwd, timeoutMs: 8000, maxBuffer: 2_000_000, signal },
     );
-    return parseSearchHits(out);
+    return parseSearchHits(out, maxHits);
   } catch (err) {
     if (signal?.aborted) throw err;
     const failed = failedStatus(err);
-    if (failed.status === 1) return parseSearchHits(failed.stdout || "");
+    if (failed.status === 1) return parseSearchHits(failed.stdout || "", maxHits);
   }
   try {
     const where = await locateGit(cwd, signal);
@@ -1401,11 +1442,11 @@ async function searchOf(cwd: string, needle: string, signal: AbortSignal | undef
         signal,
       },
     );
-    return parseSearchHits(out);
+    return parseSearchHits(out, maxHits);
   } catch (err) {
     if (signal?.aborted) throw err;
     const failed = failedStatus(err);
-    if (failed.status === 1) return parseSearchHits(failed.stdout || "");
+    if (failed.status === 1) return parseSearchHits(failed.stdout || "", maxHits);
   }
   const deadline = Date.now() + SEARCH_DEADLINE_MS;
   const paths: string[] = [];
@@ -1427,13 +1468,13 @@ async function searchOf(cwd: string, needle: string, signal: AbortSignal | undef
         if (!lines[i].toLowerCase().includes(lower)) continue;
         hits.push({ path, line: i + 1, text: lines[i].replace(/\s+/g, " ").trim().slice(0, 140) });
         n += 1;
-        if (n >= 8 || hits.length >= 100) break;
+        if (n >= 8 || hits.length >= maxHits) break;
       }
     } catch (err) {
       if (isAbortError(err)) throw err;
       log.debug("搜索：文件读不了", abs, err instanceof Error ? err.message : err);
     }
-    if (hits.length >= 100) break;
+    if (hits.length >= maxHits) break;
   }
   return hits;
 }

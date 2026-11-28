@@ -105,6 +105,14 @@ export type BuildAssistantOpMessage = {
     args: AssistantOpArgsMap["drop_token_revoke"],
   ): AssistantOpMessageOf<"drop_token_revoke">;
   (
+    operation: "assistant_list_page",
+    args: AssistantOpArgsMap["assistant_list_page"],
+  ): AssistantOpMessageOf<"assistant_list_page">;
+  (
+    operation: "kb_workspace_list_page",
+    args: AssistantOpArgsMap["kb_workspace_list_page"],
+  ): AssistantOpMessageOf<"kb_workspace_list_page">;
+  (
     operation: "skill_factory_status",
     args?: AssistantOpArgsMap["skill_factory_status"],
   ): AssistantOpMessageOf<"skill_factory_status">;
@@ -140,6 +148,8 @@ export type BuildAssistantOpMessage = {
       | "drop_token_create"
       | "drop_token_update"
       | "drop_token_revoke"
+      | "assistant_list_page"
+      | "kb_workspace_list_page"
       | "skill_factory_status"
       | "skill_proposal_decide"
       | "skill_update_meta"
@@ -166,6 +176,8 @@ export type BuildAssistantOpMessage = {
       | "drop_token_create"
       | "drop_token_update"
       | "drop_token_revoke"
+      | "assistant_list_page"
+      | "kb_workspace_list_page"
       | "skill_factory_status"
       | "skill_proposal_decide"
       | "skill_update_meta"
@@ -226,6 +238,12 @@ function buildAssistantOpMessageImpl(operation: AssistantOp, args?: Record<strin
   }
   if (operation === "drop_token_revoke") {
     return { ...base, op: operation, args: args as AssistantOpArgsMap["drop_token_revoke"] };
+  }
+  if (operation === "assistant_list_page") {
+    return { ...base, op: operation, args: args as AssistantOpArgsMap["assistant_list_page"] };
+  }
+  if (operation === "kb_workspace_list_page") {
+    return { ...base, op: operation, args: args as AssistantOpArgsMap["kb_workspace_list_page"] };
   }
   if (operation === "skill_factory_status") {
     return args === undefined ? { ...base, op: operation } : { ...base, op: operation, args };

@@ -157,10 +157,20 @@ extension ChatStore {
                 authError = messageText ?? "访问码不对。"
                 KeychainStore.delete()
             }
-        case .adminStats(let rows, _, let bill):
-            adminStats = rows
-            adminStatsAt = Date()
-            cursorBill = bill
+        case .adminStats(let rows, _, let bill, let tenantsTotal, let tenantsHasMore, let tenantsNextCursor):
+            if adminStatsAppending {
+                let seen = Set(adminStats.map(\.id))
+                adminStats.append(contentsOf: rows.filter { !seen.contains($0.id) })
+                adminStatsAppending = false
+            } else {
+                adminStats = rows
+                adminStatsAt = Date()
+            }
+            if let bill { cursorBill = bill }
+            adminStatsTotal = tenantsTotal
+            adminStatsHasMore = tenantsHasMore
+            adminStatsNextCursor = tenantsNextCursor
+            adminStatsLoadingMore = false
         case .loopState(let chatId, let status, let goal, let intervalSec, let tick, let maxTicks, let lastSummary, let nextAt):
             guard !chatId.isEmpty else { break }
             loops[chatId] = LoopSnapshot(
@@ -866,7 +876,7 @@ extension ChatStore {
             if tab.error == nil && !tab.external && !tab.diff && tab.content == nil && tab.mediaURL != nil && !tab.kind.needsMediaURL {
                 hydratePreviewText(path: tab.path)
             }
-        case .files(let query, let dir, let paths, let mention, let truncated, let filesChatId, let status, let reqId, let filesError):
+        case .files(let query, let dir, let paths, let mention, let truncated, let filesChatId, let status, let reqId, let filesError, let total, let hasMore, let nextCursor):
             // 工作台和聊天主页各有明确线程；只接收其中一个正在显示的请求。
             let responseChatId = filesChatId?.nilIfEmpty ?? activeId
             if let dir {
@@ -880,7 +890,10 @@ extension ChatStore {
                     dir: dir,
                     paths: paths,
                     truncated: truncated,
-                    status: status
+                    status: status,
+                    total: total,
+                    hasMore: hasMore,
+                    nextCursor: nextCursor
                 )
             } else if mention {
                 guard !deletedIds.contains(responseChatId) else { break }
@@ -941,14 +954,23 @@ extension ChatStore {
                     reqId: reqId
                 )
             }
-        case .searchHits(let query, let hits, let hitsChatId, let truncated):
+        case .searchHits(let query, let hits, let hitsChatId, let truncated, let offset, let total, let hasMore, let nextOffset):
             let responseChatId = hitsChatId?.nilIfEmpty ?? activeId
             guard responseChatId == searchRequestChatId else { break }
             let current = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             guard query.trimmingCharacters(in: .whitespacesAndNewlines) == current else { break }
-            searchHits = hits
+            if offset > 0 {
+                let seen = Set(searchHits.map { "\($0.path):\($0.line):\($0.text)" })
+                searchHits.append(contentsOf: hits.filter { !seen.contains("\($0.path):\($0.line):\($0.text)") })
+            } else {
+                searchHits = hits
+            }
             searchTruncated = truncated
+            searchTotal = total
+            searchHasMore = hasMore
+            searchNextOffset = nextOffset
             searchLoading = false
+            searchLoadingMore = false
             searchContentNote = ""
         case .checkpoints(let id, let items):
             let targetChatId = id.nilIfEmpty ?? activeId
@@ -1060,6 +1082,7 @@ extension ChatStore {
                    op != "memory_center_export", op != "memory_center_import_preview",
                    op != "memory_center_import_apply", op != "memory_center_import_rollback",
                    op != "kb_workspace_status", op != "kb_workspace_init",
+                   op != "assistant_list_page", op != "kb_workspace_list_page",
                    op != "drop_token_create", op != "drop_token_update", op != "drop_token_revoke" {
                     flash(error ?? "助理操作失败（\(op)）")
                 }

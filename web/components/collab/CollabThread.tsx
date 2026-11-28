@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import type { ActorRef, CollabAnchorBody, CollabRunState, ImMessage, TurnFile } from "@shared/protocol";
 import { repairReplyText } from "@shared/replyText";
 import { MemoMarkdown, REMARK_PLUGINS, SIMPLE_MD_COMPONENTS } from "../chat/markdown";
+import { PaginationBar } from "../PaginationBar";
 import type { CollabTimelineMessage } from "./collabState";
 import { TaskCard } from "./TaskCard";
 import styles from "./collab.module.css";
@@ -21,6 +22,9 @@ export function CollabThread({
   messages,
   runs,
   loading,
+  hasOlder = false,
+  loadingOlder = false,
+  onLoadOlder,
   selectedTaskId,
   onBack,
   onShowDetails,
@@ -33,6 +37,9 @@ export function CollabThread({
   messages: CollabTimelineMessage[];
   runs: CollabRunState[];
   loading: boolean;
+  hasOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => void;
   selectedTaskId?: string;
   onBack: () => void;
   onShowDetails: () => void;
@@ -46,6 +53,9 @@ export function CollabThread({
   ) => void;
 }) {
   const timelineRef = useRef<HTMLDivElement>(null);
+  const prevScrollHeightRef = useRef<number | null>(null);
+  const prevFirstClientIdRef = useRef<string | undefined>(undefined);
+  const prevLastClientIdRef = useRef<string | undefined>(undefined);
   const actorById = useMemo(() => new Map(actors.map((actor) => [actor.actorId, actor])), [actors]);
   const runById = useMemo(() => new Map(runs.map((run) => [run.runId, run])), [runs]);
   const anchoredTasks = useMemo(
@@ -62,10 +72,35 @@ export function CollabThread({
     run.tasks.filter((task) => !anchoredTasks.has(task.taskId)).map((task) => ({ run, task })),
   );
 
+  const triggerLoadOlder = () => {
+    if (!onLoadOlder || !hasOlder || loadingOlder) return;
+    if (timelineRef.current) prevScrollHeightRef.current = timelineRef.current.scrollHeight;
+    onLoadOlder();
+  };
+
   useEffect(() => {
     const timeline = timelineRef.current;
-    if (timeline) timeline.scrollTop = timeline.scrollHeight;
-  }, [messages.length]);
+    const firstId = messages[0]?.clientId;
+    const lastId = messages[messages.length - 1]?.clientId;
+    if (timeline) {
+      // 向上翻页追加旧消息时保持阅读位置不跳动；仅在首次打开或尾部来新消息时滚到底部。
+      if (
+        prevScrollHeightRef.current !== null &&
+        firstId &&
+        firstId !== prevFirstClientIdRef.current &&
+        lastId === prevLastClientIdRef.current
+      ) {
+        const delta = timeline.scrollHeight - prevScrollHeightRef.current;
+        if (delta > 0) timeline.scrollTop += delta;
+        prevScrollHeightRef.current = null;
+      } else if (lastId !== prevLastClientIdRef.current) {
+        timeline.scrollTop = timeline.scrollHeight;
+        prevScrollHeightRef.current = null;
+      }
+    }
+    prevFirstClientIdRef.current = firstId;
+    prevLastClientIdRef.current = lastId;
+  }, [messages]);
 
   useEffect(() => {
     if (!selectedTaskId) return;
@@ -116,7 +151,26 @@ export function CollabThread({
           协作详情
         </button>
       </header>
-      <div className={styles.timeline} ref={timelineRef}>
+      <div
+        className={styles.timeline}
+        ref={timelineRef}
+        onScroll={(event) => {
+          if (event.currentTarget.scrollTop <= 48 && hasOlder && !loadingOlder && onLoadOlder) {
+            triggerLoadOlder();
+          }
+        }}
+      >
+        {onLoadOlder && (hasOlder || loadingOlder) ? (
+          <PaginationBar
+            placement="top"
+            hasMore={hasOlder}
+            loading={loadingOlder}
+            loadedCount={messages.length}
+            label="加载更早消息"
+            compact
+            onLoadMore={triggerLoadOlder}
+          />
+        ) : null}
         {loading ? <div className={styles.timelineHint}>正在加载群历史…</div> : null}
         {!loading && !messages.length && !orphanTasks.length ? (
           <div className={styles.welcome}>

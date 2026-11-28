@@ -237,6 +237,11 @@ export default function ChatApp() {
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminStats, setAdminStats] = useState<AdminTenantStats[]>([]);
   const [adminStatsAt, setAdminStatsAt] = useState<number | null>(null);
+  const [adminHasMore, setAdminHasMore] = useState(false);
+  const [adminNextCursor, setAdminNextCursor] = useState<string | undefined>(undefined);
+  const [adminTotal, setAdminTotal] = useState<number | undefined>(undefined);
+  const [adminLoadingMore, setAdminLoadingMore] = useState(false);
+  const adminAppendRef = useRef(false);
   const [cursorBill, setCursorBill] = useState<CursorBill | null>(null);
   const [grepQ, setGrepQ] = useState("");
   const searchShown = useHeldOpen(searchOpen);
@@ -254,6 +259,10 @@ export default function ChatApp() {
   skillsOpenRef.current = skillsOpen;
   const [filesQuery, setFilesQuery] = useState("");
   const [grepHits, setGrepHits] = useState<SearchHit[]>([]);
+  const [grepHasMore, setGrepHasMore] = useState(false);
+  const [grepNextOffset, setGrepNextOffset] = useState<number | undefined>(undefined);
+  const [grepTotal, setGrepTotal] = useState<number | undefined>(undefined);
+  const [grepLoadingMore, setGrepLoadingMore] = useState(false);
 
   useEffect(() => {
     if ((workspaceSection === "files" || workspaceSection === "git") && !filesOpen) setWorkspaceSection("chats");
@@ -287,6 +296,8 @@ export default function ChatApp() {
   const [dirEntriesByDir, setDirEntriesByDir] = useState<Record<string, string[]>>({});
   const [loadingDirs, setLoadingDirs] = useState<Record<string, boolean>>({});
   const [truncatedDirs, setTruncatedDirs] = useState<Record<string, boolean>>({});
+  const dirNextCursorsRef = useRef<Record<string, string>>({});
+  const dirAppendingRef = useRef<Set<string>>(new Set());
   const loadedDirsRef = useRef<Set<string>>(new Set());
   const lastTreeCwdRef = useRef("");
   const treePathsRef = useRef<string[]>([]);
@@ -1123,6 +1134,7 @@ export default function ChatApp() {
           if (message.error) {
             if (typeof message.dir === "string") {
               const targetDir = message.dir;
+              dirAppendingRef.current.delete(targetDir);
               setLoadingDirs((prev) => {
                 if (!prev[targetDir]) return prev;
                 const next = { ...prev };
@@ -1135,10 +1147,29 @@ export default function ChatApp() {
           }
           if (typeof message.dir === "string") {
             const targetDir = message.dir;
+            const appending = dirAppendingRef.current.has(targetDir);
+            dirAppendingRef.current.delete(targetDir);
             loadedDirsRef.current.add(targetDir);
-            setDirEntriesByDir((prev) => ({ ...prev, [targetDir]: message.paths }));
+            setDirEntriesByDir((prev) => {
+              if (!appending || !prev[targetDir]?.length) return { ...prev, [targetDir]: message.paths };
+              const merged = [...prev[targetDir]];
+              const seen = new Set(merged);
+              for (const p of message.paths) {
+                if (!seen.has(p)) {
+                  seen.add(p);
+                  merged.push(p);
+                }
+              }
+              return { ...prev, [targetDir]: merged };
+            });
+            if (message.hasMore && message.nextCursor) {
+              dirNextCursorsRef.current[targetDir] = message.nextCursor;
+            } else {
+              delete dirNextCursorsRef.current[targetDir];
+            }
+            const more = Boolean(message.hasMore || message.truncated);
             setTruncatedDirs((prev) =>
-              message.truncated
+              more
                 ? { ...prev, [targetDir]: true }
                 : prev[targetDir]
                   ? (() => {
@@ -1175,8 +1206,13 @@ export default function ChatApp() {
         case "search_hits":
           if (message.chatId && message.chatId !== activeIdRef.current) break;
           if (message.query.trim() === grepQRef.current.trim()) {
-            setGrepHits(message.hits);
+            const offset = typeof message.offset === "number" ? message.offset : 0;
+            setGrepHits((prev) => (offset > 0 ? [...prev, ...message.hits] : message.hits));
+            setGrepHasMore(Boolean(message.hasMore));
+            setGrepNextOffset(message.nextOffset);
+            setGrepTotal(message.total);
             setGrepWait(false);
+            setGrepLoadingMore(false);
           }
           break;
         case "tool-output":
@@ -1241,11 +1277,22 @@ export default function ChatApp() {
         case "memory_written":
           if (message.entry?.topic) setNotice(`已记住：${message.entry.topic}`);
           break;
-        case "admin_stats":
-          setAdminStats(message.tenants || []);
+        case "admin_stats": {
+          const appending = adminAppendRef.current;
+          adminAppendRef.current = false;
+          setAdminStats((prev) => {
+            if (!appending) return message.tenants || [];
+            const seen = new Set(prev.map((row) => row.id));
+            return [...prev, ...(message.tenants || []).filter((row) => !seen.has(row.id))];
+          });
           setAdminStatsAt(message.serverTime || Date.now());
-          setCursorBill(message.cursor ?? null);
+          if (!appending || message.cursor) setCursorBill(message.cursor ?? null);
+          setAdminHasMore(Boolean(message.tenantsHasMore));
+          setAdminNextCursor(message.tenantsNextCursor);
+          setAdminTotal(message.tenantsTotal);
+          setAdminLoadingMore(false);
           break;
+        }
         case "chat_title":
           reduceChats();
           break;
@@ -2325,6 +2372,8 @@ export default function ChatApp() {
 
   useEffect(() => {
     loadedDirsRef.current.clear();
+    dirNextCursorsRef.current = {};
+    dirAppendingRef.current.clear();
     setDirEntriesByDir({});
     setLoadingDirs({});
     setTruncatedDirs({});
@@ -2355,13 +2404,21 @@ export default function ChatApp() {
     if (!treePaths.length) send({ type: "list_files", query: "", chatId: activeIdRef.current });
     if (!grepQ.trim()) {
       setGrepHits([]);
+      setGrepHasMore(false);
+      setGrepNextOffset(undefined);
+      setGrepTotal(undefined);
       setGrepWait(false);
+      setGrepLoadingMore(false);
       return;
     }
     setGrepWait(true);
     setGrepHits([]);
+    setGrepHasMore(false);
+    setGrepNextOffset(undefined);
+    setGrepTotal(undefined);
+    setGrepLoadingMore(false);
     const timer = window.setTimeout(() => {
-      send({ type: "search_text", query: grepQ.trim(), chatId: activeIdRef.current });
+      send({ type: "search_text", query: grepQ.trim(), chatId: activeIdRef.current, offset: 0, limit: 50 });
     }, 250);
     return () => window.clearTimeout(timer);
   }, [grepOpen, grepQ, send, treePaths.length]);
@@ -2514,6 +2571,12 @@ export default function ChatApp() {
         // 在途的上传和分页都等不到应答了：元数据重连后按快照重推，正文退回加载前的状态
         inflightMetaRef.current = new Map();
         stateWaitRef.current = 0;
+        dirAppendingRef.current.clear();
+        setLoadingDirs({});
+        setGrepLoadingMore(false);
+        setGrepWait(false);
+        setAdminLoadingMore(false);
+        adminAppendRef.current = false;
         for (const [id, body] of [...bodyRef.current]) {
           if (body.state !== "loading") continue;
           if (body.prev === "complete") bodyRef.current.set(id, { state: "complete", rev: body.rev });
@@ -3476,7 +3539,23 @@ export default function ChatApp() {
     setNavOpen(false);
     setAssistantOpen(false);
     setAdminOpen(true);
-    send({ type: "admin_stats" });
+    adminAppendRef.current = false;
+    setAdminLoadingMore(false);
+    send({ type: "admin_stats", limit: 30 });
+  }
+
+  function loadMoreAdminStats() {
+    if (!isAdmin || !adminHasMore || !adminNextCursor || adminLoadingMore) return;
+    adminAppendRef.current = true;
+    setAdminLoadingMore(true);
+    send({ type: "admin_stats", cursor: adminNextCursor, limit: 30 });
+  }
+
+  function loadMoreGrep() {
+    const q = grepQRef.current.trim();
+    if (!q || !grepHasMore || grepNextOffset === undefined || grepLoadingMore) return;
+    setGrepLoadingMore(true);
+    send({ type: "search_text", query: q, chatId: activeIdRef.current, offset: grepNextOffset, limit: 50 });
   }
 
   function rememberLastModel(value: string) {
@@ -3569,7 +3648,15 @@ export default function ChatApp() {
   function handleExpandTreeDir(dir: string) {
     if (loadedDirsRef.current.has(dir)) return;
     setLoadingDirs((prev) => (prev[dir] ? prev : { ...prev, [dir]: true }));
-    send({ type: "list_files", query: "", dir, chatId: activeIdRef.current });
+    send({ type: "list_files", query: "", dir, chatId: activeIdRef.current, limit: 200 });
+  }
+
+  function handleLoadMoreTreeDir(dir: string) {
+    const cursor = dirNextCursorsRef.current[dir];
+    if (!cursor || loadingDirs[dir]) return;
+    dirAppendingRef.current.add(dir);
+    setLoadingDirs((prev) => ({ ...prev, [dir]: true }));
+    send({ type: "list_files", query: "", dir, chatId: activeIdRef.current, cursor, limit: 200 });
   }
 
   function handleTreeCreate(path: string, kind: "file" | "dir") {
@@ -5056,6 +5143,10 @@ export default function ChatApp() {
         adminStats={adminStats}
         cursorBill={cursorBill}
         adminStatsAt={adminStatsAt}
+        hasMore={adminHasMore}
+        loadingMore={adminLoadingMore}
+        totalCount={adminTotal}
+        onLoadMore={loadMoreAdminStats}
       /> : null}
       {searchShown ? <SearchOverlay
         searchOpen={searchOpen}
@@ -5229,6 +5320,10 @@ export default function ChatApp() {
         openFile={openFile}
         wideIDERef={wideIDERef}
         grepWait={grepWait}
+        grepHasMore={grepHasMore}
+        grepTotal={grepTotal}
+        grepLoadingMore={grepLoadingMore}
+        onLoadMoreGrep={loadMoreGrep}
         workspaceName={currentWorkspaceName}
         onSwitchMode={(nextMode) => {
           setGrepOpen(false);
@@ -5254,6 +5349,7 @@ export default function ChatApp() {
         loadingDirs={loadingDirs}
         truncatedDirs={truncatedDirs}
         onExpandDir={handleExpandTreeDir}
+        onLoadMoreDir={handleLoadMoreTreeDir}
         handlePickFile={handlePickFile}
         setNotice={setNotice}
         downloadWorkspaceFile={downloadWorkspaceFile}
@@ -5271,8 +5367,11 @@ export default function ChatApp() {
         }}
         onRefresh={() => {
           loadedDirsRef.current.clear();
+          dirNextCursorsRef.current = {};
+          dirAppendingRef.current.clear();
+          setTruncatedDirs({});
           setLoadingDirs({ "": true });
-          send({ type: "list_files", query: "", dir: "", chatId: activeIdRef.current });
+          send({ type: "list_files", query: "", dir: "", chatId: activeIdRef.current, limit: 200 });
           setNotice("已刷新工作区文件与源代码状态");
         }}
       /> : null}
@@ -5287,6 +5386,8 @@ export default function ChatApp() {
           operate={collab.operate}
           createGroup={collab.createGroup}
           updateGroup={collab.updateGroup}
+          loadMoreRooms={collab.loadMoreRooms}
+          loadOlderHistory={collab.loadOlderHistory}
           onOpenFile={(file) => {
             openFile(
               file.path,

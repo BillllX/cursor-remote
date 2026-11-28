@@ -217,7 +217,20 @@ extension ChatStore {
     /// P9：管理员拉全租户统计（非管理员发了也会被网关拒，入口按 isAdmin 隐藏）
     func requestAdminStats() {
         guard isAdmin else { return }
-        send(.adminStats)
+        adminStatsAppending = false
+        adminStatsLoadingMore = false
+        adminStatsHasMore = false
+        adminStatsNextCursor = nil
+        send(.adminStats(cursor: nil, limit: 30))
+    }
+
+    /// 分页续拉管理员全租户统计。
+    func loadMoreAdminStats() {
+        guard isAdmin, adminStatsHasMore, !adminStatsLoadingMore,
+              let cursor = adminStatsNextCursor, !cursor.isEmpty else { return }
+        adminStatsAppending = true
+        adminStatsLoadingMore = true
+        send(.adminStats(cursor: cursor, limit: 30))
     }
 
     /// 工作台打开时，活动会话要落到正在看的子工作区。助理壳还锁着时不切。
@@ -365,6 +378,9 @@ extension ChatStore {
         loadingDirsByChat.removeValue(forKey: id)
         truncatedDirsByChat.removeValue(forKey: id)
         loadedDirsByChat.removeValue(forKey: id)
+        dirNextCursorByChat.removeValue(forKey: id)
+        dirTotalByChat.removeValue(forKey: id)
+        dirAppendingByChat.removeValue(forKey: id)
         invalidateMergedFileTreeCache(for: id)
         mentionSuggestionsByChat.removeValue(forKey: id)
         mentionQueryByChat.removeValue(forKey: id)

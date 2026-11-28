@@ -153,7 +153,9 @@ struct FileTreeView: View {
     let selectedPath: String?
     var loadingDirs: Set<String> = []
     var truncatedDirs: Set<String> = []
+    var dirNextCursors: [String: String] = [:]
     var onExpandDir: ((String) -> Void)? = nil
+    var onLoadMoreDir: ((String) -> Void)? = nil
     let onOpen: (String) -> Void
     let onPick: (String) -> Void
     let onCopyPath: (String) -> Void
@@ -216,9 +218,40 @@ struct FileTreeView: View {
                             onQuickLook: { onQuickLook(node.path) }
                         )
                         .equatable()
+                        if node.isDir, isOpen, dirNextCursors[node.path] != nil, debouncedFilter.isEmpty {
+                            Button {
+                                onLoadMoreDir?(node.path)
+                            } label: {
+                                HStack(spacing: 6) {
+                                    if loadingDirs.contains(node.path) {
+                                        ProgressView().controlSize(.mini)
+                                        Text("正在加载更多文件…")
+                                    } else {
+                                        Text("加载此目录更多文件")
+                                    }
+                                }
+                                .font(JieboFont.text(.caption, weight: .medium))
+                                .foregroundStyle(JieboColor.pine)
+                                .padding(.leading, CGFloat((row.depth + 1) * 14 + 14))
+                                .padding(.vertical, 7)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(loadingDirs.contains(node.path))
+                        }
                     }
                 }
-                if (truncated || truncatedDirs.contains("") || paths.count > 8000) && debouncedFilter.isEmpty {
+                if dirNextCursors[""] != nil, debouncedFilter.isEmpty {
+                    PaginationLoadMoreRow(
+                        hasMore: true,
+                        loading: loadingDirs.contains(""),
+                        loadedCount: paths.count,
+                        label: "加载更多文件",
+                        autoLoad: false,
+                        onLoadMore: { onLoadMoreDir?("") }
+                    )
+                    .padding(.horizontal, 12)
+                }
+                if (truncated || truncatedDirs.contains("") || paths.count > 8000) && debouncedFilter.isEmpty && dirNextCursors[""] == nil {
                     // 网关会报 truncated；客户端 toTree 还有 8000 硬顶，旧网关多发时也要提示。
                     // 搜索时隐藏——用户已经在「缩小范围」，再提示「用搜索缩小范围」自相矛盾（GLM R2 MINOR）
                     Text("文件太多，清单被截断了，用搜索缩小范围。")

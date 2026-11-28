@@ -20,6 +20,8 @@ export function CollabShell({
   operate,
   createGroup,
   updateGroup,
+  loadMoreRooms,
+  loadOlderHistory,
   onOpenFile,
   onOpenAssistant,
   onOpenWorkspace,
@@ -40,6 +42,8 @@ export function CollabShell({
   ) => void;
   createGroup: (title: string, actorIds: string[]) => void;
   updateGroup: (convId: string, patch: { title?: string; actorIds?: string[]; archived?: boolean }) => void;
+  loadMoreRooms?: () => void;
+  loadOlderHistory?: (convId: string) => void;
   onOpenFile: (file: TurnFile) => void;
   onOpenAssistant: () => void;
   onOpenWorkspace: () => void;
@@ -126,6 +130,9 @@ export function CollabShell({
           }
         }}
         onOpenColleagues={onOpenColleagues}
+        roomsHasMore={state.roomsHasMore}
+        roomsLoading={state.roomsLoading}
+        onLoadMoreRooms={loadMoreRooms}
       />
       {room ? (
         <div className={styles.center}>
@@ -144,6 +151,9 @@ export function CollabShell({
             messages={messages}
             runs={runs}
             loading={Boolean(state.historyLoading[room.convId])}
+            hasOlder={Boolean(state.historyHasMore?.[room.convId])}
+            loadingOlder={Boolean(state.historyLoadingOlder?.[room.convId])}
+            onLoadOlder={loadOlderHistory ? () => loadOlderHistory(room.convId) : undefined}
             selectedTaskId={state.selectedTaskId}
             onBack={() => setMobileList(true)}
             onShowDetails={() => setInspectorOpen(true)}

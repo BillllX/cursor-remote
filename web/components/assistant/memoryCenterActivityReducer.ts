@@ -41,6 +41,7 @@ export type MemoryCenterActivityState = {
   restoreErrorByAuditId: Record<string, string>;
   restoreBusyByAuditId: Record<string, boolean>;
   suggestions: MemoryCenterSuggestionsData | null;
+  suggestionsCursor?: string | null;
   suggestionsGeneration: number;
   suggestionsLoadReqId: string | null;
   suggestionsError: string;
@@ -61,6 +62,7 @@ export const initialActivityState = (): MemoryCenterActivityState => ({
   restoreErrorByAuditId: {},
   restoreBusyByAuditId: {},
   suggestions: null,
+  suggestionsCursor: null,
   suggestionsGeneration: 0,
   suggestionsLoadReqId: null,
   suggestionsError: "",
@@ -95,7 +97,12 @@ function recomputeSuggestionBatch(state: MemoryCenterActivityState): SuggestionB
 export function registerActivityPending(
   state: MemoryCenterActivityState,
   req: ActivityPending,
-  opts?: { refreshActivity?: boolean; refreshSuggestions?: boolean; appendActivity?: boolean },
+  opts?: {
+    refreshActivity?: boolean;
+    refreshSuggestions?: boolean;
+    appendActivity?: boolean;
+    appendSuggestions?: boolean;
+  },
 ): MemoryCenterActivityState {
   const pending = [...state.pending.filter((row) => row.reqId !== req.reqId), req];
   let next: MemoryCenterActivityState = {
@@ -120,7 +127,7 @@ export function registerActivityPending(
       suggestionsGeneration: opts?.refreshSuggestions ? state.suggestionsGeneration + 1 : state.suggestionsGeneration,
       suggestionsLoadReqId: req.reqId,
       suggestionsError: "",
-      ...(opts?.refreshSuggestions ? { suggestions: null } : {}),
+      ...(opts?.refreshSuggestions && !opts.appendSuggestions ? { suggestions: null, suggestionsCursor: null } : {}),
     };
   }
   if (req.kind === "restore" && req.auditId) {
@@ -149,6 +156,7 @@ export function applyActivityResult(
   message: AssistantResultMessage,
   opts?: {
     appendActivity?: boolean;
+    appendSuggestions?: boolean;
     activityGeneration?: number;
     suggestionsGeneration?: number;
     activityCursor?: string | null;
@@ -210,7 +218,17 @@ export function applyActivityResult(
     if (!message.ok) return { ...next, suggestionsError: message.error || "加载建议失败" };
     const data = parseMemoryCenterSuggestionsData(message.data);
     if (!data) return { ...next, suggestionsError: "建议数据格式错误" };
-    return { ...next, suggestions: data, suggestionsError: "" };
+    const merged: MemoryCenterSuggestionsData =
+      opts?.appendSuggestions && state.suggestions
+        ? {
+            ...data,
+            entries: [
+              ...state.suggestions.entries,
+              ...data.entries.filter((row) => !state.suggestions!.entries.some((known) => known.id === row.id)),
+            ],
+          }
+        : data;
+    return { ...next, suggestions: merged, suggestionsCursor: data.nextCursor ?? null, suggestionsError: "" };
   }
 
   if (message.op === "memory_center_suggestion_answer") {

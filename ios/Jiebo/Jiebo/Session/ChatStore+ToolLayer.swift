@@ -94,12 +94,20 @@ extension ChatStore {
             searchHits = []
             searchTruncated = false
             searchLoading = false
+            searchTotal = nil
+            searchHasMore = false
+            searchNextOffset = nil
+            searchLoadingMore = false
             searchContentNote = ""
             return
         }
         searchLoading = true
+        searchLoadingMore = false
         searchHits = []
         searchTruncated = false
+        searchTotal = nil
+        searchHasMore = false
+        searchNextOffset = nil
         searchContentNote = ""
         let chatId = requestedId ?? activeId
         searchTask = Task { @MainActor in
@@ -118,8 +126,20 @@ extension ChatStore {
                 return
             }
             searchRequestChatId = chatId
-            send(.searchText(query: query, chatId: chatId))
+            send(.searchText(query: query, chatId: chatId, offset: 0, limit: 50))
         }
+    }
+
+    /// 翻页加载更多全文搜索命中。
+    func loadMoreSearchHits() {
+        guard unlocked, client.isOpen,
+              searchHasMore, !searchLoading, !searchLoadingMore,
+              let nextOffset = searchNextOffset,
+              let chatId = searchRequestChatId else { return }
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return }
+        searchLoadingMore = true
+        send(.searchText(query: query, chatId: chatId, offset: nextOffset, limit: 50))
     }
 
     /// 正文和改动都靠 read_file。还没登录或没连上时不发，免得八秒后写成读取超时。

@@ -8,6 +8,12 @@ struct ArtifactCenterView: View {
     @State private var searchText = ""
     @State private var kindFilter = ArtifactKindFilter.all
     @State private var presentation = ArtifactPresentation.recent
+    /// 分页拉取的更多历史产物
+    @State private var extraArtifacts: [Artifact] = []
+    @State private var artifactsHasMore = false
+    @State private var artifactsNextCursor: String? = nil
+    @State private var artifactsTotal: Int? = nil
+    @State private var artifactsLoadingMore = false
 
     private func versionKey(_ file: Artifact) -> String {
         guard let path = file.path, let chat = file.sourceChatId else { return file.id }
@@ -22,7 +28,17 @@ struct ArtifactCenterView: View {
 
     private func buildProjection() -> ArtifactProjection {
         // 单次筛选、排序、去重与历史版本归组，消除 ForEach 每行重复重算 allFiles 的 O(N² log N) 开销
-        let sorted = (store.assistantState?.artifacts ?? [])
+        let baseArtifacts = store.assistantState?.artifacts ?? []
+        let combinedArtifacts: [Artifact] = {
+            guard !extraArtifacts.isEmpty else { return baseArtifacts }
+            var seen = Set(baseArtifacts.map(\.id))
+            var out = baseArtifacts
+            for row in extraArtifacts where seen.insert(row.id).inserted {
+                out.append(row)
+            }
+            return out
+        }()
+        let sorted = combinedArtifacts
             .filter { item in
                 item.kind == "file"
                     && kindFilter.matches(item)
@@ -114,6 +130,22 @@ struct ArtifactCenterView: View {
                             JieboListHeader(group.title)
                         }
                     }
+                    if artifactsHasMore || artifactsLoadingMore {
+                        Section {
+                            PaginationLoadMoreRow(
+                                hasMore: artifactsHasMore,
+                                loading: artifactsLoadingMore,
+                                loadedCount: projection.artifacts.count,
+                                label: "加载更多文件",
+                                onLoadMore: {
+                                    if let cursor = artifactsNextCursor {
+                                        Task { await loadArtifactsPage(cursor: cursor, append: true) }
+                                    }
+                                }
+                            )
+                            .listRowBackground(JieboColor.white)
+                        }
+                    }
                 }
                 .listStyle(.insetGrouped)
                 .scrollContentBackground(.hidden)
@@ -140,7 +172,41 @@ struct ArtifactCenterView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             if embedded { filters }
         }
-        .task { if !embedded { store.requestAssistant() } }
+        .task {
+            if !embedded { store.requestAssistant() }
+            let baseCount = store.assistantState?.artifacts?.count ?? 0
+            if baseCount >= 40 && !artifactsHasMore && artifactsTotal == nil {
+                artifactsHasMore = true
+                artifactsNextCursor = String(baseCount)
+            }
+        }
+        .onChange(of: store.assistantState?.revision) { _, _ in
+            let baseCount = store.assistantState?.artifacts?.count ?? 0
+            extraArtifacts = []
+            artifactsTotal = nil
+            artifactsHasMore = baseCount >= 40
+            artifactsNextCursor = baseCount >= 40 ? String(baseCount) : nil
+        }
+    }
+
+    private func loadArtifactsPage(cursor: String?, append: Bool) async {
+        guard !artifactsLoadingMore else { return }
+        artifactsLoadingMore = true
+        defer { artifactsLoadingMore = false }
+        var args: [String: JSONValue] = ["kind": .string("artifacts"), "limit": .number(40)]
+        if let cursor, !cursor.isEmpty { args["cursor"] = .string(cursor) }
+        let reply = await store.assistantOpData("assistant_list_page", args: args)
+        guard reply.ok, let obj = reply.data?.object else { return }
+        let rows = (obj["items"]?.array ?? []).compactMap(Artifact.from)
+        if append {
+            var seen = Set(extraArtifacts.map(\.id))
+            extraArtifacts.append(contentsOf: rows.filter { seen.insert($0.id).inserted })
+        } else {
+            extraArtifacts = rows
+        }
+        artifactsTotal = obj["total"]?.int
+        artifactsHasMore = obj["hasMore"]?.bool ?? false
+        artifactsNextCursor = obj["nextCursor"]?.string?.nilIfEmpty
     }
 
     /// 类型和待处理页同一套分段；呈现方式放在导航栏菜单里，不再另做一颗玻璃胶囊。

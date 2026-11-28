@@ -20,6 +20,7 @@ import {
 } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { atomicWriteFileSync, withFileLockSync } from "../fsAtomic.ts";
+import { sliceOffsetPage } from "../pagination.ts";
 import { workspaceAgentById, readWorkspaceAgentFile, workspaceKey } from "./agents.ts";
 import type { Tenant } from "../tenants.ts";
 import type { SharedWorkspace, WorkspaceShareRequest } from "../../../shared/workspaceShare.ts";
@@ -389,7 +390,21 @@ export class WorkspaceSharing {
           /* 已移除或不可用的目录不出现在列表。 */
         }
       }
-      return { items };
+      if (request.cursor !== undefined || request.limit !== undefined) {
+        const paged = sliceOffsetPage(items, {
+          cursor: request.cursor,
+          limit: request.limit,
+          defaultLimit: 50,
+          maxLimit: 100,
+        });
+        return {
+          items: paged.items,
+          total: paged.total,
+          hasMore: paged.hasMore,
+          ...(paged.nextCursor ? { nextCursor: paged.nextCursor } : {}),
+        };
+      }
+      return { items, total: items.length, hasMore: false };
     }
     if (request.action === "people" || request.action === "set") {
       const workspace = this.owned(actor, request.workspace);
@@ -409,7 +424,31 @@ export class WorkspaceSharing {
         const grant = matchingGrant(this.getGrants());
         const memberIds = membersOf(grant);
         const managerIds = managersOf(grant);
-        return { people, memberIds, managerIds, memberRevision: revisionOf(memberIds, managerIds) };
+        if (request.cursor !== undefined || request.limit !== undefined) {
+          const paged = sliceOffsetPage(people, {
+            cursor: request.cursor,
+            limit: request.limit,
+            defaultLimit: 50,
+            maxLimit: 100,
+          });
+          return {
+            people: paged.items,
+            memberIds,
+            managerIds,
+            memberRevision: revisionOf(memberIds, managerIds),
+            total: paged.total,
+            hasMore: paged.hasMore,
+            ...(paged.nextCursor ? { nextCursor: paged.nextCursor } : {}),
+          };
+        }
+        return {
+          people,
+          memberIds,
+          managerIds,
+          memberRevision: revisionOf(memberIds, managerIds),
+          total: people.length,
+          hasMore: false,
+        };
       }
       if (
         !Array.isArray(request.memberIds) ||
@@ -475,10 +514,20 @@ export class WorkspaceSharing {
         entries.sort(
           (a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name, "zh-CN"),
         );
-        // 页的编码体积与 WS 有界，文件名仍按原样显示。
+        // 页的编码体积与 WS 有界，文件名仍按原样显示；支持游标分页突破 MAX_ENTRIES 硬截断。
+        const hasPaging = request.cursor !== undefined || request.limit !== undefined;
+        const paged = sliceOffsetPage(entries, {
+          cursor: request.cursor,
+          limit: request.limit,
+          defaultLimit: hasPaging ? 100 : MAX_ENTRIES,
+          maxLimit: MAX_ENTRIES,
+        });
         return {
-          items: entries.slice(0, MAX_ENTRIES).map((e) => ({ name: e.name, directory: e.isDirectory() })),
-          truncated: entries.length > MAX_ENTRIES,
+          items: paged.items.map((e) => ({ name: e.name, directory: e.isDirectory() })),
+          truncated: paged.hasMore,
+          total: paged.total,
+          hasMore: paged.hasMore,
+          ...(paged.nextCursor ? { nextCursor: paged.nextCursor } : {}),
         };
       });
     }

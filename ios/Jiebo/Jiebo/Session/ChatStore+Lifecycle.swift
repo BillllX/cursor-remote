@@ -176,6 +176,12 @@ extension ChatStore {
             self.fileIndexInFlight = [:]
             self.fileIndexRequestIds = [:]
             self.fileIndexForcePending = []
+            self.loadingDirsByChat = [:]
+            self.dirAppendingByChat = [:]
+            self.searchLoading = false
+            self.searchLoadingMore = false
+            self.adminStatsLoadingMore = false
+            self.adminStatsAppending = false
             for task in self.fileIndexTimeoutTasks.values { task.cancel() }
             self.fileIndexTimeoutTasks = [:]
             for task in self.fileIndexFallbackTasks.values { task.cancel() }
@@ -383,11 +389,20 @@ extension ChatStore {
         searchHits = []
         searchTruncated = false
         searchLoading = false
+        searchTotal = nil
+        searchHasMore = false
+        searchNextOffset = nil
+        searchLoadingMore = false
         searchContentNote = ""
         previewSaves.removeAll()
         adminStats = []
         cursorBill = nil
         adminStatsAt = nil
+        adminStatsTotal = nil
+        adminStatsHasMore = false
+        adminStatsNextCursor = nil
+        adminStatsLoadingMore = false
+        adminStatsAppending = false
         bannerError = ""
         notice = ""
         pendingImages = []
@@ -401,6 +416,9 @@ extension ChatStore {
         loadingDirsByChat = [:]
         truncatedDirsByChat = [:]
         loadedDirsByChat = [:]
+        dirNextCursorByChat = [:]
+        dirTotalByChat = [:]
+        dirAppendingByChat = [:]
         invalidateMergedFileTreeCache()
         fileBrowserOpen = false // 切租户/登出时文件浏览器不能还挂着（Grok R2 MINOR）
         mentionQueryByChat = [:]

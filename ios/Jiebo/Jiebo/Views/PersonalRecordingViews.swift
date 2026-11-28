@@ -536,6 +536,18 @@ struct PersonalRecordingPanel: View {
                         }
                         .listRowBackground(JieboColor.white)
                     }
+                    if model.hasMoreRemoteHistory || model.loadingMoreHistory {
+                        PaginationLoadMoreRow(
+                            hasMore: model.hasMoreRemoteHistory,
+                            loading: model.loadingMoreHistory,
+                            loadedCount: model.remoteSessions.count,
+                            label: "加载更早录音",
+                            onLoadMore: {
+                                Task { await model.loadMoreRemoteHistory(store: store) }
+                            }
+                        )
+                        .listRowBackground(JieboColor.white)
+                    }
                 }
             } header: {
                 Text("已同步与整理历史")
@@ -933,8 +945,14 @@ struct RecordingDetailView: View {
     @State private var transcriptQuery = ""
     @State private var appliedTranscriptQuery = ""
     @State private var cachedMatchedSegments: [RecordingTranscriptSegmentDTO] = []
+    @State private var segmentsTotalCount: Int? = nil
+    @State private var segmentsHasMore = false
+    @State private var segmentsNextCursor: String? = nil
+    @State private var segmentsLoadingMore = false
+    @State private var segmentsServerPaged = false
     @State private var transcriptFilterTask: Task<Void, Never>?
     @State private var segmentSearchTask: Task<Void, Never>?
+    @State private var segmentLoadMoreTask: Task<Void, Never>?
     @State private var showDeleteSheet = false
     @State private var deleteLinkedMemories = false
 
@@ -960,25 +978,90 @@ struct RecordingDetailView: View {
     private func refreshMatchedSegments() {
         segmentSearchTask?.cancel()
         segmentSearchTask = nil
+        segmentLoadMoreTask?.cancel()
+        segmentLoadMoreTask = nil
+        segmentsLoadingMore = false
+        let q = appliedTranscriptQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !store.tokenDraft.isEmpty {
+            segmentSearchTask = Task { @MainActor in
+                do {
+                    let page = try await RecordingAPI.fetchSegments(
+                        token: store.tokenDraft,
+                        sessionId: sessionId,
+                        cursor: nil,
+                        limit: 80,
+                        query: q.isEmpty ? nil : q
+                    )
+                    guard !Task.isCancelled else { return }
+                    segmentsServerPaged = true
+                    cachedMatchedSegments = page.items
+                    segmentsTotalCount = page.total
+                    segmentsHasMore = page.hasMore
+                    segmentsNextCursor = page.nextCursor
+                    return
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    // 旧网关无 /segments 接口时平滑回退至 result.segments 本地分段展示
+                    segmentsServerPaged = false
+                }
+                fallbackLocalSegments(query: q)
+            }
+            return
+        }
+        fallbackLocalSegments(query: q)
+    }
+
+    private func fallbackLocalSegments(query q: String) {
         guard let segs = result?.segments else {
             cachedMatchedSegments = []
+            segmentsTotalCount = nil
+            segmentsHasMore = false
+            segmentsNextCursor = nil
             return
         }
-        let q = appliedTranscriptQuery
-        if q.isEmpty {
-            cachedMatchedSegments = segs
-            return
-        }
-        if segs.count <= 200 {
-            cachedMatchedSegments = segs.filter { $0.text.localizedCaseInsensitiveContains(q) }
-            return
-        }
-        segmentSearchTask = Task { @MainActor in
-            let filtered = await Task.detached(priority: .userInitiated) {
-                segs.filter { $0.text.localizedCaseInsensitiveContains(q) }
-            }.value
-            guard !Task.isCancelled else { return }
-            cachedMatchedSegments = filtered
+        let filtered = q.isEmpty ? segs : segs.filter { $0.text.localizedCaseInsensitiveContains(q) }
+        let pageSize = 80
+        cachedMatchedSegments = Array(filtered.prefix(pageSize))
+        segmentsTotalCount = filtered.count
+        segmentsHasMore = filtered.count > pageSize
+        segmentsNextCursor = filtered.count > pageSize ? String(pageSize) : nil
+    }
+
+    private func loadMoreSegments() {
+        guard segmentsHasMore, !segmentsLoadingMore else { return }
+        let q = appliedTranscriptQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if segmentsServerPaged, let cursor = segmentsNextCursor, !store.tokenDraft.isEmpty {
+            segmentsLoadingMore = true
+            segmentLoadMoreTask?.cancel()
+            segmentLoadMoreTask = Task { @MainActor in
+                defer { segmentsLoadingMore = false }
+                do {
+                    let page = try await RecordingAPI.fetchSegments(
+                        token: store.tokenDraft,
+                        sessionId: sessionId,
+                        cursor: cursor,
+                        limit: 80,
+                        query: q.isEmpty ? nil : q
+                    )
+                    guard !Task.isCancelled,
+                          appliedTranscriptQuery.trimmingCharacters(in: .whitespacesAndNewlines) == q else { return }
+                    let seen = Set(cachedMatchedSegments.map(\.segmentId))
+                    let added = page.items.filter { !seen.contains($0.segmentId) }
+                    if !added.isEmpty { cachedMatchedSegments.append(contentsOf: added) }
+                    segmentsTotalCount = page.total
+                    segmentsHasMore = page.hasMore
+                    segmentsNextCursor = page.nextCursor
+                } catch {
+                    if !Task.isCancelled { toastMessage = error.localizedDescription }
+                }
+            }
+        } else if let segs = result?.segments {
+            let filtered = q.isEmpty ? segs : segs.filter { $0.text.localizedCaseInsensitiveContains(q) }
+            let nextCount = min(filtered.count, cachedMatchedSegments.count + 80)
+            cachedMatchedSegments = Array(filtered.prefix(nextCount))
+            segmentsTotalCount = filtered.count
+            segmentsHasMore = nextCount < filtered.count
+            segmentsNextCursor = nextCount < filtered.count ? String(nextCount) : nil
         }
     }
 
@@ -1193,8 +1276,19 @@ struct RecordingDetailView: View {
                         .padding(.vertical, 3)
                         .listRowBackground(JieboColor.white)
                     }
+                    if segmentsHasMore || segmentsLoadingMore {
+                        PaginationLoadMoreRow(
+                            hasMore: segmentsHasMore,
+                            loading: segmentsLoadingMore,
+                            loadedCount: matchedSegments.count,
+                            totalCount: segmentsTotalCount,
+                            label: "加载更多逐字稿",
+                            onLoadMore: { loadMoreSegments() }
+                        )
+                        .listRowBackground(JieboColor.white)
+                    }
                 } header: {
-                    Text("带时间戳逐字稿（\(matchedSegments.count) 段）")
+                    Text("带时间戳逐字稿（\(segmentsTotalCount ?? matchedSegments.count) 段）")
                 }
             } else {
                 Section {

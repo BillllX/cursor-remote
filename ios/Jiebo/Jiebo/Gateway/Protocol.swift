@@ -427,8 +427,8 @@ enum ClientMessage: Sendable {
     case approvalReply(chatId: String, callId: String, allow: Bool)
     case setPolicy(policy: String, chatId: String?)
     case uploadFile(chatId: String, name: String, data: String, mimeType: String?, id: String?)
-    case listFiles(query: String?, dir: String? = nil, chatId: String?, mention: Bool?, reqId: String?)
-    case searchText(query: String, chatId: String?)
+    case listFiles(query: String?, dir: String? = nil, chatId: String?, mention: Bool?, reqId: String?, cursor: String? = nil, limit: Int? = nil)
+    case searchText(query: String, chatId: String?, offset: Int? = nil, limit: Int? = nil)
     case revertFile(chatId: String, path: String)
     case listCheckpoints(chatId: String)
     case restore(chatId: String, checkpointId: String)
@@ -451,8 +451,8 @@ enum ClientMessage: Sendable {
     case loadChat(chatId: String, from: Int?, nonce: Int?)
     /// 重拉一份 stored_state（slim 客户端只有元数据和 preview）。digest 对账用它代替 load_chats，不下载整条正文
     case loadState
-    /// P9：管理员查询全租户使用统计（非管理员会被网关拒绝）
-    case adminStats
+    /// P9：管理员查询全租户使用统计（非管理员会被网关拒绝）；支持游标分页
+    case adminStats(cursor: String? = nil, limit: Int? = nil)
     /// 产品 Loop（docs/IDE.md L1）：开始 / 停止。调度在 L2，这里只发消息
     case loopStart(chatId: String, goal: String, intervalSec: Int, maxTicks: Int?, model: String?, mode: AgentMode?)
     case loopStop(chatId: String)
@@ -593,17 +593,21 @@ enum ClientMessage: Sendable {
             if let mimeType { object["mimeType"] = .string(mimeType) }
             if let id { object["id"] = .string(id) }
             return .object(object)
-        case .listFiles(let query, let dir, let chatId, let mention, let reqId):
+        case .listFiles(let query, let dir, let chatId, let mention, let reqId, let cursor, let limit):
             var object: [String: JSONValue] = ["type": .string("list_files")]
             if let query { object["query"] = .string(query) }
             if let dir { object["dir"] = .string(dir) }
             if let chatId { object["chatId"] = .string(chatId) }
             if let mention { object["mention"] = .bool(mention) }
             if let reqId, !reqId.isEmpty { object["reqId"] = .string(reqId) }
+            if let cursor, !cursor.isEmpty { object["cursor"] = .string(cursor) }
+            if let limit { object["limit"] = .number(Double(limit)) }
             return .object(object)
-        case .searchText(let query, let chatId):
+        case .searchText(let query, let chatId, let offset, let limit):
             var object: [String: JSONValue] = ["type": .string("search_text"), "query": .string(query)]
             if let chatId { object["chatId"] = .string(chatId) }
+            if let offset { object["offset"] = .number(Double(offset)) }
+            if let limit { object["limit"] = .number(Double(limit)) }
             return .object(object)
         case .revertFile(let chatId, let path):
             return .object([
@@ -664,8 +668,11 @@ enum ClientMessage: Sendable {
             return .object(obj)
         case .loadState:
             return .object(["type": .string("load_state")])
-        case .adminStats:
-            return .object(["type": .string("admin_stats")])
+        case .adminStats(let cursor, let limit):
+            var object: [String: JSONValue] = ["type": .string("admin_stats")]
+            if let cursor, !cursor.isEmpty { object["cursor"] = .string(cursor) }
+            if let limit { object["limit"] = .number(Double(limit)) }
+            return .object(object)
         case .loopStart(let chatId, let goal, let intervalSec, let maxTicks, let model, let mode):
             var object: [String: JSONValue] = [
                 "type": .string("loop_start"),
@@ -1602,7 +1609,14 @@ enum ServerMessage: Sendable {
     )
     case chatTitle(chatId: String, title: String)
     /// P9：admin_stats 应答（仅管理员收得到）。cursor 是当前 API Key 的官方账单
-    case adminStats(tenants: [AdminTenantStats], serverTime: Double, cursor: CursorBill?)
+    case adminStats(
+        tenants: [AdminTenantStats],
+        serverTime: Double,
+        cursor: CursorBill?,
+        tenantsTotal: Int? = nil,
+        tenantsHasMore: Bool = false,
+        tenantsNextCursor: String? = nil
+    )
     case loopState(
         chatId: String,
         status: String,
@@ -1625,9 +1639,21 @@ enum ServerMessage: Sendable {
         chatId: String?,
         status: [String: String],
         reqId: String?,
-        error: String?
+        error: String?,
+        total: Int? = nil,
+        hasMore: Bool = false,
+        nextCursor: String? = nil
     )
-    case searchHits(query: String, hits: [SearchHit], chatId: String?, truncated: Bool)
+    case searchHits(
+        query: String,
+        hits: [SearchHit],
+        chatId: String?,
+        truncated: Bool,
+        offset: Int = 0,
+        total: Int? = nil,
+        hasMore: Bool = false,
+        nextOffset: Int? = nil
+    )
     /// P5：read_file 的应答。文本内联 content；图片/PDF 等给 url+media 票据走 HTTP /media；
     /// headUrl 是图片/svg diff 的「改前」对照地址（rev=HEAD，P5c 图片 diff 用）
     case fileContent(
@@ -1690,7 +1716,7 @@ enum ServerMessage: Sendable {
             return chatId
         case .fileUploaded(_, let chatId, _, _, _, _):
             return chatId
-        case .files(_, _, _, _, _, let chatId, _, _, _):
+        case .files(_, _, _, _, _, let chatId, _, _, _, _, _, _):
             return chatId
         case .fileContent(_, let chatId, _, _, _, _, _, _, _, _, _, _, _):
             return chatId
@@ -1953,7 +1979,10 @@ enum ServerMessage: Sendable {
             return .adminStats(
                 tenants: object["tenants"]?.array?.compactMap(AdminTenantStats.from) ?? [],
                 serverTime: object["serverTime"]?.number ?? 0,
-                cursor: object["cursor"].flatMap(CursorBill.from)
+                cursor: object["cursor"].flatMap(CursorBill.from),
+                tenantsTotal: object["tenantsTotal"]?.int,
+                tenantsHasMore: object["tenantsHasMore"]?.bool ?? false,
+                tenantsNextCursor: object["tenantsNextCursor"]?.string
             )
         case "files":
             // 网关附带 git status（M/A/D/U/R），全量清单时写入 gitStatus
@@ -1966,14 +1995,21 @@ enum ServerMessage: Sendable {
                 chatId: object["chatId"]?.string,
                 status: gitLetters(object["status"]),
                 reqId: object["reqId"]?.string,
-                error: object["error"]?.string
+                error: object["error"]?.string,
+                total: object["total"]?.int,
+                hasMore: object["hasMore"]?.bool ?? false,
+                nextCursor: object["nextCursor"]?.string
             )
         case "search_hits":
             return .searchHits(
                 query: object["query"]?.string ?? "",
                 hits: object["hits"]?.array?.compactMap(SearchHit.from) ?? [],
                 chatId: object["chatId"]?.string,
-                truncated: object["truncated"]?.bool ?? false
+                truncated: object["truncated"]?.bool ?? false,
+                offset: object["offset"]?.int ?? 0,
+                total: object["total"]?.int,
+                hasMore: object["hasMore"]?.bool ?? false,
+                nextOffset: object["nextOffset"]?.int
             )
         case "file_content":
             let ticketRow = object["media"]?.object

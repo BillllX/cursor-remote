@@ -508,8 +508,11 @@ final class PersonalRecording {
     // 本机与服务端历史汇总
     private(set) var localRecords: [LocalRecordingSummary] = []
     private(set) var remoteSessions: [RecordingSessionStatusDTO] = []
+    private(set) var remoteNextCursor: String? = nil
     private(set) var loadingHistory = false
+    private(set) var loadingMoreHistory = false
     private(set) var historyError: String?
+    var hasMoreRemoteHistory: Bool { remoteNextCursor != nil }
     private(set) var localTotalBytes: Int64 = 0
     private(set) var localReclaimableBytes: Int64 = 0
 
@@ -775,12 +778,33 @@ final class PersonalRecording {
         defer { loadingHistory = false }
 
         do {
-            async let pageTask = RecordingAPI.listSessions(token: store.tokenDraft, limit: 50)
+            async let pageTask = RecordingAPI.listSessions(token: store.tokenDraft, limit: 30)
             async let capTask = try? RecordingAPI.fetchCapabilities(token: store.tokenDraft)
             let page = try await pageTask
             let cap = await capTask
             remoteSessions = page.items
+            remoteNextCursor = page.nextCursor?.isEmpty == false ? page.nextCursor : nil
             if let cap { capabilities = cap }
+        } catch {
+            historyError = error.localizedDescription
+        }
+    }
+
+    /// 分页续拉更早的云端录音会话。
+    func loadMoreRemoteHistory(store: ChatStore) async {
+        guard store.unlocked, !store.tokenDraft.isEmpty,
+              !loadingHistory, !loadingMoreHistory,
+              let cursor = remoteNextCursor, !cursor.isEmpty else { return }
+        loadingMoreHistory = true
+        defer { loadingMoreHistory = false }
+        do {
+            let page = try await RecordingAPI.listSessions(token: store.tokenDraft, limit: 30, cursor: cursor)
+            let existing = Set(remoteSessions.map(\.sessionId))
+            let added = page.items.filter { !existing.contains($0.sessionId) }
+            if !added.isEmpty {
+                remoteSessions.append(contentsOf: added)
+            }
+            remoteNextCursor = page.nextCursor?.isEmpty == false ? page.nextCursor : nil
         } catch {
             historyError = error.localizedDescription
         }

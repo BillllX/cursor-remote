@@ -265,6 +265,19 @@ struct ChatListView: View {
                     JieboListHeader(rows.chatted.isEmpty ? "平台上的人" : "还没聊过")
                 }
             }
+            if im.hasMoreConversations || im.loadingMoreConversations {
+                Section {
+                    PaginationLoadMoreRow(
+                        hasMore: im.hasMoreConversations,
+                        loading: im.loadingMoreConversations,
+                        loadedCount: im.convs.count,
+                        label: "加载更多会话",
+                        onLoadMore: { im.loadMoreConversations() }
+                    )
+                    .listRowBackground(JieboColor.paper)
+                    .listRowSeparator(.hidden)
+                }
+            }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)

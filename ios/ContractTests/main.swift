@@ -355,7 +355,7 @@ func sample(_ which: ClientCase) -> ClientMessage {
     case .loadChats: return .loadChats(ids: [chat, "c-child-5b10"])
     case .loadChat: return .loadChat(chatId: chat, from: 100, nonce: 3)
     case .loadState: return .loadState
-    case .adminStats: return .adminStats
+    case .adminStats: return .adminStats()
     case .loopStart:
         return .loopStart(chatId: chat, goal: "每小时检查一次构建", intervalSec: 3600, maxTicks: 24, model: "composer-2.5", mode: .agent)
     case .loopStop: return .loopStop(chatId: chat)
@@ -1625,7 +1625,7 @@ func checkBootstrapCacheAndAssistantSync() -> [String] {
     }
     if let decoded = try? ServerMessage.decode(from: Data(
         #"{"type":"files","chatId":"chat-a","query":"","paths":[],"error":"服务器正忙","reqId":"rq-files-1"}"#.utf8
-    )), case .files(_, _, _, _, _, let chatId, _, let reqId, let filesError) = decoded {
+    )), case .files(_, _, _, _, _, let chatId, _, let reqId, let filesError, _, _, _) = decoded {
         if chatId != "chat-a" || reqId != "rq-files-1" || filesError != "服务器正忙" {
             problems.append("list_files files.error：请求标识或错误文案没有原样解码")
         }
@@ -1634,7 +1634,7 @@ func checkBootstrapCacheAndAssistantSync() -> [String] {
     }
     if let decodedDir = try? ServerMessage.decode(from: Data(
         #"{"type":"files","chatId":"chat-a","query":"","dir":"牌照","paths":["牌照/README.md"],"truncated":false}"#.utf8
-    )), case .files(_, let dir, let paths, _, _, _, _, _, _) = decodedDir {
+    )), case .files(_, let dir, let paths, _, _, _, _, _, _, _, _, _) = decodedDir {
         if dir != "牌照" || paths != ["牌照/README.md"] {
             problems.append("list_files dir：单层目录响应未原样解码")
         }

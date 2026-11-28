@@ -45,17 +45,31 @@ extension ChatStore {
         memoryCenterExtrasStorage.skillsError
     }
 
-    func memoryCenterLoadSkills(workspace: String? = nil) {
+    func memoryCenterLoadSkills(workspace: String? = nil, append: Bool = false) {
         guard connected, unlocked else { return }
+        if append && (memoryCenterExtrasStorage.skillsLoading || !memoryCenterExtrasStorage.skillsHasMore) {
+            return
+        }
         let reqId = UUID().uuidString
         var next = memoryCenterExtrasStorage
         next.skillsLoading = true
         next.skillsLoadReqId = reqId
+        next.skillsLoadAppend = append
         next.skillsError = nil
+        if !append {
+            next.skillsWorkspace = workspace
+            next.skillsHasMore = false
+            next.skillsNextCursor = nil
+            next.skillsTotal = nil
+        }
         memoryCenterExtrasStorage = next
-        var args: [String: JSONValue] = [:]
-        if let workspace, !workspace.isEmpty, workspace != "folder-missing" {
-            args["workspace"] = .string(workspace)
+        var args: [String: JSONValue] = ["limit": .number(30)]
+        let targetWorkspace = append ? memoryCenterExtrasStorage.skillsWorkspace : workspace
+        if let targetWorkspace, !targetWorkspace.isEmpty, targetWorkspace != "folder-missing" {
+            args["workspace"] = .string(targetWorkspace)
+        }
+        if append, let cursor = memoryCenterExtrasStorage.skillsNextCursor, !cursor.isEmpty {
+            args["cursor"] = .string(cursor)
         }
         send(.assistantOp(op: "skill_factory_status", args: args, reqId: reqId))
     }
@@ -135,6 +149,9 @@ extension ChatStore {
 
     func memoryCenterLoadActivity(scope: String? = nil, action: String? = nil, append: Bool = false) {
         guard connected, unlocked else { return }
+        if append && (memoryCenterActivityLoading || memoryCenterExtrasStorage.activityCursor == nil) {
+            return
+        }
         let reqId = UUID().uuidString
         memoryCenterExtrasStorage = MemoryCenterExtrasReducer.beginActivityLoad(
             memoryCenterExtrasStorage,
@@ -150,14 +167,19 @@ extension ChatStore {
 
     func memoryCenterLoadSuggestions(scope: String? = nil, refresh: Bool = true) {
         guard connected, unlocked else { return }
+        if !refresh && (memoryCenterSuggestionsLoading || !memoryCenterExtrasStorage.suggestionsHasMore) {
+            return
+        }
+        let cursor = refresh ? nil : memoryCenterExtrasStorage.suggestionsCursor
         let reqId = UUID().uuidString
         memoryCenterExtrasStorage = MemoryCenterExtrasReducer.beginSuggestionsLoad(
             memoryCenterExtrasStorage,
             reqId: reqId,
             refresh: refresh
         )
-        var args: [String: JSONValue] = [:]
+        var args: [String: JSONValue] = ["limit": .number(40)]
         if let scope, !scope.isEmpty { args["scope"] = .string(scope) }
+        if let cursor, !cursor.isEmpty { args["cursor"] = .string(cursor) }
         send(.assistantOp(op: "memory_center_suggestions_get", args: args, reqId: reqId))
     }
 
@@ -191,8 +213,8 @@ extension ChatStore {
                     memoryCenterExtrasStorage,
                     reqId: reqId,
                     generation: memoryCenterExtrasStorage.pendingActivityReqIds[reqId] ?? memoryCenterExtrasStorage.activityGeneration,
-                    append: false,
-                    cursor: nil,
+                    append: memoryCenterExtrasStorage.activityLoadAppend,
+                    cursor: memoryCenterExtrasStorage.activityLoadRequestedCursor,
                     data: parsed
                 ) {
                     memoryCenterExtrasStorage = next
@@ -233,6 +255,7 @@ extension ChatStore {
                     memoryCenterExtrasStorage,
                     reqId: reqId,
                     generation: memoryCenterExtrasStorage.pendingSuggestionsReqIds[reqId] ?? memoryCenterExtrasStorage.suggestionsGeneration,
+                    append: memoryCenterExtrasStorage.suggestionsLoadAppend,
                     data: parsed
                 ) {
                     memoryCenterExtrasStorage = next
@@ -327,11 +350,21 @@ extension ChatStore {
         case "skill_factory_status":
             guard reqId == memoryCenterExtrasStorage.skillsLoadReqId else { return true }
             var next = memoryCenterExtrasStorage
+            let wasAppending = next.skillsLoadAppend
             next.skillsLoading = false
             next.skillsLoadReqId = nil
+            next.skillsLoadAppend = false
             if ok, let parsed = SkillFactoryStatusData.from(data) {
-                next.skillRows = parsed.skills
-                next.skillProposals = parsed.proposals
+                if wasAppending {
+                    let seen = Set(next.skillRows.map { "\($0.id)|\($0.entry)" })
+                    next.skillRows.append(contentsOf: parsed.skills.filter { !seen.contains("\($0.id)|\($0.entry)") })
+                } else {
+                    next.skillRows = parsed.skills
+                    next.skillProposals = parsed.proposals
+                }
+                next.skillsHasMore = parsed.skillsHasMore
+                next.skillsNextCursor = parsed.skillsNextCursor
+                next.skillsTotal = parsed.skillsTotal
                 next.skillsError = nil
             } else {
                 next.skillsError = error ?? "技能工厂加载失败"

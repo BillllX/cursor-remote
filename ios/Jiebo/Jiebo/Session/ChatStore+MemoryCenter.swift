@@ -52,15 +52,30 @@ extension ChatStore {
     /// WebSocket 断开：取消在途请求状态，保留已解码缓存
     func memoryCenterOnDisconnect() {
         memoryCenterCancelSearchDebounce()
-        guard !memoryCenterData.pending.isEmpty
+        if !memoryCenterData.pending.isEmpty
             || memoryCenterData.loadingOverview
             || memoryCenterData.loadingScope
             || memoryCenterData.loadingSearch
             || memoryCenterData.activeOverviewReqId != nil
             || memoryCenterData.activeScopeReqId != nil
-            || memoryCenterData.activeSearchReqId != nil
-        else { return }
-        memoryCenterData = MemoryCenterReducer.flushInFlight(memoryCenterData)
+            || memoryCenterData.activeSearchReqId != nil {
+            memoryCenterData = MemoryCenterReducer.flushInFlight(memoryCenterData)
+        }
+        if memoryCenterExtrasStorage.skillsLoading
+            || !memoryCenterExtrasStorage.pendingActivityReqIds.isEmpty
+            || !memoryCenterExtrasStorage.pendingSuggestionsReqIds.isEmpty {
+            var next = memoryCenterExtrasStorage
+            next.skillsLoading = false
+            next.skillsLoadReqId = nil
+            next.skillsLoadAppend = false
+            next.pendingActivityReqIds = [:]
+            next.activityLoadReqId = nil
+            next.activityLoadAppend = false
+            next.pendingSuggestionsReqIds = [:]
+            next.suggestionsLoadReqId = nil
+            next.suggestionsLoadAppend = false
+            memoryCenterExtrasStorage = next
+        }
     }
 
     func memoryTidy() {
@@ -93,19 +108,38 @@ extension ChatStore {
         memoryCenterSendGet(scopeId: scopeId, replaceSameKind: true)
     }
 
-    func memoryCenterSendGet(scopeId: String?, replaceSameKind: Bool = false) {
+    func memoryCenterSendGet(
+        scopeId: String?,
+        replaceSameKind: Bool = false,
+        cursor: String? = nil,
+        limit: Int? = nil,
+        append: Bool = false
+    ) {
         guard connected, unlocked else { return }
         let reqId = UUID().uuidString
         let kind: MemoryCenterRequestKind = scopeId == nil ? .overview : .scope
-        let pending = MemoryCenterPendingRequest(reqId: reqId, kind: kind, scopeId: scopeId, query: nil)
+        let pending = MemoryCenterPendingRequest(reqId: reqId, kind: kind, scopeId: scopeId, query: nil, append: append)
         memoryCenterData = MemoryCenterReducer.registerPending(
             memoryCenterData,
             req: pending,
             replaceSameKind: replaceSameKind || kind == .scope
         )
         var args: [String: JSONValue] = [:]
-        if let scopeId { args["scope"] = .string(scopeId) }
+        if let scopeId {
+            args["scope"] = .string(scopeId)
+            args["limit"] = .number(Double(limit ?? 50))
+            if let cursor, !cursor.isEmpty { args["cursor"] = .string(cursor) }
+        }
         send(.assistantOp(op: "memory_center_get", args: args, reqId: reqId))
+    }
+
+    /// 记忆中心当前文件夹条目翻页续拉。
+    func memoryCenterLoadMoreScopeItems() {
+        guard let detail = memoryCenterData.detail,
+              detail.itemsHasMore,
+              let cursor = detail.itemsNextCursor,
+              !memoryCenterData.loadingScope else { return }
+        memoryCenterSendGet(scopeId: detail.scope.id, replaceSameKind: true, cursor: cursor, limit: 50, append: true)
     }
 
     /// 这次搜索发不出去。nil 表示已经连上，可以搜。
@@ -124,7 +158,10 @@ extension ChatStore {
         scope: String?,
         kind: String?,
         state: String?,
-        replaceSameKind: Bool = true
+        replaceSameKind: Bool = true,
+        cursor: String? = nil,
+        limit: Int = 30,
+        append: Bool = false
     ) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -142,13 +179,33 @@ extension ChatStore {
             state: stateTag
         )
         let reqId = UUID().uuidString
-        let pending = MemoryCenterPendingRequest(reqId: reqId, kind: .search, scopeId: scope, query: trimmed)
+        let pending = MemoryCenterPendingRequest(reqId: reqId, kind: .search, scopeId: scope, query: trimmed, append: append)
         memoryCenterData = MemoryCenterReducer.registerPending(memoryCenterData, req: pending, replaceSameKind: replaceSameKind)
-        var args: [String: JSONValue] = ["query": .string(trimmed)]
+        var args: [String: JSONValue] = ["query": .string(trimmed), "limit": .number(Double(limit))]
+        if let cursor, !cursor.isEmpty { args["cursor"] = .string(cursor) }
         if scopeTag != "all", !scopeTag.isEmpty { args["scope"] = .string(scopeTag) }
         if kindTag != "all", !kindTag.isEmpty { args["kind"] = .string(kindTag) }
         if stateTag != "all", !stateTag.isEmpty { args["state"] = .string(stateTag) }
         send(.assistantOp(op: "memory_center_search", args: args, reqId: reqId))
+    }
+
+    /// 记忆中心全文搜索结果翻页续拉。
+    func memoryCenterLoadMoreSearch() {
+        guard let last = memoryCenterLastSearch,
+              let search = memoryCenterData.search,
+              search.hasMore,
+              let cursor = search.nextCursor,
+              !memoryCenterData.loadingSearch else { return }
+        memoryCenterSendSearch(
+            query: last.query,
+            scope: last.scope == "all" ? nil : last.scope,
+            kind: last.kind == "all" ? nil : last.kind,
+            state: last.state == "all" ? nil : last.state,
+            replaceSameKind: true,
+            cursor: cursor,
+            limit: 30,
+            append: true
+        )
     }
 
     func memoryCenterScheduleSearch(

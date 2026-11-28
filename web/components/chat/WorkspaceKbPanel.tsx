@@ -11,6 +11,7 @@ import type {
 } from "@shared/protocol";
 import { buildAssistantOpMessage } from "@shared/assistantOp";
 import { FileGlyph } from "../FileTree";
+import { PaginationBar } from "../PaginationBar";
 import { WorkspaceScheduleSection } from "./WorkspaceScheduleSection";
 
 const WECOM_SOURCE_TYPE_LABELS: Record<KbWecomWatchedItemSummary["sourceType"], string> = {
@@ -86,6 +87,12 @@ export function WorkspaceKbPanel({
   const [watchNoteDraft, setWatchNoteDraft] = useState("");
   const [expandedWatchPreviewIds, setExpandedWatchPreviewIds] = useState<Record<string, boolean>>({});
   const [expandedLogBatchIds, setExpandedLogBatchIds] = useState<Record<string, boolean>>({});
+  // 归档日志分页状态（突破 kb_workspace_status 快照的 25 条截断）
+  const [extraIngestLogs, setExtraIngestLogs] = useState<KbWorkspaceIngestLogItem[]>([]);
+  const [ingestLogsHasMore, setIngestLogsHasMore] = useState(false);
+  const [ingestLogsCursor, setIngestLogsCursor] = useState<string | undefined>(undefined);
+  const [ingestLogsTotal, setIngestLogsTotal] = useState<number | undefined>(undefined);
+  const [ingestLogsLoadingMore, setIngestLogsLoadingMore] = useState(false);
 
   const pendingReqIdsRef = useRef(new Set<string>());
   const silentReqIdsRef = useRef(new Set<string>());
@@ -158,6 +165,11 @@ export function WorkspaceKbPanel({
     setExpandedLogBatchIds({});
     pendingReqIdsRef.current.clear();
     setStatus(null);
+    setExtraIngestLogs([]);
+    setIngestLogsHasMore(false);
+    setIngestLogsCursor(undefined);
+    setIngestLogsTotal(undefined);
+    setIngestLogsLoadingMore(false);
     setLastScheduleResult(undefined);
     sendKbOperation(buildAssistantOpMessage("kb_workspace_status", { workspace: workspaceKey }));
   }, [workspaceKey, sendKbOperation, clearPollTimer]);
@@ -170,6 +182,31 @@ export function WorkspaceKbPanel({
       if (!isSilent && !isExplicit) continue;
       if (isExplicit) consumed = true;
       const op = result.op;
+      if (op === "kb_workspace_list_page") {
+        setIngestLogsLoadingMore(false);
+        if (!result.ok) {
+          if (!isSilent) setErrorText(result.error || "加载历史归档记录失败");
+          continue;
+        }
+        const page = result.data as {
+          workspace?: string;
+          kind?: string;
+          items?: KbWorkspaceIngestLogItem[];
+          total?: number;
+          hasMore?: boolean;
+          nextCursor?: string;
+        } | undefined;
+        if (!page || page.workspace !== workspaceKey || page.kind !== "ingestLogs") continue;
+        const rows = page.items ?? [];
+        setExtraIngestLogs((prev) => {
+          const seen = new Set(prev.map((row) => row.batchId));
+          return [...prev, ...rows.filter((row) => !seen.has(row.batchId))];
+        });
+        setIngestLogsTotal(page.total);
+        setIngestLogsHasMore(Boolean(page.hasMore));
+        setIngestLogsCursor(page.nextCursor);
+        continue;
+      }
       if (
         op !== "kb_workspace_status" &&
         op !== "kb_workspace_init" &&
@@ -186,6 +223,14 @@ export function WorkspaceKbPanel({
       const data = result.data as KbWorkspaceStatusData | undefined;
       if (!data || data.workspaceKey !== workspaceKey) continue;
       setStatus(data);
+      if (op === "kb_workspace_status") {
+        setExtraIngestLogs([]);
+        const initialCount = data.ingestLogs?.length ?? 0;
+        // 若首页刚好满 25 条，允许用户点击拉取后续历史批次
+        setIngestLogsHasMore(initialCount >= 25);
+        setIngestLogsCursor(initialCount >= 25 ? String(initialCount) : undefined);
+        setIngestLogsTotal(undefined);
+      }
       if (!isSilent) setErrorText("");
       if (!editingKb) {
         setKbTitleDraft(data.title || `${workspaceName} 知识库`);
@@ -1213,7 +1258,12 @@ export function WorkspaceKbPanel({
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {status.ingestLogs.map((log: KbWorkspaceIngestLogItem) => {
+              {[
+                ...status.ingestLogs,
+                ...extraIngestLogs.filter(
+                  (extra) => !status.ingestLogs?.some((base) => base.batchId === extra.batchId),
+                ),
+              ].map((log: KbWorkspaceIngestLogItem) => {
                 const isRunning = log.status === "queued" || log.status === "processing";
                 const isFailed = log.status === "failed";
                 const isPartial = log.status === "partial";
@@ -1358,6 +1408,32 @@ export function WorkspaceKbPanel({
                   </div>
                 );
               })}
+              <PaginationBar
+                hasMore={ingestLogsHasMore}
+                loading={ingestLogsLoadingMore}
+                loadedCount={
+                  (status.ingestLogs?.length ?? 0) +
+                  extraIngestLogs.filter(
+                    (extra) => !status.ingestLogs?.some((base) => base.batchId === extra.batchId),
+                  ).length
+                }
+                totalCount={ingestLogsTotal}
+                label="加载更早归档记录"
+                compact
+                onLoadMore={() => {
+                  if (ingestLogsLoadingMore) return;
+                  setIngestLogsLoadingMore(true);
+                  sendKbOperation(
+                    buildAssistantOpMessage("kb_workspace_list_page", {
+                      workspace: workspaceKey,
+                      kind: "ingestLogs",
+                      cursor: ingestLogsCursor ?? String(status.ingestLogs?.length ?? 0),
+                      limit: 25,
+                    }),
+                    true,
+                  );
+                }}
+              />
             </div>
           )}
         </div>

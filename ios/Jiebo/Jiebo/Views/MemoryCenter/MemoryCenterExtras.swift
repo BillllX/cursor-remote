@@ -34,6 +34,14 @@ struct MemoryCenterActivityPane: View {
                 }
                 .assistantCard()
             }
+            PaginationLoadMoreRow(
+                hasMore: store.memoryCenterExtrasStorage.activityCursor != nil,
+                loading: store.memoryCenterActivityLoading && !store.memoryCenterActivityRows.isEmpty,
+                loadedCount: store.memoryCenterActivityRows.count,
+                label: "加载更早活动",
+                autoLoad: false,
+                onLoadMore: { store.memoryCenterLoadActivity(append: true) }
+            )
         }
         .onAppear { store.memoryCenterLoadActivity() }
     }
@@ -145,6 +153,15 @@ struct MemoryCenterSuggestionsPane: View {
                 }
                 .assistantCard()
             }
+            PaginationLoadMoreRow(
+                hasMore: store.memoryCenterExtrasStorage.suggestionsHasMore,
+                loading: store.memoryCenterSuggestionsLoading && !store.memoryCenterSuggestionRows.isEmpty,
+                loadedCount: store.memoryCenterSuggestionRows.count,
+                totalCount: store.memoryCenterExtrasStorage.suggestionsTotal,
+                label: "加载更多建议",
+                autoLoad: false,
+                onLoadMore: { store.memoryCenterLoadSuggestions(refresh: false) }
+            )
         }
     }
 }
@@ -291,6 +308,15 @@ struct MemoryCenterSkillsPane: View {
                     skillRowView(sk)
                 }
             }
+            PaginationLoadMoreRow(
+                hasMore: store.memoryCenterExtrasStorage.skillsHasMore,
+                loading: store.memoryCenterSkillsLoading && !store.memoryCenterSkillRows.isEmpty,
+                loadedCount: store.memoryCenterSkillRows.count,
+                totalCount: store.memoryCenterExtrasStorage.skillsTotal,
+                label: "加载更多技能",
+                autoLoad: false,
+                onLoadMore: { store.memoryCenterLoadSkills(append: true) }
+            )
         }
         .onAppear { store.memoryCenterLoadSkills() }
     }

@@ -8,8 +8,14 @@ struct MemoryCenterExtrasDataState: Sendable, Hashable {
     var activityGeneration = 0
     var activityLoadReqId: String?
     var activityCursor: String?
+    var activityLoadAppend = false
+    var activityLoadRequestedCursor: String?
     var suggestionsGeneration = 0
     var suggestionsLoadReqId: String?
+    var suggestionsCursor: String?
+    var suggestionsHasMore = false
+    var suggestionsTotal: Int?
+    var suggestionsLoadAppend = false
     var pendingActivityReqIds: [String: Int] = [:]
     var pendingSuggestionsReqIds: [String: Int] = [:]
     var restoreReqByAuditId: [String: String] = [:]
@@ -31,6 +37,11 @@ struct MemoryCenterExtrasDataState: Sendable, Hashable {
     var skillProposals: [SkillFactoryProposalRow] = []
     var skillsLoading = false
     var skillsLoadReqId: String?
+    var skillsLoadAppend = false
+    var skillsHasMore = false
+    var skillsNextCursor: String?
+    var skillsTotal: Int?
+    var skillsWorkspace: String?
     var skillsDecideReqById: [String: String] = [:]
     var skillsError: String?
 
@@ -44,6 +55,11 @@ enum MemoryCenterExtrasReducer {
             next.activityGeneration += 1
             next.activityRows = []
             next.activityCursor = nil
+            next.activityLoadAppend = false
+            next.activityLoadRequestedCursor = nil
+        } else {
+            next.activityLoadAppend = true
+            next.activityLoadRequestedCursor = state.activityCursor
         }
         next.activityLoadReqId = reqId
         next.pendingActivityReqIds[reqId] = next.activityGeneration
@@ -56,6 +72,12 @@ enum MemoryCenterExtrasReducer {
         if refresh {
             next.suggestionsGeneration += 1
             next.suggestionRows = []
+            next.suggestionsCursor = nil
+            next.suggestionsHasMore = false
+            next.suggestionsTotal = nil
+            next.suggestionsLoadAppend = false
+        } else {
+            next.suggestionsLoadAppend = true
         }
         next.suggestionsLoadReqId = reqId
         next.pendingSuggestionsReqIds[reqId] = next.suggestionsGeneration
@@ -109,17 +131,28 @@ enum MemoryCenterExtrasReducer {
         _ state: MemoryCenterExtrasDataState,
         reqId: String,
         generation: Int,
+        append: Bool = false,
         data: MemoryCenterSuggestionsData?
     ) -> MemoryCenterExtrasDataState? {
         guard state.pendingSuggestionsReqIds[reqId] == generation else { return nil }
         guard reqId == state.suggestionsLoadReqId else { return nil }
         var next = state
         next.pendingSuggestionsReqIds.removeValue(forKey: reqId)
+        next.suggestionsLoadAppend = false
         guard let data else {
             next.suggestionsError = "数据格式错误"
             return next
         }
-        next.suggestionRows = MemoryCenterSuggestionRow.rows(from: data)
+        let incoming = MemoryCenterSuggestionRow.rows(from: data)
+        if append {
+            let seen = Set(next.suggestionRows.map(\.id))
+            next.suggestionRows.append(contentsOf: incoming.filter { !seen.contains($0.id) })
+        } else {
+            next.suggestionRows = incoming
+        }
+        next.suggestionsHasMore = data.hasMore
+        next.suggestionsCursor = data.nextCursor
+        next.suggestionsTotal = data.total
         next.suggestionsError = nil
         return next
     }

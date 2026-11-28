@@ -187,8 +187,13 @@ final class ImStore {
         }
     }
     var toast = ""
+    /// 会话列表分页状态（首屏拉 40 条，底部滚动/点击继续翻页，不再后台一次性全量拉完）
+    private(set) var hasMoreConversations = false
+    private(set) var loadingMoreConversations = false
 
     @ObservationIgnored private var listPaging = false
+    @ObservationIgnored private var listNextCursor: String? = nil
+    @ObservationIgnored private var listAppendingPage = false
     @ObservationIgnored private var listSeen: Set<String> = []
     @ObservationIgnored private var listTouched: Set<String> = []
     /// 当前这页 im_list 发出之后收到过实时更新（im_message / im_ack / im_update）或本机刚改过的会话：
@@ -696,8 +701,8 @@ final class ImStore {
                 }
                 listSeen.insert(row.convId)
             }
-            if !more, listPaging {
-                // 列表里没有了的会话（对方不可见、全被拒收）从本机去掉；翻页期间新来的保留
+            if !more, listPaging, !listAppendingPage {
+                // 仅当整张列表从头到尾拉完且已无后续页时，清理不再可见的旧会话；翻页加载期间不误删
                 for id in Array(nextConvs.keys) where !listSeen.contains(id) && !listTouched.contains(id) {
                     nextConvs[id] = nil
                     convsChanged = true
@@ -726,28 +731,31 @@ final class ImStore {
             }
             let nextBlocked = Set(blockedIds)
             if blocked != nextBlocked { blocked = nextBlocked }
-            if more, let cursor {
-                // 下一页由网关在这之后算：之前到过的实时更新它都已经包含了
-                liveSinceListRequest = []
-                send(.imList(cursor: cursor, limit: 100))
-                return
-            }
+            // 按页停住：记录下一页游标，由用户滚动到底部或点击“加载更多会话”按需继续拉取
+            let nextHasMore = more && (cursor?.isEmpty == false)
+            if hasMoreConversations != nextHasMore { hasMoreConversations = nextHasMore }
+            listNextCursor = nextHasMore ? cursor : nil
+            let wasAppending = listAppendingPage
+            listAppendingPage = false
+            loadingMoreConversations = false
             listPaging = false
-            listSeen = []
-            listTouched = []
+            if !nextHasMore {
+                listSeen = []
+                listTouched = []
+            }
             listLoaded = true
-            lastListSuccessAt = Date()
+            if !wasAppending { lastListSuccessAt = Date() }
             catchUp()
             scheduleRead(visibleConvId)
             saveStateSoon()
             // 有行因为实时更新被跳过（只复查一次），或翻页期间又有要对账的事（别的设备读过、回前台）：再拉一遍
-            let recheck = listSkipped && !listRechecking
+            let recheck = !wasAppending && listSkipped && !listRechecking
             liveSinceListRequest = []
             listSkipped = false
             listRechecking = recheck
             if recheck {
                 refreshList()
-            } else if listStale {
+            } else if !wasAppending && listStale {
                 refreshList(respectingFreshness: true)
             }
         case .history(let convId, let messages, let more, let ticket, let before, let after):
@@ -929,6 +937,8 @@ final class ImStore {
         liveSinceListRequest = []
         listSkipped = false
         listRechecking = false
+        loadingMoreConversations = false
+        listAppendingPage = false
     }
 
     @discardableResult
@@ -1083,10 +1093,23 @@ final class ImStore {
         lifecycleRefreshTask = nil
         listStale = false
         listPaging = true
+        listAppendingPage = false
+        loadingMoreConversations = false
+        listNextCursor = nil
         listSeen = []
         listTouched = []
         liveSinceListRequest = []
-        send(.imList(cursor: nil, limit: 100))
+        send(.imList(cursor: nil, limit: 40))
+    }
+
+    /// 按需加载下一页历史会话（底部滚动哨兵或手动点击触发）。
+    func loadMoreConversations() {
+        guard online, !listPaging, !loadingMoreConversations, hasMoreConversations, let cursor = listNextCursor else { return }
+        listPaging = true
+        listAppendingPage = true
+        loadingMoreConversations = true
+        liveSinceListRequest = []
+        send(.imList(cursor: cursor, limit: 40))
     }
 
     private func scheduleLifecycleRefresh() {

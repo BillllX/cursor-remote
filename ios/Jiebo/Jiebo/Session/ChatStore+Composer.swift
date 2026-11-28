@@ -228,13 +228,26 @@ extension ChatStore {
         return merged
     }
 
-    /// 请求单层目录（dir == "" 为工作区根目录），用于文件浏览器逐层按需展开
+    /// 请求单层目录（dir == "" 为工作区根目录），用于文件浏览器逐层按需展开与分页加载
     func requestDirFiles(dir: String, chatId: String? = nil, force: Bool = false) {
         let targetId = chatId ?? activeId
         guard connected, unlocked, gatewayReady else { return }
         if !force, loadedDirsByChat[targetId]?.contains(dir) == true { return }
         loadingDirsByChat[targetId, default: []].insert(dir)
-        send(.listFiles(query: "", dir: dir, chatId: targetId, mention: nil, reqId: UUID().uuidString))
+        dirNextCursorByChat[targetId]?.removeValue(forKey: dir)
+        dirAppendingByChat[targetId]?.remove(dir)
+        send(.listFiles(query: "", dir: dir, chatId: targetId, mention: nil, reqId: UUID().uuidString, cursor: nil, limit: 200))
+    }
+
+    /// 续拉某一目录的下一页文件条目。
+    func loadMoreDirFiles(dir: String, chatId: String? = nil) {
+        let targetId = chatId ?? activeId
+        guard connected, unlocked, gatewayReady else { return }
+        guard loadingDirsByChat[targetId]?.contains(dir) != true else { return }
+        guard let cursor = dirNextCursorByChat[targetId]?[dir], !cursor.isEmpty else { return }
+        loadingDirsByChat[targetId, default: []].insert(dir)
+        dirAppendingByChat[targetId, default: []].insert(dir)
+        send(.listFiles(query: "", dir: dir, chatId: targetId, mention: nil, reqId: UUID().uuidString, cursor: cursor, limit: 200))
     }
 
     func receiveDirFiles(
@@ -242,14 +255,34 @@ extension ChatStore {
         dir: String,
         paths: [String],
         truncated: Bool,
-        status: [String: String]
+        status: [String: String],
+        total: Int? = nil,
+        hasMore: Bool = false,
+        nextCursor: String? = nil
     ) {
         guard !deletedIds.contains(chatId) else { return }
+        let wasAppend = dirAppendingByChat[chatId]?.remove(dir) != nil
         loadedDirsByChat[chatId, default: []].insert(dir)
         loadingDirsByChat[chatId]?.remove(dir)
-        dirEntriesByChat[chatId, default: [:]][dir] = paths
+        if wasAppend, var existing = dirEntriesByChat[chatId]?[dir] {
+            var seen = Set(existing)
+            for p in paths where seen.insert(p).inserted {
+                existing.append(p)
+            }
+            dirEntriesByChat[chatId, default: [:]][dir] = existing
+        } else {
+            dirEntriesByChat[chatId, default: [:]][dir] = paths
+        }
+        if hasMore, let nextCursor, !nextCursor.isEmpty {
+            dirNextCursorByChat[chatId, default: [:]][dir] = nextCursor
+        } else {
+            dirNextCursorByChat[chatId]?.removeValue(forKey: dir)
+        }
+        if let total {
+            dirTotalByChat[chatId, default: [:]][dir] = total
+        }
         invalidateMergedFileTreeCache(for: chatId)
-        if truncated {
+        if truncated && !hasMore {
             truncatedDirsByChat[chatId, default: []].insert(dir)
         } else {
             truncatedDirsByChat[chatId]?.remove(dir)

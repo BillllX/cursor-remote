@@ -16,6 +16,7 @@ import type {
   WorkspaceMemoryItem,
 } from "../../../shared/protocol.ts";
 import { isInside } from "../pathInside.ts";
+import { parseOffsetCursor, sliceOffsetPage } from "../pagination.ts";
 import {
   CORE_FIELDS,
   CORE_TOKEN_BUDGET,
@@ -683,45 +684,64 @@ function personalOverview(ref: TenantRef) {
   };
 }
 
-function personalItems(ref: TenantRef): WorkspaceMemoryItem[] {
-  return listMemory(ref)
-    .entries.slice(0, MAX_SCOPE_ITEMS)
-    .map((entry) => {
-      const clipped = clipItemText(entry.text);
-      return {
+function personalItemsPage(ref: TenantRef, page?: { cursor?: string; limit?: number }) {
+  const all = listMemory(ref).entries;
+  const paged = sliceOffsetPage(all, {
+    cursor: page?.cursor,
+    limit: page?.limit,
+    defaultLimit: page?.cursor || page?.limit ? 50 : MAX_SCOPE_ITEMS,
+    maxLimit: MAX_SCOPE_ITEMS,
+  });
+  const items: WorkspaceMemoryItem[] = paged.items.map((entry) => {
+    const clipped = clipItemText(entry.text);
+    return {
+      id: entry.id,
+      kind: "personal" as const,
+      layer: "L0" as const,
+      scopeId: "personal",
+      section: entry.topic,
+      text: clipped.text,
+      truncated: clipped.truncated,
+      refs: [],
+      missingRefs: [],
+      at: entry.updatedAt.slice(0, 10),
+      from: entry.source?.chatId ?? null,
+      state: entry.invalidAt ? "done" : "hot",
+      effectiveState: isValid(entry) ? "hot" : "expired",
+      pinned: entry.basis === "user_said",
+      used: entry.lastUsedAt?.slice(0, 10) ?? null,
+      uses: undefined,
+      expires: entry.validUntil ?? null,
+      revision: personalMemoryRevision({
         id: entry.id,
-        kind: "personal" as const,
-        layer: "L0" as const,
-        scopeId: "personal",
-        section: entry.topic,
-        text: clipped.text,
-        truncated: clipped.truncated,
-        refs: [],
-        missingRefs: [],
-        at: entry.updatedAt.slice(0, 10),
-        from: entry.source?.chatId ?? null,
-        state: entry.invalidAt ? "done" : "hot",
-        effectiveState: isValid(entry) ? "hot" : "expired",
-        pinned: entry.basis === "user_said",
-        used: entry.lastUsedAt?.slice(0, 10) ?? null,
-        uses: undefined,
-        expires: entry.validUntil ?? null,
-        revision: personalMemoryRevision({
-          id: entry.id,
-          rev: entry.rev,
-          topic: entry.topic,
-          text: entry.text,
-        }),
-      };
-    });
+        rev: entry.rev,
+        topic: entry.topic,
+        text: entry.text,
+      }),
+    };
+  });
+  return {
+    items,
+    itemsTotal: paged.total,
+    itemsHasMore: paged.hasMore,
+    itemsNextCursor: paged.nextCursor,
+    itemsTruncated: paged.hasMore,
+  };
 }
 
-function workPreferenceItems(ref: TenantRef): WorkspaceMemoryItem[] {
+function workPreferenceItemsPage(ref: TenantRef, page?: { cursor?: string; limit?: number }) {
   const lines = readCore(ref)
     .fields[WORK_PREF_FIELD].split("\n")
     .map((line) => line.replace(/^\s*[-*•]\s*/, "").trim())
     .filter(Boolean);
-  return lines.slice(0, MAX_SCOPE_ITEMS).map((text, index) => {
+  const paged = sliceOffsetPage(lines, {
+    cursor: page?.cursor,
+    limit: page?.limit,
+    defaultLimit: page?.cursor || page?.limit ? 50 : MAX_SCOPE_ITEMS,
+    maxLimit: MAX_SCOPE_ITEMS,
+  });
+  const items: WorkspaceMemoryItem[] = paged.items.map((text, idx) => {
+    const index = paged.offset + idx;
     const clipped = clipItemText(text);
     return {
       id: `wp-${index + 1}`,
@@ -737,13 +757,24 @@ function workPreferenceItems(ref: TenantRef): WorkspaceMemoryItem[] {
       revision: workPreferenceRevision(text, index),
     };
   });
+  return {
+    items,
+    itemsTotal: paged.total,
+    itemsHasMore: paged.hasMore,
+    itemsNextCursor: paged.nextCursor,
+    itemsTruncated: paged.hasMore,
+  };
 }
 
-function workspaceDetail(ref: TenantRef, scope: ScopeRecord, root: string): MemoryCenterScopeDetail {
+function workspaceDetail(
+  ref: TenantRef,
+  scope: ScopeRecord,
+  root: string,
+  page?: { cursor?: string; limit?: number },
+): MemoryCenterScopeDetail {
   const absDir = scope.absDir!;
   const read = readScopeMemory(absDir, root);
-  let items: WorkspaceMemoryItem[] = [];
-  let itemsTruncated = false;
+  const items: WorkspaceMemoryItem[] = [];
   let diagnostics: InjectionDiagnostics | null = null;
   let scopeSummary = buildScopeSummary(ref, scope, root);
   if (!read.ok) {
@@ -751,18 +782,46 @@ function workspaceDetail(ref: TenantRef, scope: ScopeRecord, root: string): Memo
     return { scope: scopeSummary, items: [], rules: [], diagnostics: null };
   }
   if (read.fileTruncated) {
-    scopeSummary = { ...scopeSummary, error: `memory.md 超过 ${MAX_MEMORY_FILE_BYTES} 字节上限`, errorCode: "too_large", health: "degraded" };
+    scopeSummary = {
+      ...scopeSummary,
+      error: `memory.md 超过 ${MAX_MEMORY_FILE_BYTES} 字节上限`,
+      errorCode: "too_large",
+      health: "degraded",
+    };
   }
-  if (read.lines.length > MAX_SCOPE_ITEMS) itemsTruncated = true;
+  const paged = sliceOffsetPage(read.lines, {
+    cursor: page?.cursor,
+    limit: page?.limit,
+    defaultLimit: page?.cursor || page?.limit ? 50 : MAX_SCOPE_ITEMS,
+    maxLimit: MAX_SCOPE_ITEMS,
+  });
   let textBudget = MAX_SCOPE_ITEM_TEXT_CHARS;
-  for (const line of read.lines.slice(0, MAX_SCOPE_ITEMS)) {
+  let budgetTruncated = false;
+  for (const line of paged.items) {
     const clipped = clipItemText(line.text, Math.min(MAX_ITEM_TEXT_CHARS, textBudget));
     textBudget -= clipped.text.length;
     items.push(toWorkspaceItem(line, scope, absDir, clipped.text, clipped.truncated));
     if (textBudget <= 0) {
-      itemsTruncated = true;
+      budgetTruncated = true;
       break;
     }
+  }
+  const nextOffset = paged.offset + items.length;
+  const itemsHasMore = nextOffset < read.lines.length;
+  const itemsNextCursor = itemsHasMore ? String(nextOffset) : undefined;
+  const itemsTruncated = itemsHasMore || budgetTruncated;
+  // 续页（offset > 0）免重复解析规则与注入诊断，首屏已拉取过。
+  if (paged.offset > 0) {
+    return {
+      scope: scopeSummary,
+      items,
+      rules: [],
+      diagnostics: null,
+      itemsTruncated,
+      itemsTotal: read.lines.length,
+      itemsHasMore,
+      ...(itemsNextCursor ? { itemsNextCursor } : {}),
+    };
   }
   try {
     diagnostics = planMemoryInjection(absDir, scope.tokenBudget, "", root)?.diagnostics ?? null;
@@ -772,7 +831,12 @@ function workspaceDetail(ref: TenantRef, scope: ScopeRecord, root: string): Memo
   const cap = { left: MAX_RULE_PAYLOAD_CHARS };
   const ruleRead = readRuleFiles(absDir, scope.id, cap);
   if (ruleRead.readError) {
-    scopeSummary = { ...scopeSummary, error: ruleRead.readError, errorCode: ruleRead.readErrorCode, health: "degraded" };
+    scopeSummary = {
+      ...scopeSummary,
+      error: ruleRead.readError,
+      errorCode: ruleRead.readErrorCode,
+      health: "degraded",
+    };
   }
   return {
     scope: scopeSummary,
@@ -780,6 +844,9 @@ function workspaceDetail(ref: TenantRef, scope: ScopeRecord, root: string): Memo
     rules: ruleRead.rules,
     diagnostics,
     itemsTruncated,
+    itemsTotal: read.lines.length,
+    itemsHasMore,
+    ...(itemsNextCursor ? { itemsNextCursor } : {}),
     rulesPayloadTruncated: cap.left <= 0,
   };
 }
@@ -788,6 +855,14 @@ function trimGetPayload(data: MemoryCenterGetData): MemoryCenterGetData {
   if (payloadBytes(data) <= MAX_RESPONSE_JSON_BYTES) return data;
   let payloadTruncated = true;
   if (data.mode === "detail") {
+    const originalCount = data.detail.items.length;
+    const prevNextOffset = data.detail.itemsNextCursor ? parseOffsetCursor(data.detail.itemsNextCursor) : undefined;
+    const startOffset =
+      prevNextOffset !== undefined
+        ? Math.max(0, prevNextOffset - originalCount)
+        : data.detail.itemsTotal !== undefined
+          ? Math.max(0, data.detail.itemsTotal - originalCount)
+          : 0;
     let detail = { ...data.detail, rules: [...data.detail.rules], items: [...data.detail.items] };
     while (
       payloadBytes({ mode: "detail", detail, payloadTruncated }) > MAX_RESPONSE_JSON_BYTES &&
@@ -800,6 +875,16 @@ function trimGetPayload(data: MemoryCenterGetData): MemoryCenterGetData {
       detail.items.length
     ) {
       detail.items.pop();
+    }
+    if (detail.items.length < originalCount) {
+      detail.itemsTruncated = true;
+      if (detail.items.length > 0) {
+        detail.itemsHasMore = true;
+        detail.itemsNextCursor = String(startOffset + detail.items.length);
+      } else {
+        detail.itemsHasMore = false;
+        delete detail.itemsNextCursor;
+      }
     }
     detail.items = detail.items.map((item) => {
       const clipped = clipItemText(item.text, 240);
@@ -829,22 +914,41 @@ function trimGetPayload(data: MemoryCenterGetData): MemoryCenterGetData {
 
 function trimSearchPayload(data: MemoryCenterSearchData): MemoryCenterSearchData {
   if (payloadBytes(data) <= MAX_RESPONSE_JSON_BYTES) return data;
+  const originalCount = data.hits.length;
+  const prevNextOffset = data.nextCursor ? parseOffsetCursor(data.nextCursor) : undefined;
+  const startOffset =
+    prevNextOffset !== undefined
+      ? Math.max(0, prevNextOffset - originalCount)
+      : data.total !== undefined
+        ? Math.max(0, data.total - originalCount)
+        : 0;
   let hits = [...data.hits];
-  let payloadTruncated = true;
-  while (payloadBytes({ hits, truncated: data.truncated, payloadTruncated }) > MAX_RESPONSE_JSON_BYTES && hits.length) {
+  const payloadTruncated = true;
+  while (payloadBytes({ ...data, hits, truncated: true, payloadTruncated }) > MAX_RESPONSE_JSON_BYTES && hits.length) {
     hits.pop();
   }
   hits = hits.map((hit) => {
     const clipped = clipItemText(hit.text, 240);
     return { ...hit, text: clipped.text };
   });
-  return { hits, truncated: true, payloadTruncated };
+  const trimmed = hits.length < originalCount;
+  const hasMore = trimmed ? hits.length > 0 : Boolean(data.hasMore);
+  const nextCursor = trimmed ? (hits.length > 0 ? String(startOffset + hits.length) : undefined) : data.nextCursor;
+  return {
+    ...data,
+    hits,
+    truncated: true,
+    payloadTruncated,
+    hasMore,
+    ...(nextCursor ? { nextCursor } : { nextCursor: undefined }),
+  };
 }
 
 export function memoryCenterGet(
   tenant: WorkspaceRoot,
   workspaceNames: string[],
   scopeArg?: string,
+  page?: { cursor?: string; limit?: number },
 ): MemoryCenterGetData {
   const discovered = discoverScopes(tenant, workspaceNames);
   if (!scopeArg?.trim()) {
@@ -910,33 +1014,41 @@ export function memoryCenterGet(
     });
   }
   if (resolved.scope.id === "personal") {
+    const paged = personalItemsPage(resolved.ref, page);
     return trimGetPayload({
       mode: "detail",
       detail: {
         scope: buildScopeSummary(resolved.ref, resolved.scope, resolved.root),
-        items: personalItems(resolved.ref),
+        items: paged.items,
         rules: [],
         diagnostics: null,
-        itemsTruncated: listMemory(resolved.ref).entries.length > MAX_SCOPE_ITEMS,
+        itemsTruncated: paged.itemsTruncated,
+        itemsTotal: paged.itemsTotal,
+        itemsHasMore: paged.itemsHasMore,
+        ...(paged.itemsNextCursor ? { itemsNextCursor: paged.itemsNextCursor } : {}),
       },
     });
   }
   if (resolved.scope.id === "work_preference") {
-    const lines = readCore(resolved.ref)
-      .fields[WORK_PREF_FIELD].split("\n")
-      .filter((line) => line.trim());
+    const paged = workPreferenceItemsPage(resolved.ref, page);
     return trimGetPayload({
       mode: "detail",
       detail: {
         scope: buildScopeSummary(resolved.ref, resolved.scope, resolved.root),
-        items: workPreferenceItems(resolved.ref),
+        items: paged.items,
         rules: [],
         diagnostics: null,
-        itemsTruncated: lines.length > MAX_SCOPE_ITEMS,
+        itemsTruncated: paged.itemsTruncated,
+        itemsTotal: paged.itemsTotal,
+        itemsHasMore: paged.itemsHasMore,
+        ...(paged.itemsNextCursor ? { itemsNextCursor: paged.itemsNextCursor } : {}),
       },
     });
   }
-  return trimGetPayload({ mode: "detail", detail: workspaceDetail(resolved.ref, resolved.scope, resolved.root) });
+  return trimGetPayload({
+    mode: "detail",
+    detail: workspaceDetail(resolved.ref, resolved.scope, resolved.root, page),
+  });
 }
 
 function searchReasonsForLine(
@@ -1104,7 +1216,7 @@ function workPreferenceSearchHits(ref: TenantRef, query: string, stateFilter?: s
 export function memoryCenterSearch(
   tenant: WorkspaceRoot,
   workspaceNames: string[],
-  input: { query: string; scope?: string; kind?: string; state?: string },
+  input: { query: string; scope?: string; kind?: string; state?: string; cursor?: string; limit?: number },
 ): { ok: true; data: MemoryCenterSearchData } | { ok: false; error: string } {
   const query = input.query?.trim() ?? "";
   if (!query) return { ok: false, error: "query 不能为空。" };
@@ -1121,8 +1233,13 @@ export function memoryCenterSearch(
   }
   const kind = input.kind?.trim() as MemoryCenterKind | undefined;
   const stateFilter = input.state?.trim() as MemoryCenterState | undefined;
-  const limit = MAX_SEARCH_HITS;
-  const candidateLimit = limit + 1;
+  const pagedLimit =
+    typeof input.limit === "number" && Number.isFinite(input.limit) && input.limit >= 1
+      ? Math.min(Math.floor(input.limit), 100)
+      : MAX_SEARCH_HITS;
+  const cursorOffset =
+    typeof input.cursor === "string" && /^\d+$/.test(input.cursor.trim()) ? Number(input.cursor.trim()) : 0;
+  const candidateLimit = Math.min(cursorOffset + pagedLimit + 1, 500);
   const needles = personalNeedles(discovered.ref);
   const pooled: MemoryCenterSearchHit[] = [];
   const include = (rows: MemoryCenterSearchHit[]) => {
@@ -1153,6 +1270,20 @@ export function memoryCenterSearch(
     );
   }
   pooled.sort((a, b) => b.score - a.score);
-  const truncated = pooled.length > limit;
-  return { ok: true, data: trimSearchPayload({ hits: pooled.slice(0, limit), truncated }) };
+  const paged = sliceOffsetPage(pooled, {
+    cursor: input.cursor,
+    limit: pagedLimit,
+    defaultLimit: MAX_SEARCH_HITS,
+    maxLimit: 100,
+  });
+  return {
+    ok: true,
+    data: trimSearchPayload({
+      hits: paged.items,
+      truncated: paged.hasMore,
+      total: paged.total,
+      hasMore: paged.hasMore,
+      ...(paged.nextCursor ? { nextCursor: paged.nextCursor } : {}),
+    }),
+  };
 }

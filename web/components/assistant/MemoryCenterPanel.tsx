@@ -12,6 +12,7 @@ import type {
   RuleFile,
   WorkspaceMemoryItem,
 } from "@shared/protocol";
+import { PaginationBar } from "../PaginationBar";
 import styles from "./memoryCenter.module.css";
 import {
   INJECTION_REASON_LABEL,
@@ -154,6 +155,7 @@ export default function MemoryCenterPanel({
   const [folderMenu, setFolderMenu] = useState<FolderMenu>("useful");
   const [switchingFolder, setSwitchingFolder] = useState(false);
   const [composer, setComposer] = useState<"create" | "edit" | null>(null);
+  const [meVisibleLimit, setMeVisibleLimit] = useState(30);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -415,6 +417,16 @@ export default function MemoryCenterPanel({
             </ul>
           </div>
         ))}
+        <PaginationBar
+          hasMore={Boolean(mc.data.search?.hasMore)}
+          loading={mc.data.loadingSearch}
+          loadedCount={hits.length}
+          totalCount={mc.data.search?.total}
+          label="加载更多搜索结果"
+          compact
+          autoLoad
+          onLoadMore={mc.loadMoreSearch}
+        />
       </>
     );
   }
@@ -488,7 +500,7 @@ export default function MemoryCenterPanel({
           <>
             <div className="side-label" style={{ marginTop: 10 }}>个人记忆条目（{entries.length} 条）</div>
             <ul className="assistant-list">
-              {entries.map((entry) => (
+              {entries.slice(0, meVisibleLimit).map((entry) => (
                 <ItemRow
                   key={entry.id}
                   title={entry.topic || "一条记忆"}
@@ -525,6 +537,16 @@ export default function MemoryCenterPanel({
                 />
               ))}
             </ul>
+            {entries.length > meVisibleLimit ? (
+              <PaginationBar
+                hasMore
+                loadedCount={Math.min(meVisibleLimit, entries.length)}
+                totalCount={entries.length}
+                label="加载更多个人记忆"
+                compact
+                onLoadMore={() => setMeVisibleLimit((prev) => prev + 30)}
+              />
+            ) : null}
           </>
         ) : null}
         {prefDetail?.items.length ? (
@@ -671,6 +693,16 @@ export default function MemoryCenterPanel({
             />
           ))}
         </ul>
+        <PaginationBar
+          hasMore={Boolean(folderDetail?.itemsHasMore)}
+          loading={mc.data.loadingScope}
+          loadedCount={folderDetail?.items.length}
+          totalCount={folderDetail?.itemsTotal}
+          label="加载更多记忆条目"
+          compact
+          autoLoad
+          onLoadMore={mc.loadMoreScopeItems}
+        />
         {!emptyFile && folderDetail && !folderItems.length ? <p className={styles.subline}>这个筛选里没有。换一个，或看全部。</p> : null}
 
         {/* 底部折叠：上一轮注入诊断与审计快捷入口 */}
@@ -808,7 +840,8 @@ export default function MemoryCenterPanel({
           <p className={styles.subline}>重复、日期和搬家后的文件，用「梳理一遍」处理。这里的卡片可以不点。</p>
           <MemoryCenterSuggestionsPane
             state={mc.activity}
-            onRefresh={mc.loadSuggestions}
+            onRefresh={() => mc.loadSuggestions(true, false)}
+            onLoadMore={mc.loadMoreSuggestions}
             onAnswer={mc.answerSuggestion}
             onAcceptAllLowRisk={mc.acceptAllLowRisk}
           />

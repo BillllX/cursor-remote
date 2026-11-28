@@ -998,7 +998,16 @@ struct MemoryCenterScopeItemsContent: View {
                         selectedKey = MemoryCenterReducer.itemKey(scopeId: first.scopeId, id: first.id)
                     }
                 }
-                if detail.itemsTruncated {
+                if detail.itemsHasMore || store.memoryCenterData.loadingScope {
+                    PaginationLoadMoreRow(
+                        hasMore: detail.itemsHasMore,
+                        loading: store.memoryCenterData.loadingScope,
+                        loadedCount: detail.items.count,
+                        totalCount: detail.itemsTotal,
+                        label: "加载更多记忆",
+                        onLoadMore: { store.memoryCenterLoadMoreScopeItems() }
+                    )
+                } else if detail.itemsTruncated {
                     MemoryCenterBanner(text: "有一部分没列全", tone: .warn)
                 }
                 if detail.scope.kind == "workspace_memory" {
@@ -1245,9 +1254,29 @@ struct MemoryCenterSearchList: View {
                 let appearance = JieboTheme.shared.appearance
                 if embedInList {
                     hitRows(search.hits, scopeLabelMap: scopeLabelMap, palette: palette, appearance: appearance)
+                    if search.hasMore || store.memoryCenterData.loadingSearch {
+                        PaginationLoadMoreRow(
+                            hasMore: search.hasMore,
+                            loading: store.memoryCenterData.loadingSearch,
+                            loadedCount: search.hits.count,
+                            totalCount: search.total,
+                            label: "加载更多匹配",
+                            onLoadMore: { store.memoryCenterLoadMoreSearch() }
+                        )
+                    }
                 } else {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         hitRows(search.hits, scopeLabelMap: scopeLabelMap, palette: palette, appearance: appearance)
+                        if search.hasMore || store.memoryCenterData.loadingSearch {
+                            PaginationLoadMoreRow(
+                                hasMore: search.hasMore,
+                                loading: store.memoryCenterData.loadingSearch,
+                                loadedCount: search.hits.count,
+                                totalCount: search.total,
+                                label: "加载更多匹配",
+                                onLoadMore: { store.memoryCenterLoadMoreSearch() }
+                            )
+                        }
                     }
                 }
             }

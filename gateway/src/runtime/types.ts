@@ -150,4 +150,11 @@ export type WorkspaceFile = {
   hasHead?: boolean;
 };
 
-export type WorkspaceFiles = { paths: string[]; status: Record<string, string>; truncated: boolean };
+export type WorkspaceFiles = {
+  paths: string[];
+  status: Record<string, string>;
+  truncated: boolean;
+  total?: number;
+  hasMore?: boolean;
+  nextCursor?: string;
+};

@@ -60,6 +60,7 @@
 		CD1234567890ABCDEF003303 /* RecordingOutbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD1234567890ABCDEF001303 /* RecordingOutbox.swift */; };
 		CD1234567890ABCDEF003304 /* RecordingModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD1234567890ABCDEF001304 /* RecordingModels.swift */; };
 		CD1234567890ABCDEF003305 /* PersonalRecordingViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD1234567890ABCDEF001305 /* PersonalRecordingViews.swift */; };
+		CD1234567890ABCDEF003401 /* PaginationFooter.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD1234567890ABCDEF001401 /* PaginationFooter.swift */; };
 		CD1234567890ABCDEF003302 /* PersonalRecording.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD1234567890ABCDEF001302 /* PersonalRecording.swift */; };
 		CD1234567890ABCDEF003301 /* AudioSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD1234567890ABCDEF001301 /* AudioSessionCoordinator.swift */; };
 		A1B2C3D4E5F6071829000400 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000015 /* Assets.xcassets */; };
@@ -274,6 +275,7 @@
 		CD1234567890ABCDEF001303 /* RecordingOutbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingOutbox.swift; sourceTree = "<group>"; };
 		CD1234567890ABCDEF001304 /* RecordingModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingModels.swift; sourceTree = "<group>"; };
 		CD1234567890ABCDEF001305 /* PersonalRecordingViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonalRecordingViews.swift; sourceTree = "<group>"; };
+		CD1234567890ABCDEF001401 /* PaginationFooter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaginationFooter.swift; sourceTree = "<group>"; };
 		CD1234567890ABCDEF001302 /* PersonalRecording.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonalRecording.swift; sourceTree = "<group>"; };
 		CD1234567890ABCDEF001301 /* AudioSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSessionCoordinator.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000700 /* PhoneRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneRouter.swift; sourceTree = "<group>"; };
@@ -595,6 +597,7 @@
 				A1B2C3D4E5F6071829000739 /* LinkStatusDot.swift */,
 				A1B2C3D4E5F6071829000740 /* ThemeSettingsSheet.swift */,
 				CD1234567890ABCDEF001305 /* PersonalRecordingViews.swift */,
+				CD1234567890ABCDEF001401 /* PaginationFooter.swift */,
 				ICON000101 /* AppIconPicker.swift */,
 				A1B2C3D4E5F6071829000741 /* ChatRowActions.swift */,
 				A1B2C3D4E5F6071829000113 /* ThreadView.swift */,
@@ -1009,6 +1012,7 @@
 				CD1234567890ABCDEF003303 /* RecordingOutbox.swift in Sources */,
 				CD1234567890ABCDEF003304 /* RecordingModels.swift in Sources */,
 				CD1234567890ABCDEF003305 /* PersonalRecordingViews.swift in Sources */,
+				CD1234567890ABCDEF003401 /* PaginationFooter.swift in Sources */,
 				CD1234567890ABCDEF003302 /* PersonalRecording.swift in Sources */,
 				CD1234567890ABCDEF003301 /* AudioSessionCoordinator.swift in Sources */,
 			);

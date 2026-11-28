@@ -638,7 +638,9 @@ export function SharedWorkspaceFiles({
   onUnavailable: () => void;
 }) {
   const [section, setSection] = useState<WorkspaceNavId>(canAsk ? "chats" : "files");
-  const [folders, setFolders] = useState<Record<string, { items: SharedFileEntry[]; truncated: boolean }>>({});
+  const [folders, setFolders] = useState<
+    Record<string, { items: SharedFileEntry[]; truncated: boolean; hasMore?: boolean; nextCursor?: string }>
+  >({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [uploadDir, setUploadDir] = useState("");
   const [file, setFile] = useState<OpenFile>();
@@ -678,17 +680,41 @@ export function SharedWorkspaceFiles({
     if (reason.code === "UNAVAILABLE") onUnavailable();
     else setStatus(reason.message);
   }
-  async function loadFolder(path: string, force = false) {
-    if (pendingDirs.current.has(path) || (!force && foldersRef.current[path])) return;
+  async function loadFolder(path: string, force = false, cursor?: string) {
+    if (pendingDirs.current.has(path) || (!force && !cursor && foldersRef.current[path])) return;
     pendingDirs.current.add(path);
     setLoading((previous) => ({ ...previous, [path]: true }));
     try {
-      const data = await call<{ items: SharedFileEntry[]; truncated: boolean }>({
+      const data = await call<{
+        items: SharedFileEntry[];
+        truncated: boolean;
+        hasMore?: boolean;
+        nextCursor?: string;
+      }>({
         action: "files",
         workspace: workspace.id,
         path,
+        limit: 100,
+        ...(cursor ? { cursor } : {}),
       });
-      if (active.current) setFolders((previous) => ({ ...previous, [path]: data }));
+      if (active.current) {
+        setFolders((previous) => {
+          const existing = cursor ? previous[path]?.items ?? [] : [];
+          const seen = new Set(existing.map((e) => `${e.directory ? "d" : "f"}:${e.name}`));
+          const merged = cursor
+            ? [...existing, ...data.items.filter((e) => !seen.has(`${e.directory ? "d" : "f"}:${e.name}`))]
+            : data.items;
+          return {
+            ...previous,
+            [path]: {
+              items: merged,
+              truncated: Boolean(data.hasMore ?? data.truncated),
+              hasMore: data.hasMore,
+              nextCursor: data.nextCursor,
+            },
+          };
+        });
+      }
     } catch (error) {
       fail(error);
     } finally {
@@ -908,6 +934,10 @@ export function SharedWorkspaceFiles({
                     onExpandDir={(path) => {
                       setUploadDir(path);
                       void loadFolder(path);
+                    }}
+                    onLoadMoreDir={(path) => {
+                      const nextCursor = foldersRef.current[path]?.nextCursor;
+                      if (nextCursor) void loadFolder(path, false, nextCursor);
                     }}
                     onPick={(path) => void open(path)}
                   />

@@ -6,6 +6,7 @@ import type {
   MemoryCenterActivityEntry,
   MemoryCenterSuggestionEntry,
 } from "@shared/protocol";
+import { PaginationBar } from "../PaginationBar";
 import styles from "./memoryCenter.module.css";
 import { lowRiskBulk, suggestionOutcomeLabel } from "./memoryCenterCopy";
 import { MEMORY_CENTER_CSS } from "./memoryCenterLabels";
@@ -156,11 +157,12 @@ export function MemoryCenterActivityPane({
 type SuggestionsProps = {
   state: MemoryCenterActivityState;
   onRefresh: () => void;
+  onLoadMore?: () => void;
   onAnswer: (entry: MemoryCenterSuggestionEntry, accept: boolean) => void;
   onAcceptAllLowRisk: () => void;
 };
 
-export function MemoryCenterSuggestionsPane({ state, onRefresh, onAnswer, onAcceptAllLowRisk }: SuggestionsProps) {
+export function MemoryCenterSuggestionsPane({ state, onRefresh, onLoadMore, onAnswer, onAcceptAllLowRisk }: SuggestionsProps) {
   const entries: MemoryCenterSuggestionEntry[] = state.suggestions?.entries ?? [];
   const bulk = lowRiskBulk(entries);
   const [confirmBulk, setConfirmBulk] = useState(false);
@@ -234,6 +236,17 @@ export function MemoryCenterSuggestionsPane({ state, onRefresh, onAnswer, onAcce
           </li>
         ))}
       </ul>
+      {onLoadMore ? (
+        <PaginationBar
+          hasMore={Boolean(state.suggestions?.hasMore)}
+          loading={state.loadingSuggestions}
+          loadedCount={entries.length}
+          totalCount={state.suggestions?.total}
+          label="加载更多建议"
+          compact
+          onLoadMore={onLoadMore}
+        />
+      ) : null}
       {!entries.length && !state.loadingSuggestions ? (
         <div className="loop-meta">都处理完了。</div>
       ) : null}

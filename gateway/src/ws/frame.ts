@@ -144,7 +144,17 @@ function fitSearchHits(message: SearchHitsMessage, budget: number): SearchHitsMe
     hits.push(row);
     used += cost;
   }
-  return { ...message, hits, truncated: true };
+  const offset = typeof message.offset === "number" ? message.offset : 0;
+  const trimmed = hits.length < message.hits.length;
+  // 若本页因单条超限导致 0 命中保留，不再回传相同 offset 避免端上死循环
+  const hasMore = hits.length > 0 && Boolean(message.hasMore || trimmed);
+  return {
+    ...message,
+    hits,
+    truncated: true,
+    hasMore,
+    ...(hasMore ? { nextOffset: offset + hits.length } : { nextOffset: undefined }),
+  };
 }
 
 type ImHistoryMessage = Extract<ServerMessage, { type: "im_history" }>;

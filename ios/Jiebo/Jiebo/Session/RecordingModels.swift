@@ -391,6 +391,15 @@ struct RecordingTranscriptSegmentDTO: Codable, Equatable, Identifiable, Sendable
     var id: String { segmentId }
 }
 
+/// 逐字稿分页响应（对齐网关 GET /sessions/{id}/segments）。
+struct RecordingSegmentsPageDTO: Codable, Equatable, Sendable {
+    var sessionId: String
+    var items: [RecordingTranscriptSegmentDTO]
+    var total: Int
+    var hasMore: Bool
+    var nextCursor: String?
+}
+
 struct RecordingMemoryCandidateDTO: Codable, Equatable, Identifiable, Sendable {
     var candidateId: String
     var text: String
@@ -684,6 +693,34 @@ enum RecordingAPI {
         }
         let result = try JSONDecoder().decode(RecordingResultDTO.self, from: data)
         return .ready(result)
+    }
+
+    /// 分页拉取长逐字稿段落（支持服务端关键词筛选与游标续拉）。
+    static func fetchSegments(
+        token: String,
+        sessionId: String,
+        cursor: String? = nil,
+        limit: Int = 80,
+        query: String? = nil
+    ) async throws -> RecordingSegmentsPageDTO {
+        var comps = URLComponents(
+            url: uploadBase.appendingPathComponent("sessions").appendingPathComponent(sessionId).appendingPathComponent("segments"),
+            resolvingAgainstBaseURL: false
+        )
+        var queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        if let cursor, !cursor.isEmpty { queryItems.append(URLQueryItem(name: "cursor", value: cursor)) }
+        if let query, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            queryItems.append(URLQueryItem(name: "q", value: query.trimmingCharacters(in: .whitespacesAndNewlines)))
+        }
+        comps?.queryItems = queryItems
+        guard let url = comps?.url else { throw RecordingProblem("无效的逐字稿分页地址") }
+        let req = try makeRequest(method: "GET", url: url, token: token)
+        let (data, http) = try await requestData(req)
+        // 仅 200 返回逐字稿页；202 表示整理进行中，由上层按未就绪处理，不误解为逐字稿页
+        guard http.statusCode == 200 else {
+            throw RecordingProblem(parseServerError(data: data, statusCode: http.statusCode))
+        }
+        return try JSONDecoder().decode(RecordingSegmentsPageDTO.self, from: data)
     }
 
     static func retrySession(token: String, sessionId: String, expectedRevision: Int?) async throws -> RecordingSessionStatusDTO {

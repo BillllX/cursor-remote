@@ -2,6 +2,7 @@
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { AdminTenantStats, CursorBill } from "@shared/protocol";
 import { fmtClock, fmtCount, fmtDuration, fmtRelative, fmtTokens } from "../../lib/chat/format";
+import { PaginationBar } from "../PaginationBar";
 import { CursorBillPanel } from "./CursorBillPanel";
 import styles from "./AdminOverlay.module.css";
 
@@ -12,6 +13,10 @@ type AdminOverlayProps = {
   adminStats: AdminTenantStats[];
   cursorBill: CursorBill | null;
   adminStatsAt: number | null;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  totalCount?: number;
+  onLoadMore?: () => void;
 };
 
 export function AdminOverlay({
@@ -21,6 +26,10 @@ export function AdminOverlay({
   adminStats,
   cursorBill,
   adminStatsAt,
+  hasMore = false,
+  loadingMore = false,
+  totalCount,
+  onLoadMore,
 }: AdminOverlayProps) {
   return (
     <div className="search-overlay open" onClick={() => setAdminOpen(false)}>
@@ -121,6 +130,17 @@ export function AdminOverlay({
                 </div>
               </div>
             ))}
+            {onLoadMore ? (
+              <PaginationBar
+                hasMore={hasMore}
+                loading={loadingMore}
+                loadedCount={adminStats.length}
+                totalCount={totalCount}
+                label="加载更多账号"
+                compact
+                onLoadMore={onLoadMore}
+              />
+            ) : null}
             <p className="admin-note">
               上面是这台服务器 CURSOR_API_KEY 的官方账单，和 Cursor CLI 的 /usage 同一口径。下面各账号的 token
               仍是按字符估算（英文 ≈4 字符/token；中文实际更高），只用来看相对消耗。

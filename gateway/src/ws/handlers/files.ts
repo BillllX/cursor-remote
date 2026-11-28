@@ -23,6 +23,7 @@ import {
   writeWorkspaceFile,
 } from "../../workspace/files.ts";
 import { beginRequest, HeavyBusyError, isAbortError } from "../../workspace/heavy.ts";
+import { clampPageLimit } from "../../pagination.ts";
 import { reply } from "../frame.ts";
 import { send } from "../send.ts";
 import type { MessageOf, WsCtx } from "./types.ts";
@@ -262,7 +263,11 @@ export async function onListFiles({ ws, conn }: WsCtx, message: MessageOf<"list_
   try {
     const listed =
       dir !== undefined
-        ? await listWorkspaceDirForClientAsync(cwd, dir, { signal })
+        ? await listWorkspaceDirForClientAsync(cwd, dir, {
+            signal,
+            cursor: typeof message.cursor === "string" ? message.cursor : undefined,
+            limit: typeof message.limit === "number" ? message.limit : undefined,
+          })
         : await listWorkspaceFilesForClientAsync(cwd, message.query || "", { signal });
     send(
       ws,
@@ -306,8 +311,29 @@ export async function onSearchText({ ws, conn }: WsCtx, message: MessageOf<"sear
   const cwd = message.chatId ? cwdOf(conn, slotOf(conn, message.chatId)) : conn.cwd;
   const { signal, end } = beginRequest(ws, `search_text:${message.chatId || ""}`);
   try {
-    const hits = await searchWorkspaceAsync(cwd, message.query, { signal });
-    send(ws, { type: "search_hits", chatId: message.chatId, query: message.query, hits });
+    const rawOffset =
+      typeof message.offset === "number" && Number.isFinite(message.offset) && message.offset >= 0
+        ? Math.floor(message.offset)
+        : 0;
+    const hasExplicitPaging = message.offset !== undefined || message.limit !== undefined;
+    const limit = clampPageLimit(message.limit, hasExplicitPaging ? 50 : 100, 100);
+    const maxHits = Math.min(rawOffset + limit + 1, 500);
+    const allHits = await searchWorkspaceAsync(cwd, message.query, { signal, maxHits });
+    const pageHits = allHits.slice(rawOffset, rawOffset + limit);
+    const nextOffset = rawOffset + pageHits.length;
+    const hasMore = nextOffset < allHits.length;
+    send(ws, {
+      type: "search_hits",
+      chatId: message.chatId,
+      query: message.query,
+      hits: pageHits,
+      offset: rawOffset,
+      // 仅当已扫描到末尾（!hasMore）时返回精确总数，避免 maxHits 探针数误导前端显示「50/51」
+      ...(!hasMore ? { total: allHits.length } : {}),
+      hasMore,
+      ...(hasMore ? { nextOffset } : {}),
+      truncated: hasMore,
+    });
   } catch (err) {
     if (isAbortError(err)) return;
     if (err instanceof HeavyBusyError) send(ws, { type: "error", message: err.message });

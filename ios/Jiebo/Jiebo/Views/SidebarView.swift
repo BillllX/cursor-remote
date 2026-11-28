@@ -13,6 +13,8 @@ struct SidebarView: View {
     @State private var memoryOpen = false
     @State private var kbOpen = false
     @State private var skillsOpen = false
+    /// 侧栏会话分页窗口（默认 25 条，向下滚动或点击自动翻页，当前选中会话始终可见）
+    @State private var visibleChatLimit = 25
 
     var body: some View {
         @Bindable var store = store
@@ -41,8 +43,27 @@ struct SidebarView: View {
                             .padding(.horizontal, 20)
                             .padding(.vertical, 10)
                     } else {
-                        ForEach(chats) { chat in
+                        let visibleChats: [ChatSession] = {
+                            if chats.count <= visibleChatLimit { return chats }
+                            var slice = Array(chats.prefix(visibleChatLimit))
+                            if !slice.contains(where: { $0.id == activeSelection }),
+                               let activeChat = chats.first(where: { $0.id == activeSelection }) {
+                                slice.append(activeChat)
+                            }
+                            return slice
+                        }()
+                        ForEach(visibleChats) { chat in
                             chatRow(chat, selected: chat.id == activeSelection)
+                        }
+                        if chats.count > visibleChats.count {
+                            PaginationLoadMoreRow(
+                                hasMore: true,
+                                loadedCount: visibleChats.count,
+                                totalCount: chats.count,
+                                label: "加载更多对话",
+                                onLoadMore: { visibleChatLimit += 25 }
+                            )
+                            .padding(.horizontal, 12)
                         }
                     }
                 }

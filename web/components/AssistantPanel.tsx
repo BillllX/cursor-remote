@@ -5,12 +5,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type
 import { buildAssistantOpMessage, type BuildAssistantOpMessage } from "@shared/assistantOp";
 import type {
   AssistantDelegation,
+  AssistantInboxItem,
   AssistantResultMessage,
   AssistantState,
   ClientMessage,
   SkillFactoryProposalItem,
 } from "@shared/protocol";
 import { repairReplyText } from "@shared/replyText";
+import { PaginationBar } from "./PaginationBar";
 import MemoryCenterPanel from "./assistant/MemoryCenterPanel";
 import { AssistantAutomationSection } from "./assistant/AssistantAutomationSection";
 import { AssistantColleaguesSection } from "./assistant/AssistantColleaguesSection";
@@ -126,18 +128,52 @@ export default function AssistantPanel({
   const [selectedInboxId, setSelectedInboxId] = useState<string | null>(null);
   const [scheduleLink, setScheduleLink] = useState<{ id: string; request: number } | null>(null);
   const [skillProposals, setSkillProposals] = useState<SkillFactoryProposalItem[]>([]);
+  const [inboxExtra, setInboxExtra] = useState<AssistantInboxItem[]>([]);
+  const [inboxHasMore, setInboxHasMore] = useState(false);
+  const [inboxNextCursor, setInboxNextCursor] = useState<string | undefined>(undefined);
+  const [inboxTotal, setInboxTotal] = useState<number | undefined>(undefined);
+  const [inboxLoadingMore, setInboxLoadingMore] = useState(false);
+  const [historyDelegations, setHistoryDelegations] = useState<AssistantDelegation[]>([]);
+  const [historyDelegationsHasMore, setHistoryDelegationsHasMore] = useState(false);
+  const [historyDelegationsCursor, setHistoryDelegationsCursor] = useState<string | undefined>(undefined);
+  const [historyDelegationsTotal, setHistoryDelegationsTotal] = useState<number | undefined>(undefined);
+  const [historyDelegationsLoading, setHistoryDelegationsLoading] = useState(false);
+  const [historyDelegationsLoaded, setHistoryDelegationsLoaded] = useState(false);
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  const unread = useMemo(() => state?.inbox.filter((item) => !item.read).length ?? 0, [state?.inbox]);
-  const pendingSkillProposals = useMemo(
-    () => skillProposals.filter((p) => p.status === "pending"),
-    [skillProposals],
-  );
+  const inboxItems = useMemo(() => {
+    const base = state?.inbox ?? [];
+    if (!inboxExtra.length) return base;
+    const seen = new Set(base.map((row) => row.id));
+    return [...base, ...inboxExtra.filter((row) => !seen.has(row.id))];
+  }, [state?.inbox, inboxExtra]);
 
   const op = useCallback((...params: Parameters<BuildAssistantOpMessage>) => {
     send(buildAssistantOpMessage(...params));
   }, [send]) as BuildAssistantOpMessage;
+
+  const loadInboxPage = useCallback(
+    (cursor?: string) => {
+      setInboxLoadingMore(true);
+      op("assistant_list_page", { kind: "inbox", cursor, limit: 30 });
+    },
+    [op],
+  );
+
+  const loadHistoryDelegationsPage = useCallback(
+    (cursor?: string) => {
+      setHistoryDelegationsLoading(true);
+      op("assistant_list_page", { kind: "delegations", filter: "history", cursor, limit: 20 });
+    },
+    [op],
+  );
+
+  const unread = useMemo(() => inboxItems.filter((item) => !item.read).length, [inboxItems]);
+  const pendingSkillProposals = useMemo(
+    () => skillProposals.filter((p) => p.status === "pending"),
+    [skillProposals],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -152,7 +188,58 @@ export default function AssistantPanel({
   }, [open, memoryLoaded, send, op]);
 
   useEffect(() => {
+    if (!open || tab !== "inbox") return;
+    const snapshotCount = state?.inbox.length ?? 0;
+    // assistant_state 已携带最新 60 条快照；仅当快照满 60 条时标记可继续向后翻页，避免首屏重复拉取 0..29 导致重叠
+    if (snapshotCount >= 60 && inboxTotal === undefined && !inboxHasMore) {
+      setInboxHasMore(true);
+      setInboxNextCursor(String(snapshotCount));
+    }
+  }, [open, tab, state?.inbox.length, inboxTotal, inboxHasMore]);
+
+  useEffect(() => {
+    // 网关状态修订变更（已读/归档/新消息）时清空旧分页附加缓存，防止已删条目复活或状态漂移
+    setInboxExtra([]);
+    setInboxTotal(undefined);
+    setInboxHasMore((state?.inbox.length ?? 0) >= 60);
+    setInboxNextCursor((state?.inbox.length ?? 0) >= 60 ? String(state?.inbox.length ?? 0) : undefined);
+  }, [state?.revision]);
+
+  useEffect(() => {
     if (!lastAssistantResult) return;
+    if (lastAssistantResult.op === "assistant_list_page") {
+      if (!lastAssistantResult.ok || !lastAssistantResult.data) {
+        setInboxLoadingMore(false);
+        setHistoryDelegationsLoading(false);
+        return;
+      }
+      const page = lastAssistantResult.data;
+      if (page.kind === "inbox") {
+        const rows = (page.items ?? []) as AssistantInboxItem[];
+        setInboxExtra((prev) => {
+          const seen = new Set(prev.map((row) => row.id));
+          return [...prev, ...rows.filter((row) => !seen.has(row.id))];
+        });
+        setInboxHasMore(Boolean(page.hasMore));
+        setInboxNextCursor(page.nextCursor);
+        setInboxTotal(page.total);
+        setInboxLoadingMore(false);
+        return;
+      }
+      if (page.kind === "delegations") {
+        const rows = (page.items ?? []) as AssistantDelegation[];
+        setHistoryDelegations((prev) => {
+          const seen = new Set(prev.map((row) => row.id));
+          return [...prev, ...rows.filter((row) => !seen.has(row.id))];
+        });
+        setHistoryDelegationsHasMore(Boolean(page.hasMore));
+        setHistoryDelegationsCursor(page.nextCursor);
+        setHistoryDelegationsTotal(page.total);
+        setHistoryDelegationsLoading(false);
+        setHistoryDelegationsLoaded(true);
+        return;
+      }
+    }
     if (
       lastAssistantResult.op === "skill_factory_status" ||
       lastAssistantResult.op === "skill_proposal_decide" ||
@@ -541,8 +628,56 @@ export default function AssistantPanel({
                     })}
                   </ul>
                 ) : (
-                  <Empty>当前没有正在处理的委派。已结束的委派可在原对话或收件箱查看。</Empty>
+                  <Empty>当前没有正在处理的委派。已结束的委派可在原对话或下方历史查看。</Empty>
                 )}
+                <div style={{ marginTop: 10 }}>
+                  {!historyDelegationsLoaded ? (
+                    <button
+                      type="button"
+                      className="pill"
+                      disabled={historyDelegationsLoading}
+                      onClick={() => loadHistoryDelegationsPage("0")}
+                    >
+                      {historyDelegationsLoading ? "正在加载历史委派…" : "浏览历史委派"}
+                    </button>
+                  ) : historyDelegations.length ? (
+                    <>
+                      <div className="side-label" style={{ marginBottom: 6 }}>
+                        历史委派{historyDelegationsTotal !== undefined ? `（${historyDelegationsTotal}）` : ""}
+                      </div>
+                      <ul className="assistant-list">
+                        {historyDelegations.map((row) => (
+                          <li key={row.id} className="assistant-item">
+                            <div className="assistant-item-head">
+                              <span className="assistant-item-title">{row.title}</span>
+                              <span className={`chat-mark ${DELEGATION_TONE[row.status] ?? ""}`}>
+                                {row.interrupted ? "已中断" : DELEGATION_STATUS[row.status] ?? row.status}
+                              </span>
+                              <button type="button" className="pill" onClick={() => onOpenChat(row.childChatId)}>
+                                打开子会话
+                              </button>
+                            </div>
+                            <div className="loop-meta">
+                              {row.workspace} · {new Date(row.endedAt ?? row.createdAt).toLocaleString()}
+                            </div>
+                            {row.result ? <div className="assistant-item-body">{row.result.slice(0, 180)}</div> : null}
+                          </li>
+                        ))}
+                      </ul>
+                      <PaginationBar
+                        hasMore={historyDelegationsHasMore}
+                        loading={historyDelegationsLoading}
+                        loadedCount={historyDelegations.length}
+                        totalCount={historyDelegationsTotal}
+                        label="加载更多历史委派"
+                        compact
+                        onLoadMore={() => historyDelegationsCursor && loadHistoryDelegationsPage(historyDelegationsCursor)}
+                      />
+                    </>
+                  ) : (
+                    <div className="loop-meta">暂无历史委派记录。</div>
+                  )}
+                </div>
               </Section>
             </>
           ) : null}
@@ -569,7 +704,7 @@ export default function AssistantPanel({
           ) : null}
 
           {tab === "inbox" ? (
-            state?.inbox.length ? (
+            inboxItems.length ? (
               <>
                 {unread > 0 ? (
                   <div className="loop-actions" style={{ marginBottom: 8 }}>
@@ -578,7 +713,7 @@ export default function AssistantPanel({
                       className="pill"
                       onClick={() =>
                         op("inbox_read", {
-                          ids: state.inbox.filter((item) => !item.read).map((item) => item.id),
+                          ids: inboxItems.filter((item) => !item.read).map((item) => item.id),
                         })
                       }
                     >
@@ -587,7 +722,7 @@ export default function AssistantPanel({
                   </div>
                 ) : null}
                 <ul className="assistant-list">
-                  {state.inbox.map((item) => {
+                  {inboxItems.map((item) => {
                     const expanded = selectedInboxId === item.id;
                     return (
                       <li
@@ -733,6 +868,19 @@ export default function AssistantPanel({
                     );
                   })}
                 </ul>
+                <PaginationBar
+                  hasMore={inboxHasMore}
+                  loading={inboxLoadingMore}
+                  loadedCount={inboxItems.length}
+                  totalCount={inboxTotal}
+                  label="加载更早收件箱"
+                  compact
+                  autoLoad
+                  onLoadMore={() => {
+                    const cursor = inboxNextCursor ?? String(inboxItems.length);
+                    loadInboxPage(cursor);
+                  }}
+                />
               </>
             ) : (
               <Empty>收件箱是空的。提醒、委派结果和待批会出现在这里。</Empty>

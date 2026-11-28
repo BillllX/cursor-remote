@@ -241,6 +241,9 @@ export type MemoryCenterScopeDetail = {
   rules: RuleFile[];
   diagnostics: InjectionDiagnostics | null;
   itemsTruncated?: boolean;
+  itemsTotal?: number;
+  itemsHasMore?: boolean;
+  itemsNextCursor?: string;
   rulesTruncated?: boolean;
   rulesPayloadTruncated?: boolean;
 };
@@ -277,6 +280,9 @@ export type MemoryCenterSearchHit = {
 export type MemoryCenterSearchData = {
   hits: MemoryCenterSearchHit[];
   truncated?: boolean;
+  total?: number;
+  hasMore?: boolean;
+  nextCursor?: string;
   payloadTruncated?: boolean;
 };
 
@@ -446,6 +452,9 @@ export type MemoryCenterSuggestionsData = {
   lastRunAt?: string;
   entries: MemoryCenterSuggestionEntry[];
   truncated?: boolean;
+  total?: number;
+  hasMore?: boolean;
+  nextCursor?: string;
 };
 
 export type MemoryCenterSuggestionAnswerData = {
@@ -645,6 +654,57 @@ export type SkillFactoryPrewarmedItem = {
 export type SkillFactoryStatusData = {
   skills: SkillFactorySummaryItem[];
   proposals: SkillFactoryProposalItem[];
+  skillsTotal?: number;
+  skillsHasMore?: boolean;
+  skillsNextCursor?: string;
+  proposalsTotal?: number;
+  proposalsHasMore?: boolean;
+  proposalsNextCursor?: string;
+};
+
+/** 助理列表统一分页类型：打破 assistant_state 固定快照条数上限，按需分页浏览。 */
+export type AssistantListPageKind = "inbox" | "delegations" | "todos" | "artifacts" | "schedules" | "runs";
+
+export type AssistantListPageArgs = {
+  kind: AssistantListPageKind;
+  cursor?: string;
+  limit?: number;
+  filter?: string;
+};
+
+export type AssistantListPageData = {
+  kind: AssistantListPageKind;
+  items: unknown[];
+  total: number;
+  hasMore: boolean;
+  nextCursor?: string;
+};
+
+/** 知识库与工作区自动化子列表分页类型。 */
+export type KbWorkspaceListPageKind =
+  | "ingestLogs"
+  | "scheduleRuns"
+  | "proposals"
+  | "boards"
+  | "tokens"
+  | "watchItems"
+  | "schedules";
+
+export type KbWorkspaceListPageArgs = {
+  workspace: string;
+  kind: KbWorkspaceListPageKind;
+  cursor?: string;
+  limit?: number;
+  scheduleId?: string;
+};
+
+export type KbWorkspaceListPageData = {
+  workspace: string;
+  kind: KbWorkspaceListPageKind;
+  items: unknown[];
+  total: number;
+  hasMore: boolean;
+  nextCursor?: string;
 };
 
 export type KbWecomWatchedItemSummary = {
@@ -814,12 +874,14 @@ export type KbWorkspaceStatusData = {
 
 /** assistant_op 参数与结果 typed 映射（记忆中心与其它 op 可逐步补齐） */
 export type AssistantOpArgsMap = {
-  memory_center_get: { scope?: string };
+  memory_center_get: { scope?: string; cursor?: string; limit?: number };
   memory_center_search: {
     query: string;
     scope?: string;
     kind?: MemoryCenterKind;
     state?: MemoryCenterState;
+    cursor?: string;
+    limit?: number;
   };
   memory_center_mutate: MemoryCenterMutateArgs;
   memory_center_activity: {
@@ -829,7 +891,7 @@ export type AssistantOpArgsMap = {
     action?: MemoryCenterActivityAction;
   };
   memory_center_restore: { scope: string; auditId: string };
-  memory_center_suggestions_get: { scope?: string };
+  memory_center_suggestions_get: { scope?: string; cursor?: string; limit?: number };
   memory_center_suggestion_answer: { scope: string; id: string; accept: boolean };
   memory_center_export: { scopes?: string[] };
   memory_center_import_preview: { path: string };
@@ -938,7 +1000,15 @@ export type AssistantOpArgsMap = {
     };
   };
   drop_token_revoke: { workspace: string; idOrLabel: string; globalRevoke?: boolean };
-  skill_factory_status: { scope?: SkillFactoryScope; query?: string; workspace?: string };
+  assistant_list_page: AssistantListPageArgs;
+  kb_workspace_list_page: KbWorkspaceListPageArgs;
+  skill_factory_status: {
+    scope?: SkillFactoryScope;
+    query?: string;
+    workspace?: string;
+    cursor?: string;
+    limit?: number;
+  };
   skill_proposal_decide: {
     proposalId: string;
     approve: boolean;
@@ -986,6 +1056,8 @@ export type AssistantOpResultMap = {
   drop_token_create: KbWorkspaceStatusData;
   drop_token_update: KbWorkspaceStatusData;
   drop_token_revoke: KbWorkspaceStatusData;
+  assistant_list_page: AssistantListPageData;
+  kb_workspace_list_page: KbWorkspaceListPageData;
   skill_factory_status: SkillFactoryStatusData;
   skill_proposal_decide: SkillFactoryStatusData;
   skill_update_meta: SkillFactoryStatusData;
@@ -1288,6 +1360,9 @@ export type AssistantOp =
   | "drop_token_create"
   | "drop_token_update"
   | "drop_token_revoke"
+  /** 助理与知识库各子列表游标分页（只读，不触发全量广播） */
+  | "assistant_list_page"
+  | "kb_workspace_list_page"
   /** Skill 工厂：查询已集成的四分类技能列表与待审批提案、批准或拒绝技能提案、置顶/启停/预热开关与在线编辑重签 */
   | "skill_factory_status"
   | "skill_proposal_decide"
@@ -1322,6 +1397,8 @@ type AssistantOpClientBranch<K extends AssistantOp> = K extends
   | "drop_token_create"
   | "drop_token_update"
   | "drop_token_revoke"
+  | "assistant_list_page"
+  | "kb_workspace_list_page"
   | "skill_proposal_decide"
   | "skill_update_meta"
   | "skill_edit_approved"
@@ -1626,8 +1703,17 @@ export type ClientMessage =
   | { type: "new_session"; chatId: string; cwd?: string }
   | { type: "delete_session"; chatId: string }
   | { type: "resume_session"; chatId: string; agentId: string }
-  | { type: "list_files"; query?: string; dir?: string; chatId?: string; mention?: boolean; reqId?: string }
-  | { type: "search_text"; query: string; chatId?: string }
+  | {
+      type: "list_files";
+      query?: string;
+      dir?: string;
+      chatId?: string;
+      mention?: boolean;
+      reqId?: string;
+      cursor?: string;
+      limit?: number;
+    }
+  | { type: "search_text"; query: string; chatId?: string; offset?: number; limit?: number }
   // sha：读这一轮结束时的快照（TurnFile.sha），不读工作区；diff: true 时 sha 指 TurnFile.diffSha。
   // 快照被清理时回 error "历史版本已清理"。reqId 在 file_content 原样回显
   | { type: "read_file"; path: string; chatId?: string; diff?: boolean; sha?: string; reqId?: string }
@@ -1675,8 +1761,8 @@ export type ClientMessage =
   | { type: "load_chat"; chatId: string; from?: number; nonce?: number }
   | { type: "approval_reply"; chatId: string; callId: string; allow: boolean }
   | { type: "set_policy"; policy: PolicyId; chatId?: string }
-  // 管理员查询全部租户的使用统计（P9）：仅 tenants.json 里 admin: true 的租户可用
-  | { type: "admin_stats" }
+  // 管理员查询全部租户的使用统计（P9）：仅 tenants.json 里 admin: true 的租户可用；可选游标分页
+  | { type: "admin_stats"; cursor?: string; limit?: number }
   | { type: "ping" }
   // 产品 Loop（见 docs/IDE.md）：挂在某个会话上的重复任务。L1 只定消息形状，调度在 L2
   | {
@@ -1969,12 +2055,25 @@ export type ServerMessage =
       status?: Record<string, string>;
       mention?: boolean;
       truncated?: boolean;
+      total?: number;
+      hasMore?: boolean;
+      nextCursor?: string;
       chatId?: string;
       reqId?: string;
       /** list_files 请求级失败（如排队满）；不占用 Agent 回合 error 语义 */
       error?: string;
     }
-  | { type: "search_hits"; query: string; hits: SearchHit[]; chatId?: string; truncated?: boolean }
+  | {
+      type: "search_hits";
+      query: string;
+      hits: SearchHit[];
+      chatId?: string;
+      truncated?: boolean;
+      offset?: number;
+      total?: number;
+      hasMore?: boolean;
+      nextOffset?: number;
+    }
   | {
       type: "file_content";
       path: string;
@@ -2106,7 +2205,15 @@ export type ServerMessage =
     }
   | { type: "chat_title"; chatId: string; title: string }
   // admin_stats 的应答（P9）：全租户使用统计。cursor 是当前 CURSOR_API_KEY 的官方账单
-  | { type: "admin_stats"; serverTime: number; tenants: AdminTenantStats[]; cursor?: CursorBill }
+  | {
+      type: "admin_stats";
+      serverTime: number;
+      tenants: AdminTenantStats[];
+      cursor?: CursorBill;
+      tenantsTotal?: number;
+      tenantsHasMore?: boolean;
+      tenantsNextCursor?: string;
+    }
   | ({ type: "loop_state" } & LoopState)
   | ({ type: "loop_tick" } & LoopTick)
   | { type: "assistant_state"; state: AssistantState; reqId?: string; generation?: number }

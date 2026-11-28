@@ -76,6 +76,18 @@ export async function onAssistantGet(
   }
 }
 
+/** 纯只读查询与分页操作不修改状态，严禁触发全租户 publishState 广播。 */
+const READONLY_ASSISTANT_OPS = new Set([
+  "assistant_list_page",
+  "kb_workspace_list_page",
+  "memory_center_get",
+  "memory_center_search",
+  "memory_center_activity",
+  "memory_center_suggestions_get",
+  "kb_workspace_status",
+  "skill_factory_status",
+]);
+
 export async function onAssistantOp({ ws, tenant }: WsCtx, message: MessageOf<"assistant_op">) {
   const args = message.args && typeof message.args === "object" ? message.args : {};
   const result =
@@ -89,5 +101,5 @@ export async function onAssistantOp({ ws, tenant }: WsCtx, message: MessageOf<"a
             ? retargetDelegation(tenant, args)
             : await handleOp(tenant, message.op, args);
   send(ws, { type: "assistant_result", reqId: message.reqId, op: message.op, ...result } as AssistantResultMessage);
-  if (result.ok) void publishState(tenant);
+  if (result.ok && !READONLY_ASSISTANT_OPS.has(message.op)) void publishState(tenant);
 }

@@ -158,6 +158,7 @@ private struct SharedFailedChange: Identifiable, Equatable {
 
 private struct SharedAnswerTurn: Identifiable, Equatable {
     let id = UUID()
+    let serverTurnId: String?
     let question: String
     let answer: String
     let sources: [String]
@@ -167,6 +168,7 @@ private struct SharedAnswerTurn: Identifiable, Equatable {
     var failed: [SharedFailedChange]
 
     init(question: String, answer: String, result: JSONValue) {
+        self.serverTurnId = result["id"]?.string?.nilIfEmpty
         self.question = question
         self.answer = answer
         self.sources = result["sources"]?.array?.compactMap(\.string) ?? []
@@ -216,6 +218,10 @@ struct SharedWorkspaceFileView: View {
     @State private var folder = ""
     @State private var entries: [SharedFileEntry] = []
     @State private var truncated = false
+    @State private var filesHasMore = false
+    @State private var filesNextCursor: String? = nil
+    @State private var filesTotal: Int? = nil
+    @State private var loadingMoreFiles = false
     @State private var path = ""
     @State private var draft = ""
     @State private var saved = ""
@@ -226,6 +232,9 @@ struct SharedWorkspaceFileView: View {
     @State private var openTarget: String?
     @State private var hasQuestion = false
     @State private var historyLoaded = false
+    @State private var historyHasMore = false
+    @State private var historyNextBefore: String? = nil
+    @State private var loadingMoreHistory = false
     @State private var asking = false
     @State private var askError = ""
     @State private var answers: [SharedAnswerTurn] = []
@@ -246,6 +255,20 @@ struct SharedWorkspaceFileView: View {
         let currentWorkspace = store.workspaceSharing.items.first { $0.id == workspace.id }
         List {
             if canAsk && !filesOpen {
+                if historyHasMore || loadingMoreHistory {
+                    Section {
+                        PaginationLoadEarlierHeader(
+                            hasMore: historyHasMore,
+                            loading: loadingMoreHistory,
+                            label: "加载更早问答",
+                            onLoadMore: {
+                                if let before = historyNextBefore {
+                                    Task { await loadHistory(beforeTurn: before) }
+                                }
+                            }
+                        )
+                    }
+                }
                 ForEach(answers) { turn in
                     Section {
                         Text(turn.question).font(.headline)
@@ -285,7 +308,22 @@ struct SharedWorkspaceFileView: View {
                         } label: { Label(item.name, systemImage: "doc") }.disabled(busy)
                     }
                 }
-                if truncated { Text("这个文件夹只显示前 400 项。").foregroundStyle(.secondary) }
+                if filesHasMore || loadingMoreFiles {
+                    PaginationLoadMoreRow(
+                        hasMore: filesHasMore,
+                        loading: loadingMoreFiles,
+                        loadedCount: entries.count,
+                        totalCount: filesTotal,
+                        label: "加载更多文件",
+                        onLoadMore: {
+                            if let cursor = filesNextCursor {
+                                Task { await loadFiles(cursor: cursor, append: true) }
+                            }
+                        }
+                    )
+                } else if truncated {
+                    Text("当前目录项较多，已展示前 \(entries.count) 项。").foregroundStyle(.secondary)
+                }
             }
             if !path.isEmpty {
                 Section(path) {
@@ -383,15 +421,30 @@ struct SharedWorkspaceFileView: View {
         } catch { askError = error.localizedDescription }
     }
 
-    private func loadHistory() async {
+    private func loadHistory(beforeTurn: String? = nil) async {
         guard store.gatewayFeatures.contains("workspace_share_history_v1") else { historyLoaded = true; return }
+        if beforeTurn != nil {
+            guard !loadingMoreHistory else { return }
+            loadingMoreHistory = true
+        }
+        defer { if beforeTurn != nil { loadingMoreHistory = false } }
         do {
-            let result = try await store.workspaceSharing.request("history", workspace: workspace.id)
+            var fields: [String: JSONValue] = [:]
+            if let beforeTurn, !beforeTurn.isEmpty { fields["beforeTurn"] = .string(beforeTurn) }
+            let result = try await store.workspaceSharing.request("history", workspace: workspace.id, fields: fields)
             guard available, !Task.isCancelled else { return }
-            answers = (result["turns"]?.array ?? []).compactMap { turn in
+            let rows = (result["turns"]?.array ?? []).compactMap { turn -> SharedAnswerTurn? in
                 guard let question = turn["question"]?.string, let answer = turn["answer"]?.string else { return nil }
                 return SharedAnswerTurn(question: question, answer: answer, result: turn)
             }
+            if beforeTurn != nil {
+                answers = rows + answers
+            } else {
+                answers = rows
+            }
+            let oldestTurnId = answers.first?.serverTurnId
+            historyHasMore = (result["hasMore"]?.bool ?? false) && oldestTurnId != nil
+            historyNextBefore = historyHasMore ? oldestTurnId : nil
             historyLoaded = true
         } catch { askError = error.localizedDescription }
     }
@@ -424,16 +477,38 @@ struct SharedWorkspaceFileView: View {
         }
     }
 
-    private func loadFiles() async {
+    private func loadFiles(cursor: String? = nil, append: Bool = false) async {
         let target = folder
+        if append {
+            guard !loadingMoreFiles else { return }
+            loadingMoreFiles = true
+        } else {
+            // 切换目录时先清空上一目录的分页状态，防止旧游标串目录触发 autoLoad
+            filesHasMore = false
+            filesNextCursor = nil
+            filesTotal = nil
+            loadingMoreFiles = false
+        }
+        defer { if append { loadingMoreFiles = false } }
         do {
-            let result = try await store.workspaceSharing.request("files", workspace: workspace.id, fields: ["path": .string(target)])
+            var fields: [String: JSONValue] = ["path": .string(target), "limit": .number(100)]
+            if let cursor, !cursor.isEmpty { fields["cursor"] = .string(cursor) }
+            let result = try await store.workspaceSharing.request("files", workspace: workspace.id, fields: fields)
             guard !Task.isCancelled, available, target == folder else { return }
-            entries = (result["items"]?.array ?? []).compactMap { item in
+            let rows = (result["items"]?.array ?? []).compactMap { item -> SharedFileEntry? in
                 guard let name = item["name"]?.string else { return nil }
                 return SharedFileEntry(name: name, isDirectory: item["directory"]?.bool == true)
             }
+            if append {
+                let seen = Set(entries.map(\.id))
+                entries.append(contentsOf: rows.filter { !seen.contains($0.id) })
+            } else {
+                entries = rows
+            }
             truncated = result["truncated"]?.bool ?? false
+            filesHasMore = result["hasMore"]?.bool ?? false
+            filesNextCursor = result["nextCursor"]?.string?.nilIfEmpty
+            filesTotal = result["total"]?.int
         } catch { if !Task.isCancelled { report(error) } }
     }
 

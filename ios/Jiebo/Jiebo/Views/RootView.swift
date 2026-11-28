@@ -677,7 +677,17 @@ struct SearchToolView: View {
                             }
                             .buttonStyle(.plain)
                         }
-                        if store.searchTruncated, !store.searchLoading {
+                        if store.searchHasMore || store.searchLoadingMore {
+                            PaginationLoadMoreRow(
+                                hasMore: store.searchHasMore,
+                                loading: store.searchLoadingMore,
+                                loadedCount: store.searchHits.count,
+                                totalCount: store.searchTotal,
+                                label: "加载更多匹配",
+                                onLoadMore: { store.loadMoreSearchHits() }
+                            )
+                            .padding(.horizontal, 12)
+                        } else if store.searchTruncated, !store.searchLoading {
                             Text("结果太多，只显示前 \(store.searchHits.count) 条。换个更具体的关键词试试。")
                                 .font(JieboFont.text(.footnote))
                                 .foregroundStyle(JieboColor.dim)

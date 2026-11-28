@@ -148,7 +148,8 @@ export function useCollabState({
       connection: connected && unlocked ? "online" : unlocked ? "reconnecting" : "offline",
     });
     if (!active || !connected || !unlocked) return;
-    send({ type: "im_list", limit: 100 });
+    dispatch({ type: "rooms_loading" });
+    send({ type: "im_list", limit: 30 });
     const convId = stateRef.current.selectedConvId;
     if (convId) syncRoom(convId);
   }, [active, connected, send, syncRoom, unlocked]);
@@ -158,7 +159,7 @@ export function useCollabState({
     const convId = state.selectedConvId;
     if (!state.historyLoaded[convId] && !state.historyLoading[convId]) {
       dispatch({ type: "history_loading", convId });
-      send({ type: "im_history", convId, limit: 50 });
+      send({ type: "im_history", convId, limit: 30 });
     }
     syncRoom(convId);
     const room = state.rooms[convId];
@@ -311,6 +312,32 @@ export function useCollabState({
     [connected, send, unlocked],
   );
 
+  const loadMoreRooms = useCallback(() => {
+    if (!connected || !unlocked) return;
+    const cur = stateRef.current;
+    if (cur.roomsLoading || !cur.roomsHasMore || !cur.roomsCursor) return;
+    dispatch({ type: "rooms_loading" });
+    send({ type: "im_list", cursor: cur.roomsCursor, limit: 30 });
+  }, [connected, send, unlocked]);
+
+  const loadOlderHistory = useCallback(
+    (convId: string) => {
+      if (!connected || !unlocked || !convId) return;
+      const cur = stateRef.current;
+      if (cur.historyLoading[convId] || cur.historyLoadingOlder?.[convId]) return;
+      if (!cur.historyHasMore?.[convId]) return;
+      const rows = cur.messages[convId] ?? [];
+      let oldestSeq = Number.MAX_SAFE_INTEGER;
+      for (const row of rows) {
+        if (!row.pending && row.seq > 0 && row.seq < oldestSeq) oldestSeq = row.seq;
+      }
+      if (!Number.isFinite(oldestSeq) || oldestSeq === Number.MAX_SAFE_INTEGER) return;
+      dispatch({ type: "history_loading_older", convId });
+      send({ type: "im_history", convId, before: oldestSeq, limit: 30 });
+    },
+    [connected, send, unlocked],
+  );
+
   return {
     state,
     dispatch,
@@ -322,5 +349,7 @@ export function useCollabState({
     operate,
     createGroup,
     updateGroup,
+    loadMoreRooms,
+    loadOlderHistory,
   };
 }

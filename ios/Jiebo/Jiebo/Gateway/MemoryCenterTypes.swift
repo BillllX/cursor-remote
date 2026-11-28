@@ -344,6 +344,9 @@ struct MemoryCenterScopeDetail: Sendable, Hashable {
     var itemsTruncated: Bool
     var rulesTruncated: Bool
     var rulesPayloadTruncated: Bool
+    var itemsTotal: Int? = nil
+    var itemsHasMore: Bool = false
+    var itemsNextCursor: String? = nil
 
     static func from(_ value: JSONValue?) -> MemoryCenterScopeDetail? {
         guard let object = value?.object,
@@ -365,7 +368,10 @@ struct MemoryCenterScopeDetail: Sendable, Hashable {
         }
         guard let itemsTruncated = mcOptNonNullBool(object, "itemsTruncated", default: false),
               let rulesTruncated = mcOptNonNullBool(object, "rulesTruncated", default: false),
-              let rulesPayloadTruncated = mcOptNonNullBool(object, "rulesPayloadTruncated", default: false)
+              let rulesPayloadTruncated = mcOptNonNullBool(object, "rulesPayloadTruncated", default: false),
+              case let .some(itemsTotal) = mcOptNonNullInt(object, "itemsTotal"),
+              let itemsHasMore = mcOptNonNullBool(object, "itemsHasMore", default: false),
+              case let .some(itemsNextCursor) = mcOptNonNullString(object, "itemsNextCursor")
         else { return nil }
         return MemoryCenterScopeDetail(
             scope: scope,
@@ -374,7 +380,10 @@ struct MemoryCenterScopeDetail: Sendable, Hashable {
             diagnostics: diagnostics,
             itemsTruncated: itemsTruncated,
             rulesTruncated: rulesTruncated,
-            rulesPayloadTruncated: rulesPayloadTruncated
+            rulesPayloadTruncated: rulesPayloadTruncated,
+            itemsTotal: itemsTotal,
+            itemsHasMore: itemsHasMore,
+            itemsNextCursor: itemsNextCursor?.nilIfEmpty
         )
     }
 }
@@ -467,18 +476,27 @@ struct MemoryCenterSearchData: Sendable, Hashable {
     var hits: [MemoryCenterSearchHit]
     var truncated: Bool
     var payloadTruncated: Bool
+    var total: Int? = nil
+    var hasMore: Bool = false
+    var nextCursor: String? = nil
 
     static func from(_ value: JSONValue?) -> MemoryCenterSearchData? {
         guard let object = value?.object,
               let hits = mcDecodeArray(object["hits"], MemoryCenterSearchHit.from)
         else { return nil }
         guard let truncated = mcOptNonNullBool(object, "truncated", default: false),
-              let payloadTruncated = mcOptNonNullBool(object, "payloadTruncated", default: false)
+              let payloadTruncated = mcOptNonNullBool(object, "payloadTruncated", default: false),
+              case let .some(total) = mcOptNonNullInt(object, "total"),
+              let hasMore = mcOptNonNullBool(object, "hasMore", default: false),
+              case let .some(nextCursor) = mcOptNonNullString(object, "nextCursor")
         else { return nil }
         return MemoryCenterSearchData(
             hits: hits,
             truncated: truncated,
-            payloadTruncated: payloadTruncated
+            payloadTruncated: payloadTruncated,
+            total: total,
+            hasMore: hasMore,
+            nextCursor: nextCursor?.nilIfEmpty
         )
     }
 }
@@ -686,6 +704,9 @@ struct MemoryCenterSuggestionsData: Sendable, Hashable {
     var lastRunAt: String?
     var entries: [MemoryCenterSuggestionEntry]
     var truncated: Bool?
+    var total: Int? = nil
+    var hasMore: Bool = false
+    var nextCursor: String? = nil
 
     static func from(_ value: JSONValue?) -> MemoryCenterSuggestionsData? {
         guard let object = value?.object,
@@ -696,11 +717,18 @@ struct MemoryCenterSuggestionsData: Sendable, Hashable {
         if object["lastRunAt"] != nil && object["lastRunAt"] != .null && lastRunAt == nil { return nil }
         let truncated = mcOptNonNullBool(object, "truncated", default: false)
         if object["truncated"] != nil && object["truncated"] != .null && truncated == nil { return nil }
+        guard case let .some(total) = mcOptNonNullInt(object, "total"),
+              let hasMore = mcOptNonNullBool(object, "hasMore", default: false),
+              case let .some(nextCursor) = mcOptNonNullString(object, "nextCursor")
+        else { return nil }
         return MemoryCenterSuggestionsData(
             generatedAt: generatedAt,
             lastRunAt: lastRunAt?.nilIfEmpty,
             entries: entries,
-            truncated: truncated
+            truncated: truncated,
+            total: total,
+            hasMore: hasMore,
+            nextCursor: nextCursor?.nilIfEmpty
         )
     }
 }
@@ -922,13 +950,28 @@ struct SkillFactoryProposalRow: Identifiable, Hashable, Sendable {
 struct SkillFactoryStatusData: Sendable, Hashable {
     var skills: [SkillFactorySummaryRow]
     var proposals: [SkillFactoryProposalRow]
+    var skillsTotal: Int? = nil
+    var skillsHasMore: Bool = false
+    var skillsNextCursor: String? = nil
+    var proposalsTotal: Int? = nil
+    var proposalsHasMore: Bool = false
+    var proposalsNextCursor: String? = nil
 
     static func from(_ value: JSONValue?) -> SkillFactoryStatusData? {
         guard let object = value?.object,
               let skills = mcDecodeArray(object["skills"], SkillFactorySummaryRow.from),
               let proposals = mcDecodeArray(object["proposals"], SkillFactoryProposalRow.from)
         else { return nil }
-        return SkillFactoryStatusData(skills: skills, proposals: proposals)
+        return SkillFactoryStatusData(
+            skills: skills,
+            proposals: proposals,
+            skillsTotal: object["skillsTotal"]?.int,
+            skillsHasMore: object["skillsHasMore"]?.bool ?? false,
+            skillsNextCursor: object["skillsNextCursor"]?.string?.nilIfEmpty,
+            proposalsTotal: object["proposalsTotal"]?.int,
+            proposalsHasMore: object["proposalsHasMore"]?.bool ?? false,
+            proposalsNextCursor: object["proposalsNextCursor"]?.string?.nilIfEmpty
+        )
     }
 }
 

@@ -219,6 +219,9 @@
   ]
   reqId: nil
   error: nil
+  total: nil
+  hasMore: false
+  nextCursor: nil
 )
 
 ## server[21] files #2
@@ -232,6 +235,9 @@
   status: [:]
   reqId: "rq-files-1"
   error: "服务器正忙，请稍后再试"
+  total: nil
+  hasMore: false
+  nextCursor: nil
 )
 
 ## server[22] search_hits #1
@@ -246,6 +252,10 @@
   ]
   chatId: "c-7f3a9e21"
   truncated: true
+  offset: 0
+  total: nil
+  hasMore: false
+  nextOffset: nil
 )
 
 ## server[23] file_content #1
@@ -560,6 +570,9 @@
     ]
     fetchedAt: 1739007100000
   )
+  tenantsTotal: nil
+  tenantsHasMore: false
+  tenantsNextCursor: nil
 )
 
 ## server[51] loop_state #1

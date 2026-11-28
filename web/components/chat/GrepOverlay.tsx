@@ -1,6 +1,7 @@
 // 工作区全文搜索浮窗
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { SearchHit } from "@shared/protocol";
+import { PaginationBar } from "../PaginationBar";
 import styles from "./GrepOverlay.module.css";
 
 type GrepOverlayProps = {
@@ -18,6 +19,10 @@ type GrepOverlayProps = {
   openFile: (path: string, line?: number, asDiff?: boolean) => void;
   wideIDERef?: RefObject<boolean>;
   grepWait: boolean;
+  grepHasMore?: boolean;
+  grepTotal?: number;
+  grepLoadingMore?: boolean;
+  onLoadMoreGrep?: () => void;
   workspaceName?: string;
   onSwitchMode?: (mode: "files" | "git") => void;
 };
@@ -34,6 +39,10 @@ export function GrepOverlay({
   grepHi,
   openFile,
   grepWait,
+  grepHasMore = false,
+  grepTotal,
+  grepLoadingMore = false,
+  onLoadMoreGrep,
   workspaceName = "工作区",
   onSwitchMode,
 }: GrepOverlayProps) {
@@ -196,6 +205,17 @@ export function GrepOverlay({
                   );
                 })}
                 {grepWait ? <div className="search-item">正在搜索内容…</div> : null}
+                {onLoadMoreGrep ? (
+                  <PaginationBar
+                    hasMore={grepHasMore}
+                    loading={grepLoadingMore}
+                    loadedCount={grepHits.length}
+                    totalCount={grepTotal}
+                    label="加载更多搜索结果"
+                    compact
+                    onLoadMore={onLoadMoreGrep}
+                  />
+                ) : null}
               </>
             )
           ) : (

@@ -3,12 +3,14 @@ import { resolve } from "node:path";
 import type { SDKCustomTool } from "@cursor/sdk";
 import type { WebSocket } from "ws";
 import type {
+  AssistantListPageKind,
   AssistantOp,
   AssistantState,
   DeviceApproval,
   DeviceOp,
   DeviceResult,
   JSONValue,
+  KbWorkspaceListPageKind,
   ServerMessage,
 } from "../../../shared/protocol.ts";
 import { modelAvailable, resolvePreferredBackgroundModel, runBackground } from "./background.ts";
@@ -48,7 +50,8 @@ import { assistantBadgeCached, BADGE_WAIT_MS, STATE_INBOX_LIMIT, within } from "
 import { listRuns, recoverRuns } from "./runs.ts";
 import { DEFAULT_TZ, listSchedules, recoverSchedules, removeSchedule, seedDefaults, setSchedule, tickSchedules, type ScheduleKind } from "./schedules.ts";
 import { assistantDir, estimateTokens, writeJson, type TenantRef } from "./store.ts";
-import { addTodo, listTodos, removeTodo, setTodoDone, takeDueReminders, updateTodo } from "./todos.ts";
+import { addTodo, listAllTodos, listTodos, removeTodo, setTodoDone, takeDueReminders, updateTodo } from "./todos.ts";
+import { sliceOffsetPage } from "../pagination.ts";
 import { buildIcs, calendarInfo, findByToken, noteFetch, setCalendar } from "./calendar.ts";
 import {
   addCalendarEvent,
@@ -82,6 +85,7 @@ import {
 } from "../wx/pushGuard.ts";
 import {
   createDropTokenFromUi,
+  getKbWorkspaceListPageForUi,
   getKbWorkspaceStatusForUi,
   getWorkspaceAutomationStatus,
   initKbWorkspaceFromUi,
@@ -1492,16 +1496,23 @@ export async function handleOp(
     }
     case "memory_center_get": {
       const scope = typeof args.scope === "string" ? args.scope : undefined;
+      const cursor = typeof args.cursor === "string" ? args.cursor : undefined;
+      const limit = typeof args.limit === "number" ? args.limit : undefined;
       const workspaces = deps?.workspaces(tenant) ?? [];
-      return { ok: true, data: memoryCenterGet(tenant, workspaces, scope) };
+      return {
+        ok: true,
+        data: memoryCenterGet(tenant, workspaces, scope, cursor !== undefined || limit !== undefined ? { cursor, limit } : undefined),
+      };
     }
     case "memory_center_search": {
       const query = str(args.query);
       const scope = typeof args.scope === "string" ? args.scope : undefined;
       const kind = typeof args.kind === "string" ? args.kind : undefined;
       const state = typeof args.state === "string" ? args.state : undefined;
+      const cursor = typeof args.cursor === "string" ? args.cursor : undefined;
+      const limit = typeof args.limit === "number" ? args.limit : undefined;
       const workspaces = deps?.workspaces(tenant) ?? [];
-      const result = memoryCenterSearch(tenant, workspaces, { query, scope, kind, state });
+      const result = memoryCenterSearch(tenant, workspaces, { query, scope, kind, state, cursor, limit });
       return result.ok ? { ok: true, data: result.data } : fail(result.error);
     }
     case "memory_center_mutate": {
@@ -1555,7 +1566,16 @@ export async function handleOp(
     }
     case "memory_center_suggestions_get": {
       const scope = typeof args.scope === "string" ? args.scope : undefined;
-      return { ok: true, data: memoryCenterSuggestionsGet(refOf(tenant), scope) };
+      const cursor = typeof args.cursor === "string" ? args.cursor : undefined;
+      const limit = typeof args.limit === "number" ? args.limit : undefined;
+      return {
+        ok: true,
+        data: memoryCenterSuggestionsGet(
+          refOf(tenant),
+          scope,
+          cursor !== undefined || limit !== undefined ? { cursor, limit } : undefined,
+        ),
+      };
     }
     case "memory_center_suggestion_answer": {
       const scope = str(args.scope);
@@ -2135,19 +2155,98 @@ export async function handleOp(
       const res = revokeDropTokenFromUi(dropHostFor(tenant), { workspace, idOrLabel, globalRevoke });
       return res.ok ? { ok: true, data: res.data } : fail(res.error);
     }
+    case "assistant_list_page": {
+      const kind = str(args.kind) as AssistantListPageKind;
+      const cursor = typeof args.cursor === "string" ? args.cursor : undefined;
+      const limit = typeof args.limit === "number" ? args.limit : undefined;
+      const filter = typeof args.filter === "string" ? args.filter.trim() : undefined;
+      let all: unknown[] = [];
+      switch (kind) {
+        case "inbox": {
+          const rows = listInbox(ref, 1000);
+          all =
+            filter === "unread"
+              ? rows.filter((row) => !row.read)
+              : filter === "active"
+                ? rows.filter((row) => !row.resolved)
+                : rows;
+          break;
+        }
+        case "delegations": {
+          const rows = listDelegations(ref, Number.MAX_SAFE_INTEGER);
+          const isActive = (row: Delegation) =>
+            row.interrupted || ["queued", "running", "awaiting"].includes(row.status);
+          const active = rows.filter(isActive).sort((a, b) => b.createdAt - a.createdAt);
+          const history = rows
+            .filter((row) => !isActive(row))
+            .sort((a, b) => (b.endedAt ?? b.createdAt) - (a.endedAt ?? a.createdAt));
+          const selected = filter === "active" ? active : filter === "history" ? history : [...active, ...history];
+          all = selected.map(publicDelegation);
+          break;
+        }
+        case "todos": {
+          const todoFilter = filter === "open" || filter === "done" ? filter : "all";
+          all = listAllTodos(ref, todoFilter);
+          break;
+        }
+        case "artifacts": {
+          all = buildArtifactProjection(
+            {
+              chats: getTenant(tenant.id)?.disk.chats ?? [],
+              delegations: listDelegations(ref, Number.MAX_SAFE_INTEGER),
+              inbox: listInbox(ref, 1000),
+            },
+            2000,
+          );
+          break;
+        }
+        case "schedules": {
+          all = listSchedules(ref);
+          break;
+        }
+        case "runs": {
+          all = listRuns(ref, 500);
+          break;
+        }
+        default:
+          return fail(`不支持的助理分页类型：${String(kind)}`);
+      }
+      const paged = sliceOffsetPage(all, { cursor, limit, defaultLimit: 30, maxLimit: 100 });
+      return {
+        ok: true,
+        data: {
+          kind,
+          items: paged.items,
+          total: paged.total,
+          hasMore: paged.hasMore,
+          ...(paged.nextCursor ? { nextCursor: paged.nextCursor } : {}),
+        },
+      };
+    }
+    case "kb_workspace_list_page": {
+      const workspace = str(args.workspace);
+      const kind = str(args.kind) as KbWorkspaceListPageKind;
+      const cursor = typeof args.cursor === "string" ? args.cursor : undefined;
+      const limit = typeof args.limit === "number" ? args.limit : undefined;
+      const scheduleId = typeof args.scheduleId === "string" ? args.scheduleId.trim() || undefined : undefined;
+      const res = getKbWorkspaceListPageForUi(dropHostFor(tenant), { workspace, kind, cursor, limit, scheduleId });
+      return res.ok ? { ok: true, data: res.data } : fail(res.error);
+    }
     case "skill_factory_status": {
       const scopeRaw = str(args.scope);
       const scope =
         scopeRaw === "platform" || scopeRaw === "workspace" || scopeRaw === "repo" ? scopeRaw : undefined;
       const query = str(args.query).trim() || undefined;
       const workspace = str(args.workspace).trim();
+      const cursor = typeof args.cursor === "string" ? args.cursor : undefined;
+      const limit = typeof args.limit === "number" ? args.limit : undefined;
       let targetCwd = tenant.workspaceRoot;
       if (workspace && workspace !== "personal" && workspace !== "work_preference" && workspace !== "overview") {
         if (workspace.startsWith("/") || workspace.includes("..") || workspace.includes("\\")) {
           return fail("workspace 路径越界或不合法。");
         }
         const candidate = resolve(tenant.workspaceRoot, workspace);
-    const candidateReal = existsSync(candidate) ? realpathSync(candidate) : candidate;
+        const candidateReal = existsSync(candidate) ? realpathSync(candidate) : candidate;
         const rootReal = existsSync(tenant.workspaceRoot) ? realpathSync(tenant.workspaceRoot) : resolve(tenant.workspaceRoot);
         if (!isInside(candidateReal, rootReal) || candidateReal === rootReal) {
           return fail("workspace 路径越界。");
@@ -2155,7 +2254,7 @@ export async function handleOp(
         targetCwd = candidateReal;
       }
       const workspaces = deps?.workspaces(tenant) ?? [];
-      const skills = listSkillSummaries(tenant, targetCwd, {
+      const allSkills = listSkillSummaries(tenant, targetCwd, {
         runnerRole: "foreground",
         scope,
         query,
@@ -2163,8 +2262,33 @@ export async function handleOp(
         includeBody: true,
         workspaceNames: workspaces,
       });
-      const proposals = listSkillProposals(tenant);
-      return { ok: true, data: { skills, proposals } };
+      const allProposals = listSkillProposals(tenant);
+      if (cursor !== undefined || limit !== undefined) {
+        const pagedSkills = sliceOffsetPage(allSkills, { cursor, limit, defaultLimit: 30, maxLimit: 100 });
+        return {
+          ok: true,
+          data: {
+            skills: pagedSkills.items,
+            proposals: pagedSkills.offset === 0 ? allProposals : [],
+            skillsTotal: pagedSkills.total,
+            skillsHasMore: pagedSkills.hasMore,
+            ...(pagedSkills.nextCursor ? { skillsNextCursor: pagedSkills.nextCursor } : {}),
+            proposalsTotal: allProposals.length,
+            proposalsHasMore: false,
+          },
+        };
+      }
+      return {
+        ok: true,
+        data: {
+          skills: allSkills,
+          proposals: allProposals,
+          skillsTotal: allSkills.length,
+          skillsHasMore: false,
+          proposalsTotal: allProposals.length,
+          proposalsHasMore: false,
+        },
+      };
     }
     case "skill_proposal_decide": {
       const proposalId = str(args.proposalId).trim();

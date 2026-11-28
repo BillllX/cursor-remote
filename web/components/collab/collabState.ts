@@ -9,9 +9,14 @@ export type CollabTimelineMessage = ImMessage & { pending?: boolean };
 export type CollabUiState = {
   rooms: Record<string, CollabRoom>;
   roomOrder: string[];
+  roomsHasMore?: boolean;
+  roomsCursor?: string;
+  roomsLoading?: boolean;
   messages: Record<string, CollabTimelineMessage[]>;
   historyLoading: Record<string, boolean>;
   historyLoaded: Record<string, boolean>;
+  historyHasMore?: Record<string, boolean>;
+  historyLoadingOlder?: Record<string, boolean>;
   runs: Record<string, CollabRunState>;
   runOrder: Record<string, string[]>;
   drafts: Record<string, CollabDraft>;
@@ -28,9 +33,14 @@ export type CollabUiState = {
 export const emptyCollabState = (connection: CollabConnection = "offline"): CollabUiState => ({
   rooms: {},
   roomOrder: [],
+  roomsHasMore: false,
+  roomsCursor: undefined,
+  roomsLoading: false,
   messages: {},
   historyLoading: {},
   historyLoaded: {},
+  historyHasMore: {},
+  historyLoadingOlder: {},
   runs: {},
   runOrder: {},
   drafts: {},
@@ -41,11 +51,13 @@ export const emptyCollabState = (connection: CollabConnection = "offline"): Coll
 
 export type CollabAction =
   | { type: "connection"; connection: CollabConnection }
-  | { type: "rooms"; rooms: CollabRoom[] }
+  | { type: "rooms_loading" }
+  | { type: "rooms"; rooms: CollabRoom[]; more?: boolean; cursor?: string }
   | { type: "room"; room: CollabRoom }
   | { type: "select_room"; convId?: string }
   | { type: "history_loading"; convId: string }
-  | { type: "history"; convId: string; messages: ImMessage[] }
+  | { type: "history_loading_older"; convId: string }
+  | { type: "history"; convId: string; messages: ImMessage[]; more?: boolean; before?: number; after?: number }
   | { type: "message"; message: ImMessage; unread?: number }
   | { type: "room_update"; convId: string; unread?: number; readSeq?: number }
   | { type: "optimistic_message"; message: CollabTimelineMessage }
@@ -91,7 +103,18 @@ export function roomAttention(room: CollabRoom) {
 export function collabReducer(state: CollabUiState, action: CollabAction): CollabUiState {
   switch (action.type) {
     case "connection":
+      if (action.connection === "offline" || action.connection === "reconnecting") {
+        return {
+          ...state,
+          connection: action.connection,
+          roomsLoading: false,
+          historyLoading: {},
+          historyLoadingOlder: {},
+        };
+      }
       return { ...state, connection: action.connection };
+    case "rooms_loading":
+      return { ...state, roomsLoading: true };
     case "rooms": {
       const rooms = { ...state.rooms };
       for (const room of action.rooms) if (isCollabGroupId(room.convId)) rooms[room.convId] = room;
@@ -102,6 +125,9 @@ export function collabReducer(state: CollabUiState, action: CollabAction): Colla
         ...state,
         rooms,
         roomOrder,
+        roomsHasMore: Boolean(action.more && action.cursor),
+        roomsCursor: action.more ? action.cursor : undefined,
+        roomsLoading: false,
         selectedConvId: state.selectedConvId ?? roomOrder[0],
       };
     }
@@ -126,8 +152,15 @@ export function collabReducer(state: CollabUiState, action: CollabAction): Colla
         ...state,
         historyLoading: { ...state.historyLoading, [action.convId]: true },
       };
-    case "history":
+    case "history_loading_older":
+      return {
+        ...state,
+        historyLoadingOlder: { ...(state.historyLoadingOlder ?? {}), [action.convId]: true },
+      };
+    case "history": {
       if (!isCollabGroupId(action.convId)) return state;
+      // 仅当不是 after 增量同步时更新「是否还有更早消息」标记。
+      const updateMore = action.after === undefined;
       return {
         ...state,
         messages: {
@@ -135,8 +168,13 @@ export function collabReducer(state: CollabUiState, action: CollabAction): Colla
           [action.convId]: mergeMessages(state.messages[action.convId] ?? [], action.messages),
         },
         historyLoading: { ...state.historyLoading, [action.convId]: false },
+        historyLoadingOlder: { ...(state.historyLoadingOlder ?? {}), [action.convId]: false },
         historyLoaded: { ...state.historyLoaded, [action.convId]: true },
+        historyHasMore: updateMore
+          ? { ...(state.historyHasMore ?? {}), [action.convId]: Boolean(action.more) }
+          : state.historyHasMore,
       };
+    }
     case "message": {
       const convId = action.message.convId;
       if (!isCollabGroupId(convId)) return state;
@@ -271,12 +309,21 @@ export function collabActionFromServer(message: ServerMessage): CollabAction | u
       return {
         type: "rooms",
         rooms: message.convs.filter((row): row is CollabRoom => row.kind === "group" && isCollabGroupId(row.convId)),
+        more: message.more,
+        cursor: message.cursor,
       };
     case "im_group_created":
       return { type: "room", room: message.conv };
     case "im_history":
       return isCollabGroupId(message.convId)
-        ? { type: "history", convId: message.convId, messages: message.messages }
+        ? {
+            type: "history",
+            convId: message.convId,
+            messages: message.messages,
+            more: message.more,
+            before: message.before,
+            after: message.after,
+          }
         : undefined;
     case "im_message":
       return isCollabGroupId(message.message.convId)

@@ -11,6 +11,7 @@ struct MemoryCenterPendingRequest: Sendable, Hashable {
     var kind: MemoryCenterRequestKind
     var scopeId: String?
     var query: String?
+    var append: Bool = false
 }
 
 struct MemoryCenterDataState: Sendable, Hashable {
@@ -190,7 +191,20 @@ enum MemoryCenterReducer {
         }
         if message.op == "memory_center_search", let payload = message.searchData {
             guard message.reqId == dataBefore.activeSearchReqId else { return next }
-            next.search = payload
+            if pending.append, let existing = dataBefore.search {
+                let seen = Set(existing.hits.map(\.stableId))
+                let mergedHits = existing.hits + payload.hits.filter { !seen.contains($0.stableId) }
+                next.search = MemoryCenterSearchData(
+                    hits: mergedHits,
+                    truncated: payload.truncated,
+                    payloadTruncated: existing.payloadTruncated || payload.payloadTruncated,
+                    total: payload.total ?? existing.total,
+                    hasMore: payload.hasMore,
+                    nextCursor: payload.nextCursor
+                )
+            } else {
+                next.search = payload
+            }
             next.searchError = ""
             return next
         }
@@ -253,8 +267,26 @@ enum MemoryCenterReducer {
         guard let detail = payload.detail else { return next }
         if let want = pending.scopeId, detail.scope.id != want { return next }
         if let active = dataBefore.activeScopeId, detail.scope.id != active { return next }
-        next.detail = detail
-        next.detailPayloadTruncated = payload.payloadTruncated
+        if pending.append, let existing = dataBefore.detail, existing.scope.id == detail.scope.id {
+            let seen = Set(existing.items.map(\.stableId))
+            let mergedItems = existing.items + detail.items.filter { !seen.contains($0.stableId) }
+            next.detail = MemoryCenterScopeDetail(
+                scope: detail.scope,
+                items: mergedItems,
+                rules: existing.rules.isEmpty ? detail.rules : existing.rules,
+                diagnostics: existing.diagnostics ?? detail.diagnostics,
+                itemsTruncated: detail.itemsTruncated,
+                rulesTruncated: existing.rulesTruncated,
+                rulesPayloadTruncated: existing.rulesPayloadTruncated,
+                itemsTotal: detail.itemsTotal ?? existing.itemsTotal,
+                itemsHasMore: detail.itemsHasMore,
+                itemsNextCursor: detail.itemsNextCursor
+            )
+            next.detailPayloadTruncated = dataBefore.detailPayloadTruncated || payload.payloadTruncated
+        } else {
+            next.detail = detail
+            next.detailPayloadTruncated = payload.payloadTruncated
+        }
         next.scopeError = ""
         return next
     }

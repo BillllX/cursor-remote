@@ -38,6 +38,19 @@ struct AdminStatsView: View {
                         tenantSection(row)
                             .listRowBackground(JieboColor.white)
                     }
+                    if store.adminStatsHasMore || store.adminStatsLoadingMore {
+                        Section {
+                            PaginationLoadMoreRow(
+                                hasMore: store.adminStatsHasMore,
+                                loading: store.adminStatsLoadingMore,
+                                loadedCount: store.adminStats.count,
+                                totalCount: store.adminStatsTotal,
+                                label: "加载更多租户",
+                                onLoadMore: { store.loadMoreAdminStats() }
+                            )
+                            .listRowBackground(JieboColor.white)
+                        }
+                    }
                     footer
                         .listRowBackground(Color.clear)
                 }

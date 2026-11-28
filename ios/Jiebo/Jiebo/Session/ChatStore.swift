@@ -340,6 +340,10 @@ final class ChatStore {
     /// 网关为了不超单条上限裁掉了一部分命中
     var searchTruncated = false
     var searchLoading = false
+    var searchTotal: Int? = nil
+    var searchHasMore = false
+    var searchNextOffset: Int? = nil
+    var searchLoadingMore = false
     /// 内容搜索没发出去时的原因。文件名仍走本地索引。
     var searchContentNote = ""
     var searchTask: Task<Void, Never>?
@@ -611,6 +615,9 @@ final class ChatStore {
     var dirEntriesByChat: [String: [String: [String]]] = [:]
     var loadingDirsByChat: [String: Set<String>] = [:]
     var truncatedDirsByChat: [String: Set<String>] = [:]
+    var dirNextCursorByChat: [String: [String: String]] = [:]
+    var dirTotalByChat: [String: [String: Int]] = [:]
+    @ObservationIgnored var dirAppendingByChat: [String: Set<String>] = [:]
     @ObservationIgnored var loadedDirsByChat: [String: Set<String>] = [:]
     @ObservationIgnored var mergedPathsCacheByChat: [String: [String]] = [:]
     @ObservationIgnored var mentionFilePoolCacheByChat: [String: [String]] = [:]
@@ -710,6 +717,11 @@ final class ChatStore {
     var isAdmin = false
     var adminStats: [AdminTenantStats] = []
     var adminStatsAt: Date?
+    var adminStatsTotal: Int? = nil
+    var adminStatsHasMore = false
+    var adminStatsNextCursor: String? = nil
+    var adminStatsLoadingMore = false
+    @ObservationIgnored var adminStatsAppending = false
     /// 当前服务器 API Key 的 Cursor 官方账单（admin_stats.cursor）
     var cursorBill: CursorBill?
     /// P8 slim：内容分页加载中的会话（ThreadView 遮罩 + 在途页去重用）

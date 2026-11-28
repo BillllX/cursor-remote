@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { CollabRunState } from "@shared/protocol";
 import { STATUS_LEGEND, statusAriaLabel } from "../../lib/productNavigation";
+import { PaginationBar } from "../PaginationBar";
 import type { CollabRoom } from "./collabState";
 import { indicatorsForRoom } from "./collabView";
 import styles from "./collab.module.css";
@@ -12,6 +13,9 @@ export function CollabSidebar({
   onSelect,
   onCreate,
   onOpenColleagues,
+  roomsHasMore,
+  roomsLoading,
+  onLoadMoreRooms,
 }: {
   rooms: CollabRoom[];
   selectedConvId?: string;
@@ -19,6 +23,9 @@ export function CollabSidebar({
   onSelect: (convId: string) => void;
   onCreate: () => void;
   onOpenColleagues?: () => void;
+  roomsHasMore?: boolean;
+  roomsLoading?: boolean;
+  onLoadMoreRooms?: () => void;
 }) {
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => {
@@ -132,6 +139,17 @@ export function CollabSidebar({
             <strong>{rooms.length ? "没有匹配的协作群" : "正在创建小驳协作群"}</strong>
             <p>{rooms.length ? "换个关键词试试。" : "默认群会包含小驳和可用的工作区 Agent。"}</p>
           </div>
+        ) : null}
+        {onLoadMoreRooms ? (
+          <PaginationBar
+            hasMore={Boolean(roomsHasMore)}
+            loading={Boolean(roomsLoading)}
+            loadedCount={rooms.length}
+            label="加载更多协作群"
+            compact
+            autoLoad
+            onLoadMore={onLoadMoreRooms}
+          />
         ) : null}
       </div>
     </aside>

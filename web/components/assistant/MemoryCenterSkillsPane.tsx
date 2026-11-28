@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { BuildAssistantOpMessage } from "@shared/assistantOp";
 import type {
   AssistantResultMessage,
@@ -9,6 +9,7 @@ import type {
   SkillFactoryScope,
   SkillFactorySummaryItem,
 } from "@shared/protocol";
+import { PaginationBar } from "../PaginationBar";
 import styles from "./memoryCenter.module.css";
 import { MEMORY_CENTER_CSS } from "./memoryCenterLabels";
 
@@ -335,18 +336,36 @@ export default function MemoryCenterSkillsPane({
   onUseSkillInChat,
 }: Props) {
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [skills, setSkills] = useState<SkillFactorySummaryItem[]>([]);
+  const [skillsTotal, setSkillsTotal] = useState<number | undefined>(undefined);
+  const [skillsHasMore, setSkillsHasMore] = useState(false);
+  const [skillsNextCursor, setSkillsNextCursor] = useState<string | undefined>(undefined);
   const [proposals, setProposals] = useState<SkillFactoryProposalItem[]>([]);
   const [scopeFilter, setScopeFilter] = useState<SkillFactoryScope | "all">("all");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [decidingId, setDecidingId] = useState<string | null>(null);
+  const appendingRef = useRef(false);
+  const skillsRef = useRef(skills);
+  skillsRef.current = skills;
+  const proposalsRef = useRef(proposals);
+  proposalsRef.current = proposals;
 
   const loadSkills = useCallback(() => {
     setLoading(true);
+    setLoadingMore(false);
+    appendingRef.current = false;
     setError(null);
-    op("skill_factory_status", { workspace: folderId || undefined });
+    op("skill_factory_status", { workspace: folderId || undefined, limit: 30 });
   }, [folderId, op]);
+
+  const loadMoreSkills = useCallback(() => {
+    if (!skillsHasMore || !skillsNextCursor || loadingMore) return;
+    setLoadingMore(true);
+    appendingRef.current = true;
+    op("skill_factory_status", { workspace: folderId || undefined, cursor: skillsNextCursor, limit: 30 });
+  }, [folderId, loadingMore, op, skillsHasMore, skillsNextCursor]);
 
   useEffect(() => {
     loadSkills();
@@ -363,18 +382,35 @@ export default function MemoryCenterSkillsPane({
       return;
     }
     setLoading(false);
+    setLoadingMore(false);
     setDecidingId(null);
     if (!lastResult.ok) {
+      appendingRef.current = false;
       setError(lastResult.error || "技能工厂操作失败");
       return;
     }
     setError(null);
     if (lastResult.data) {
-      const nextSkills = lastResult.data.skills ?? [];
-      const nextProposals = lastResult.data.proposals ?? [];
-      setSkills(nextSkills);
-      setProposals(nextProposals);
-      onDataChange?.(nextSkills, nextProposals);
+      const incomingSkills = lastResult.data.skills ?? [];
+      const incomingProposals = lastResult.data.proposals ?? [];
+      const shouldAppend = appendingRef.current && lastResult.op === "skill_factory_status";
+      appendingRef.current = false;
+      const prevSkills = skillsRef.current;
+      const mergedSkills = shouldAppend
+        ? [
+            ...prevSkills,
+            ...incomingSkills.filter(
+              (item) => !prevSkills.some((known) => known.id === item.id && known.entry === item.entry),
+            ),
+          ]
+        : incomingSkills;
+      const nextProposals = shouldAppend ? proposalsRef.current : incomingProposals;
+      setSkills(mergedSkills);
+      if (!shouldAppend) setProposals(incomingProposals);
+      onDataChange?.(mergedSkills, nextProposals);
+      setSkillsTotal(lastResult.data.skillsTotal);
+      setSkillsHasMore(Boolean(lastResult.data.skillsHasMore));
+      setSkillsNextCursor(lastResult.data.skillsNextCursor);
     }
     if (lastResult.op === "skill_proposal_decide") {
       onNotice("技能提案已处理。");
@@ -602,6 +638,15 @@ export default function MemoryCenterSkillsPane({
           <ul className="assistant-list">{guardSkills.map(renderSkillRow)}</ul>
         </>
       ) : null}
+      <PaginationBar
+        hasMore={skillsHasMore}
+        loading={loadingMore}
+        loadedCount={skills.length}
+        totalCount={skillsTotal}
+        label="加载更多技能"
+        compact
+        onLoadMore={loadMoreSkills}
+      />
     </div>
   );
 }

@@ -16,6 +16,8 @@ struct WorkspacePickerSheet: View {
     @State private var deleting: WorkspaceItem?
     @State private var clearing: WorkspaceItem?
     @State private var selectedWorkspace: WorkspaceItem?
+    /// 工作区列表分页展示窗口，避免工作区数量大时一次性创建全部 List 行
+    @State private var visibleWorkspaceLimit = 30
 
     private var browsingWorkspaces: Bool { showWorkbench != nil }
 
@@ -124,14 +126,24 @@ struct WorkspacePickerSheet: View {
                         .listRowBackground(JieboColor.white)
                     }
                     if !remaining.isEmpty {
+                        let visibleRemaining = Array(remaining.prefix(visibleWorkspaceLimit))
                         Section {
-                            ForEach(remaining, id: \.item.id) { entry in
+                            ForEach(visibleRemaining, id: \.item.id) { entry in
                                 row(
                                     entry.item,
                                     showPath: duplicates.contains(entry.item.name),
                                     stat: stats[entry.key],
                                     current: entry.key == currentNormPath,
                                     chatCount: countsUnder[entry.key] ?? 0
+                                )
+                            }
+                            if remaining.count > visibleRemaining.count {
+                                PaginationLoadMoreRow(
+                                    hasMore: true,
+                                    loadedCount: visibleRemaining.count,
+                                    totalCount: remaining.count,
+                                    label: browsingWorkspaces ? "加载更多工作区" : "加载更多文件夹",
+                                    onLoadMore: { visibleWorkspaceLimit += 30 }
                                 )
                             }
                         } header: {

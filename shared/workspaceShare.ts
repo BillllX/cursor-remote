@@ -23,6 +23,8 @@ export type WorkspaceShareRequest = {
   question?: string;
   beforeTurn?: string;
   threadId?: string;
+  cursor?: string;
+  limit?: number;
   stream?: boolean;
   section?: "skills" | "schedules" | "memory" | "management";
   operation?: "list" | "propose" | "pause" | "rename";

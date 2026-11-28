@@ -1,6 +1,6 @@
 // 对话线程：查找条、提示、骨架屏与回合列表（单个回合的渲染在 TurnRow，带 memo）
 import type { DelegationAction } from "./DelegationReceipt";
-import { useMemo, type Dispatch, type RefObject, type SetStateAction } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import type { AssistantDelegation } from "@shared/protocol";
 import type { Components } from "react-markdown";
 import { friendlyError } from "../../lib/chat/format";
@@ -8,8 +8,11 @@ import { PERF, perfCountThread } from "../../lib/chat/perf";
 import { useStableActions } from "../../lib/chat/stableActions";
 import { planTurnRows } from "../../lib/chat/threadRows";
 import type { Chat, ToolCall, Turn } from "../../lib/chat/types";
+import { PaginationBar } from "../PaginationBar";
 import { ThreadFind } from "./ThreadFind";
 import { TurnRow } from "./TurnRow";
+
+const TURN_PAGE_SIZE = 30;
 
 type ThreadProps = {
   threadRef: RefObject<HTMLDivElement | null>;
@@ -121,9 +124,46 @@ export function Thread({
   }, [delegations, activeId]);
   // 每行依赖的派生值（前一有效回合、是否末轮）一次扫描算好，行组件只收原始值
   const rows = planTurnRows(active.turns);
+  const [visibleCount, setVisibleCount] = useState(TURN_PAGE_SIZE);
+  const expandAnchorHeightRef = useRef<number | null>(null);
   const findHitId = threadFindHits[threadFindHi]?.id;
   const findQuery = threadFindOpen ? threadFindQ : undefined;
   const locked = !connected || busy;
+
+  // 切换会话时恢复默认每页条数，避免旧长会话的窗口泄漏到新会话。
+  useEffect(() => {
+    setVisibleCount(TURN_PAGE_SIZE);
+    expandAnchorHeightRef.current = null;
+  }, [activeId]);
+
+  // 线程内查找命中更早回合时，自动扩大渲染窗口保证命中行立即可见。
+  useEffect(() => {
+    if (!findHitId) return;
+    const hitIdx = rows.findIndex((row) => row.turn.id === findHitId);
+    if (hitIdx < 0) return;
+    const needed = rows.length - hitIdx;
+    if (needed > visibleCount) {
+      setVisibleCount(Math.ceil(needed / TURN_PAGE_SIZE) * TURN_PAGE_SIZE);
+    }
+  }, [findHitId, rows, visibleCount]);
+
+  useLayoutEffect(() => {
+    const prevHeight = expandAnchorHeightRef.current;
+    const container = threadRef.current;
+    if (prevHeight !== null && container) {
+      const delta = container.scrollHeight - prevHeight;
+      if (delta > 0) container.scrollTop += delta;
+      expandAnchorHeightRef.current = null;
+    }
+  }, [visibleCount, threadRef]);
+
+  const hiddenCount = Math.max(0, rows.length - visibleCount);
+  const visibleRows = hiddenCount > 0 ? rows.slice(hiddenCount) : rows;
+  const loadEarlierTurns = () => {
+    if (threadRef.current) expandAnchorHeightRef.current = threadRef.current.scrollHeight;
+    setVisibleCount((prev) => prev + TURN_PAGE_SIZE);
+  };
+
   return (
     <div className="thread" ref={threadRef} onScroll={onThreadScroll}>
       {threadFindOpen ? (
@@ -155,10 +195,23 @@ export function Thread({
               ))}
             </div>
           </div>
-        ) : loadingOlder ? (
-          <div className="thread-loading">正在加载更早的内容…</div>
-        ) : null}
-        {rows.map(({ turn, hideUser, isLast, deferrable }) => (
+        ) : (
+          <>
+            {loadingOlder ? <div className="thread-loading">正在加载更早的内容…</div> : null}
+            {hiddenCount > 0 ? (
+              <PaginationBar
+                placement="top"
+                hasMore
+                loadedCount={visibleRows.length}
+                totalCount={rows.length}
+                label={`加载更早对话（还有 ${hiddenCount} 条）`}
+                compact
+                onLoadMore={loadEarlierTurns}
+              />
+            ) : null}
+          </>
+        )}
+        {visibleRows.map(({ turn, hideUser, isLast, deferrable }) => (
           <TurnRow
             key={turn.id}
             turn={turn}

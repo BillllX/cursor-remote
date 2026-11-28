@@ -292,6 +292,7 @@ export default function FileTree({
   loadingDirs = {},
   truncatedDirs = {},
   onExpandDir,
+  onLoadMoreDir,
   onPick,
   onOpen,
   onCopyPath,
@@ -308,6 +309,7 @@ export default function FileTree({
   loadingDirs?: Record<string, boolean>;
   truncatedDirs?: Record<string, boolean>;
   onExpandDir?: (dir: string) => void;
+  onLoadMoreDir?: (dir: string) => void;
   onPick: (path: string) => void;
   onOpen?: (path: string) => void;
   onCopyPath?: (path: string) => void;
@@ -544,6 +546,7 @@ export default function FileTree({
           openDirs={openDirs}
           loadingDirs={loadingDirs}
           truncatedDirs={truncatedDirs}
+          onLoadMoreDir={onLoadMoreDir}
           expandAll={expandAll}
           variant={variant}
           creating={creating}
@@ -635,7 +638,20 @@ export default function FileTree({
         </div>
       ) : null}
       {truncated || truncatedDirs[""] ? (
-        <div className="tree-truncated">工作区文件太多，清单被截断了，用搜索缩小范围。</div>
+        <div className="tree-truncated">
+          {onLoadMoreDir && truncatedDirs[""] ? (
+            <button
+              type="button"
+              className="pill"
+              disabled={Boolean(loadingDirs[""])}
+              onClick={() => onLoadMoreDir("")}
+            >
+              {loadingDirs[""] ? "正在加载更多文件…" : "加载更多文件"}
+            </button>
+          ) : (
+            "工作区文件太多，清单被截断了，用搜索缩小范围。"
+          )}
+        </div>
       ) : null}
     </div>
   );
@@ -688,6 +704,7 @@ function Branch({
   openDirs,
   loadingDirs,
   truncatedDirs,
+  onLoadMoreDir,
   expandAll,
   variant,
   creating,
@@ -711,6 +728,7 @@ function Branch({
   openDirs: Record<string, boolean>;
   loadingDirs: Record<string, boolean>;
   truncatedDirs: Record<string, boolean>;
+  onLoadMoreDir?: (dir: string) => void;
   expandAll: boolean;
   variant: "panel" | "browser";
   creating: { dir: string; kind: "file" | "dir" } | null;
@@ -791,6 +809,7 @@ function Branch({
                 openDirs={openDirs}
                 loadingDirs={loadingDirs}
                 truncatedDirs={truncatedDirs}
+                onLoadMoreDir={onLoadMoreDir}
                 expandAll={expandAll}
                 variant={variant}
                 creating={creating}
@@ -810,7 +829,18 @@ function Branch({
             ))}
             {dirTruncated ? (
               <div className="tree-truncated" style={{ paddingLeft: rowPad(depth + 1) }}>
-                此目录文件较多，仅显示前 1000 项，请用搜索缩小范围。
+                {onLoadMoreDir ? (
+                  <button
+                    type="button"
+                    className="pill"
+                    disabled={Boolean(loadingDirs[node.path])}
+                    onClick={() => onLoadMoreDir(node.path)}
+                  >
+                    {loadingDirs[node.path] ? "正在加载更多…" : "加载此目录更多文件"}
+                  </button>
+                ) : (
+                  "此目录文件较多，仅显示前 1000 项，请用搜索缩小范围。"
+                )}
               </div>
             ) : null}
           </>

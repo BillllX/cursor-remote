@@ -17,6 +17,7 @@ import { listWorkspaceScopeIds, resolveWorkspaceScope } from "./memoryCenterScop
 import { stableSuggestionId } from "./memoryCenterAudit.ts";
 import { memoryLineRevision } from "./memoryRevision.ts";
 import { assistantPath, readJson, writeJson, type TenantRef } from "./store.ts";
+import { sliceOffsetPage } from "../pagination.ts";
 import {
   effectiveMemoryState,
   normalizeMemoryText,
@@ -330,15 +331,25 @@ export function maybeRunDailySuggestionScan(
 export function memoryCenterSuggestionsGet(
   ref: TenantRef,
   scopeFilter?: string,
+  page?: { cursor?: string; limit?: number },
 ): MemoryCenterSuggestionsData {
   const state = readState(ref);
   let entries = state.active;
   if (scopeFilter?.trim()) entries = entries.filter((row) => row.scope === scopeFilter.trim());
+  const paged = sliceOffsetPage(entries, {
+    cursor: page?.cursor,
+    limit: page?.limit,
+    defaultLimit: page?.cursor || page?.limit ? 40 : MAX_ACTIVE_SUGGESTIONS,
+    maxLimit: MAX_ACTIVE_SUGGESTIONS,
+  });
   return {
     generatedAt: state.generatedAt || new Date(0).toISOString(),
     lastRunAt: state.lastRunAt,
-    entries: entries.slice(0, MAX_ACTIVE_SUGGESTIONS),
-    truncated: entries.length > MAX_ACTIVE_SUGGESTIONS,
+    entries: paged.items,
+    truncated: paged.hasMore,
+    total: paged.total,
+    hasMore: paged.hasMore,
+    ...(paged.nextCursor ? { nextCursor: paged.nextCursor } : {}),
   };
 }
 

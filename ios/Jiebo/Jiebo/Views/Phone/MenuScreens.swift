@@ -14,6 +14,13 @@ struct DelegationListScreen: View {
     var column: AssistantWorkColumn
     @State private var openedTask: PersonalTask?
     @State private var showCompleted = true
+    /// 历史委派分页状态（突破 assistant_state 20 条历史委派快照上限）
+    @State private var historyDelegations: [AssistantDelegation] = []
+    @State private var historyHasMore = false
+    @State private var historyNextCursor: String? = nil
+    @State private var historyTotal: Int? = nil
+    @State private var historyLoading = false
+    @State private var historyLoaded = false
 
     private let groups: [(phase: String, title: String)] = [
         ("needs_me", "需要我"),
@@ -95,6 +102,58 @@ struct DelegationListScreen: View {
                     JieboListHeader("委派")
                 }
             }
+            if column == .delegation {
+                Section {
+                    if !historyLoaded {
+                        Button {
+                            Task { await loadDelegationHistoryPage(cursor: "0", append: false) }
+                        } label: {
+                            HStack(spacing: 8) {
+                                if historyLoading {
+                                    ProgressView().controlSize(.small)
+                                    Text("正在加载历史委派…")
+                                } else {
+                                    Text("浏览全部历史委派")
+                                }
+                            }
+                            .font(JieboFont.text(.subheadline, weight: .medium))
+                            .foregroundStyle(JieboColor.pine)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(historyLoading)
+                        .listRowBackground(JieboColor.white)
+                    } else if historyDelegations.isEmpty {
+                        Text("暂无更多历史委派")
+                            .font(JieboFont.text(.footnote))
+                            .foregroundStyle(JieboColor.dim)
+                            .listRowBackground(JieboColor.white)
+                    } else {
+                        ForEach(historyDelegations) { row in
+                            delegationRow(row)
+                                .listRowBackground(JieboColor.white)
+                        }
+                        if historyHasMore || historyLoading {
+                            PaginationLoadMoreRow(
+                                hasMore: historyHasMore,
+                                loading: historyLoading,
+                                loadedCount: historyDelegations.count,
+                                totalCount: historyTotal,
+                                label: "加载更多历史委派",
+                                onLoadMore: {
+                                    if let cursor = historyNextCursor {
+                                        Task { await loadDelegationHistoryPage(cursor: cursor, append: true) }
+                                    }
+                                }
+                            )
+                            .listRowBackground(JieboColor.white)
+                        }
+                    }
+                } header: {
+                    JieboListHeader(historyTotal.map { "历史委派 (\($0))" } ?? "历史委派")
+                }
+            }
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
@@ -121,6 +180,31 @@ struct DelegationListScreen: View {
         .onAppear { openPendingTask() }
         .onChange(of: router.pendingWorkTaskId) { _, _ in openPendingTask() }
         .onChange(of: store.assistantState?.personalTasks?.map(\.id) ?? []) { _, _ in openPendingTask() }
+    }
+
+    private func loadDelegationHistoryPage(cursor: String?, append: Bool) async {
+        guard !historyLoading else { return }
+        historyLoading = true
+        defer { historyLoading = false }
+        var args: [String: JSONValue] = [
+            "kind": .string("delegations"),
+            "filter": .string("history"),
+            "limit": .number(20),
+        ]
+        if let cursor, !cursor.isEmpty { args["cursor"] = .string(cursor) }
+        let reply = await store.assistantOpData("assistant_list_page", args: args)
+        guard reply.ok, let obj = reply.data?.object else { return }
+        let rows = (obj["items"]?.array ?? []).compactMap(AssistantDelegation.from)
+        if append {
+            var seen = Set(historyDelegations.map(\.id))
+            historyDelegations.append(contentsOf: rows.filter { seen.insert($0.id).inserted })
+        } else {
+            historyDelegations = rows
+        }
+        historyTotal = obj["total"]?.int
+        historyHasMore = obj["hasMore"]?.bool ?? false
+        historyNextCursor = obj["nextCursor"]?.string?.nilIfEmpty
+        historyLoaded = true
     }
 
     /// 今日摘要或推送带过来的那一条。列表还没到就先留着，到了再打开。
@@ -2151,6 +2235,12 @@ struct KbWorkspaceSheet: View {
     @State private var scheduleEditor: KbWorkspaceScheduleItem?
     @State private var scheduleConfirmation: KbWorkspaceScheduleItem?
     @State private var deletingSchedule = false
+    /// 归档日志分页状态（突破 kb_workspace_status 25 条快照上限）
+    @State private var extraIngestLogs: [KbWorkspaceIngestLog] = []
+    @State private var ingestLogsHasMore = false
+    @State private var ingestLogsCursor: String? = nil
+    @State private var ingestLogsTotal: Int? = nil
+    @State private var ingestLogsLoadingMore = false
 
     /// 网关认的是相对工作区根目录的 key，不认绝对路径
     private var workspaceKey: String {
@@ -2485,9 +2575,19 @@ struct KbWorkspaceSheet: View {
 
     @ViewBuilder
     private var ingestLogSection: some View {
+        let baseLogs = status?.ingestLogs ?? []
+        let allLogs: [KbWorkspaceIngestLog] = {
+            guard !extraIngestLogs.isEmpty else { return baseLogs }
+            var seen = Set(baseLogs.map(\.batchId))
+            var out = baseLogs
+            for row in extraIngestLogs where seen.insert(row.batchId).inserted {
+                out.append(row)
+            }
+            return out
+        }()
         Section {
-            if let logs = status?.ingestLogs, !logs.isEmpty {
-                ForEach(logs) { log in
+            if !allLogs.isEmpty {
+                ForEach(allLogs) { log in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("\(shortTimeText(log.timestamp)) · \(log.submitterName)")
@@ -2523,15 +2623,51 @@ struct KbWorkspaceSheet: View {
                     }
                     .padding(.vertical, 2)
                 }
+                if ingestLogsHasMore || ingestLogsLoadingMore {
+                    PaginationLoadMoreRow(
+                        hasMore: ingestLogsHasMore,
+                        loading: ingestLogsLoadingMore,
+                        loadedCount: allLogs.count,
+                        totalCount: ingestLogsTotal,
+                        label: "加载更早归档记录",
+                        autoLoad: false,
+                        onLoadMore: {
+                            Task { await loadMoreIngestLogs(initialCount: baseLogs.count) }
+                        }
+                    )
+                }
             } else {
                 Text("还没有工作区归档更新记录。")
                     .font(JieboFont.text(.subheadline))
                     .foregroundStyle(JieboColor.ink2)
             }
         } header: {
-            JieboListHeader("工作区更新记录")
+            JieboListHeader(ingestLogsTotal.map { "工作区更新记录 (\($0))" } ?? "工作区更新记录")
         }
         .listRowBackground(JieboColor.white)
+    }
+
+    private func loadMoreIngestLogs(initialCount: Int) async {
+        guard !blocked, !ingestLogsLoadingMore else { return }
+        ingestLogsLoadingMore = true
+        defer { ingestLogsLoadingMore = false }
+        let cursor = ingestLogsCursor ?? String(initialCount)
+        let reply = await store.assistantOpData(
+            "kb_workspace_list_page",
+            args: [
+                "workspace": .string(workspaceKey),
+                "kind": .string("ingestLogs"),
+                "cursor": .string(cursor),
+                "limit": .number(25),
+            ]
+        )
+        guard reply.ok, let obj = reply.data?.object else { return }
+        let rows = (obj["items"]?.array ?? []).compactMap(KbWorkspaceIngestLog.parse)
+        var seen = Set(extraIngestLogs.map(\.batchId))
+        extraIngestLogs.append(contentsOf: rows.filter { seen.insert($0.batchId).inserted })
+        ingestLogsTotal = obj["total"]?.int
+        ingestLogsHasMore = obj["hasMore"]?.bool ?? false
+        ingestLogsCursor = obj["nextCursor"]?.string?.nilIfEmpty
     }
 
     @ViewBuilder
@@ -2860,6 +2996,10 @@ struct KbWorkspaceSheet: View {
     private func apply(_ reply: (ok: Bool, error: String?, data: JSONValue?), silent: Bool = false) -> Bool {
         if let parsed = KbWorkspaceStatus.parse(reply.data) {
             status = parsed
+            extraIngestLogs = []
+            ingestLogsHasMore = parsed.ingestLogs.count >= 25
+            ingestLogsCursor = parsed.ingestLogs.count >= 25 ? String(parsed.ingestLogs.count) : nil
+            ingestLogsTotal = nil
             if !editing {
                 titleDraft = parsed.title
                 categoriesDraft = parsed.allowedCategories.joined(separator: "、")

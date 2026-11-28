@@ -6,12 +6,15 @@ import type {
   KbHtmlBoardItem,
   KbWecomWatchedItemSummary,
   KbWorkspaceIngestLogItem,
+  KbWorkspaceListPageArgs,
+  KbWorkspaceListPageData,
   KbWorkspaceStatusData,
   KbWorkspaceSummaryItem,
   WorkspaceScheduleRunSummaryItem,
   WorkspaceScheduleSummaryItem,
 } from "../../../shared/protocol.ts";
 import { listColleagueProposals } from "../assistant/proposals.ts";
+import { sliceOffsetPage } from "../pagination.ts";
 import {
   ensureSafePathInWorkspace,
   isKbBoardVisibleOnDrop,
@@ -514,6 +517,95 @@ export function getKbWorkspaceStatusForUi(
       workspaceScheduleRuns,
       ...(ownerWx ? { ownerWx } : {}),
       dropPortalPath,
+    },
+  };
+}
+
+/** 知识库与工作区自动化各子列表游标分页查询，打破状态快照的固定条数截断。 */
+export function getKbWorkspaceListPageForUi(
+  host: DropTenantHost,
+  input: KbWorkspaceListPageArgs,
+): { ok: true; data: KbWorkspaceListPageData } | { ok: false; error: string } {
+  const raw = (input.workspace || "").trim();
+  const isGlobal = !raw || raw === "__all__";
+  let targetKey = raw;
+  let wsRef: ReturnType<DropTenantHost["resolveWorkspace"]> = null;
+  if (!isGlobal) {
+    const rootAbs = resolve(host.workspaceRoot);
+    if (raw.startsWith("/")) {
+      const abs = resolve(raw);
+      if (abs === rootAbs) return { ok: false, error: "USER 根目录不能作为知识库子工作区" };
+      if (abs.startsWith(`${rootAbs}/`)) targetKey = abs.slice(rootAbs.length + 1).split("/")[0] || raw;
+    }
+    wsRef = host.resolveWorkspace(targetKey);
+    if (!wsRef) return { ok: false, error: `找不到子工作区：${targetKey}` };
+  }
+
+  let all: unknown[] = [];
+  switch (input.kind) {
+    case "ingestLogs": {
+      if (!wsRef) return { ok: false, error: "归档日志分页需要指定子工作区" };
+      const kbLoaded = loadKbWorkspaceConfig(wsRef.path, host.workspaceRoot);
+      all = kbLoaded.ok
+        ? buildWorkspaceIngestLogsForUi(host, wsRef.workspaceId, kbLoaded.workspaceRealPath, 500)
+        : [];
+      break;
+    }
+    case "scheduleRuns": {
+      const runs = buildWorkspaceScheduleRunsForUi(host, wsRef?.key, 500);
+      all = input.scheduleId ? runs.filter((r) => r.scheduleId === input.scheduleId) : runs;
+      break;
+    }
+    case "proposals": {
+      all = buildTenantProposalsSummary(host);
+      break;
+    }
+    case "boards": {
+      if (!wsRef) return { ok: false, error: "看板分页需要指定子工作区" };
+      const kbLoaded = loadKbWorkspaceConfig(wsRef.path, host.workspaceRoot);
+      all = kbLoaded.ok
+        ? scanWorkspaceKbHtmlBoards(kbLoaded.workspaceRealPath, kbLoaded.config, { includeHiddenOnDrop: true })
+        : [];
+      break;
+    }
+    case "tokens": {
+      const allTokens = listDropTokens(host, { includeRevoked: false });
+      all = wsRef
+        ? allTokens.filter((t) =>
+            t.workspaces
+              ? t.workspaces.some((w) => w.workspaceId === wsRef.workspaceId)
+              : t.workspaceId === wsRef.workspaceId,
+          )
+        : allTokens;
+      break;
+    }
+    case "watchItems": {
+      all = buildWorkspaceWecomWatchItemsForUi(host, wsRef?.key);
+      break;
+    }
+    case "schedules": {
+      all = buildWorkspaceSchedulesForUi(host, wsRef?.key);
+      break;
+    }
+    default:
+      return { ok: false, error: `不支持的知识库分页列表类型：${String(input.kind)}` };
+  }
+
+  const paged = sliceOffsetPage(all, {
+    cursor: input.cursor,
+    limit: input.limit,
+    defaultLimit: 30,
+    maxLimit: 100,
+  });
+  return {
+    ok: true,
+    data: {
+      workspace: wsRef?.key ?? "",
+      kind: input.kind,
+      items: paged.items,
+      total: paged.total,
+      hasMore: paged.hasMore,
+      ...(paged.nextCursor ? { nextCursor: paged.nextCursor } : {}),
     },
   };
 }

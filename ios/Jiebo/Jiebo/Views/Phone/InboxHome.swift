@@ -11,6 +11,12 @@ struct InboxHome: View {
     @State private var selecting = false
     @State private var selected = Set<String>()
     @State private var archiving = false
+    /// 分页拉取的历史收件箱条目（突破 assistant_state 60 条快照上限）
+    @State private var extraInboxItems: [AssistantInboxItem] = []
+    @State private var inboxHasMore = false
+    @State private var inboxNextCursor: String? = nil
+    @State private var inboxTotal: Int? = nil
+    @State private var inboxLoadingMore = false
 
     init() {}
 
@@ -44,7 +50,17 @@ struct InboxHome: View {
                 if let chatId = approval.chatId.nilIfEmpty { approvalChatIds.insert(chatId) }
             }
         }
-        let sortedItems = (state?.inbox ?? [])
+        let baseInbox = state?.inbox ?? []
+        let combinedInbox: [AssistantInboxItem] = {
+            guard !extraInboxItems.isEmpty else { return baseInbox }
+            var seen = Set(baseInbox.map(\.id))
+            var out = baseInbox
+            for row in extraInboxItems where seen.insert(row.id).inserted {
+                out.append(row)
+            }
+            return out
+        }()
+        let sortedItems = combinedInbox
             .filter { item in
                 guard showHistory || item.needsAttention else { return false }
                 guard !showHistory, item.kind == "approval", item.decisionKind == nil else { return true }
@@ -77,7 +93,42 @@ struct InboxHome: View {
         .background(JieboColor.paper)
         .navigationTitle("收件箱")
         .navigationBarTitleDisplayMode(.inline)
-        .task { store.requestAssistant() }
+        .task {
+            store.requestAssistant()
+            let baseCount = state?.inbox.count ?? 0
+            if baseCount >= 60 && !inboxHasMore && inboxTotal == nil {
+                inboxHasMore = true
+                inboxNextCursor = String(baseCount)
+            }
+        }
+        .onChange(of: store.assistantState?.revision) { _, _ in
+            // 网关状态修订变化（归档/已读/新通知）时重置分页附加缓存，防止旧数据漂移
+            let baseCount = state?.inbox.count ?? 0
+            extraInboxItems = []
+            inboxTotal = nil
+            inboxHasMore = baseCount >= 60
+            inboxNextCursor = baseCount >= 60 ? String(baseCount) : nil
+        }
+    }
+
+    private func loadInboxPage(cursor: String?, append: Bool) async {
+        guard !inboxLoadingMore else { return }
+        inboxLoadingMore = true
+        defer { inboxLoadingMore = false }
+        var args: [String: JSONValue] = ["kind": .string("inbox"), "limit": .number(30)]
+        if let cursor, !cursor.isEmpty { args["cursor"] = .string(cursor) }
+        let reply = await store.assistantOpData("assistant_list_page", args: args)
+        guard reply.ok, let obj = reply.data?.object else { return }
+        let rows = (obj["items"]?.array ?? []).compactMap(AssistantInboxItem.from)
+        if append {
+            var seen = Set(extraInboxItems.map(\.id))
+            extraInboxItems.append(contentsOf: rows.filter { seen.insert($0.id).inserted })
+        } else {
+            extraInboxItems = rows
+        }
+        inboxTotal = obj["total"]?.int
+        inboxHasMore = obj["hasMore"]?.bool ?? false
+        inboxNextCursor = obj["nextCursor"]?.string?.nilIfEmpty
     }
 
     private var notices: some View {
@@ -166,6 +217,22 @@ struct InboxHome: View {
                             .listRowBackground(JieboColor.white)
                         }
                     } header: { JieboListHeader(group) }
+                }
+            }
+            if showHistory && (inboxHasMore || inboxLoadingMore) {
+                Section {
+                    PaginationLoadMoreRow(
+                        hasMore: inboxHasMore,
+                        loading: inboxLoadingMore,
+                        loadedCount: items.count,
+                        totalCount: inboxTotal,
+                        label: "加载更早收件箱",
+                        onLoadMore: {
+                            let cursor = inboxNextCursor ?? String(items.count)
+                            Task { await loadInboxPage(cursor: cursor, append: true) }
+                        }
+                    )
+                    .listRowBackground(JieboColor.white)
                 }
             }
         }
