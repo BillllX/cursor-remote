@@ -268,6 +268,7 @@ extension ChatStore {
         cwd = ""
         workspaceRoot = ""
         workspaces = []
+        workspaceCreationsWithoutChat.removeAll()
         workspacesLoaded = false
         workspacesSyncInFlight = false
         workspacesInFlightGeneration = nil

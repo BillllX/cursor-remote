@@ -1,30 +1,6 @@
 import SwiftUI
 import UIKit
 
-/// 旧版 iPad 双主页存储值。保留它只为平滑迁移和兼容旧设置入口。
-enum HomeMode: String, CaseIterable, Identifiable {
-    case workbench
-    case chat
-
-    static let storageKey = "jiebo.homeMode"
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .workbench: return "工作台"
-        case .chat: return "聊天"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .workbench: return "rectangle.3.group"
-        case .chat: return "bubble.left.and.bubble.right"
-        }
-    }
-}
-
 private struct HomeActiveKey: EnvironmentKey {
     static let defaultValue = true
 }
@@ -37,7 +13,7 @@ extension EnvironmentValues {
     }
 }
 
-/// 小驳为默认首页，工作台由侧边栏进入；消息暂时隐藏。
+/// 小驳为默认首页，工作区详情提供工作台入口。
 struct HomeShell: View {
     @Environment(ChatStore.self) private var store
     @Environment(ImStore.self) private var im
@@ -174,8 +150,6 @@ struct HomeShell: View {
             // Preview 属于当前业务域；切域时关闭，避免工作台、小驳、消息互相带入旧页签。
             sceneSession?.dismissPreview()
             padRouter.restoreAfterPreview()
-            // 只保存以后新场景的默认值；现有场景不观察它，因此不会被其它窗口带着切域。
-            UserDefaults.standard.set(next.rawValue, forKey: PadDomain.storageKey)
             im.setHomeVisible(next == .messages)
             syncWorkbenchViewing(domain: next)
         }
@@ -300,12 +274,6 @@ struct HomeShell: View {
 
     private func bootstrapPadRouter() {
         guard !padRouter.bootstrapped else { return }
-        let saved = UserDefaults.standard.string(forKey: PadDomain.storageKey)?.nilIfEmpty
-        let legacy = UserDefaults.standard.string(forKey: HomeMode.storageKey)
-        let restored = PadRouter.migratedDomain(padRawValue: saved, legacyRawValue: legacy)
-        let migrated: PadDomain = restored == .messages ? .assistant : restored
-        padRouter.domain = migrated
-        UserDefaults.standard.set(migrated.rawValue, forKey: PadDomain.storageKey)
         padRouter.bootstrapped = true
         if sceneSession?.workbenchChatId == nil || store.isWorkspaceChat(sceneSession?.workbenchChatId ?? "") == false {
             if let id = store.preferredWorkspaceChatId() {
@@ -316,7 +284,7 @@ struct HomeShell: View {
         }
         // iPad 不启用 iPhone 的 activeId 限制；小驳始终显式绑定 assistantChatId。
         store.assistantOnly = false
-        im.setHomeVisible(migrated == .messages)
+        im.setHomeVisible(false)
     }
 
     private func dispatchWidgetDeepLink() {
@@ -475,8 +443,8 @@ struct FirstUseHint: View {
         if !dismissed {
             HStack(alignment: .center, spacing: 12) {
                 Text(UIDevice.current.userInterfaceIdiom == .phone
-                     ? "右上角查看收件箱和日程，侧边栏里找文件、设置与工作台。"
-                     : "侧边栏切换栏目，底部进入设置与工作台。")
+                     ? "右上角查看收件箱。打开侧边栏，选「工作区」查看项目。"
+                     : "侧边栏可以切换栏目。在「工作区」里选择项目，可打开它的工作台。")
                     .font(JieboFont.text(.footnote))
                     .foregroundStyle(JieboColor.ink)
                     .fixedSize(horizontal: false, vertical: true)

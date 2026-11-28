@@ -14,6 +14,7 @@ struct PadAssistantShell: View {
     @State private var containerWidth: CGFloat = 0
     @State private var settingsOpen = false
     @State private var skillsOpen = false
+    @State private var workspacesOpen = false
     @State private var projectionCache = PadAssistantProjectionCache()
 
     private var projection: PadAssistantProjection {
@@ -97,10 +98,10 @@ struct PadAssistantShell: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(JieboColor.ink)
                     Button {
-                        router.openDomain(.workbench)
+                        workspacesOpen = true
                     } label: {
                         HStack {
-                            Label("工作台", systemImage: "rectangle.3.group")
+                            Label("工作区", systemImage: "folder")
                             Spacer()
                             if store.workspaceUnreadCount > 0 {
                                 PendingBadge(count: store.workspaceUnreadCount)
@@ -119,6 +120,9 @@ struct PadAssistantShell: View {
                 .overlay(alignment: .top) { Divider() }
             }
             .sheet(isPresented: $skillsOpen) { SkillsWorkspaceSheet() }
+            .sheet(isPresented: $workspacesOpen) {
+                WorkspacePickerSheet(showWorkbench: { router.openDomain(.workbench) })
+            }
             .sheet(isPresented: $settingsOpen) {
                 NavigationStack {
                     PhoneSettingsScreen()

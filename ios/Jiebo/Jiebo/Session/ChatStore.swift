@@ -328,6 +328,7 @@ final class ChatStore {
     var fileBrowserPane: FileBrowserPane = .files
     var creatingWorkspace = false
     var newWorkspaceName = ""
+    var workspaceCreationsWithoutChat: Set<String> = []
     var model = ModelCatalog.defaultModel
     var models: [String] = [ModelCatalog.defaultModel]
     var mode: AgentMode = .agent

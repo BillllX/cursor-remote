@@ -240,7 +240,7 @@ struct PadInboxExperience: View {
         var approvalByChat: [String: AssistantApproval] = [:]
         for approval in matchedApprovals {
             if let delegationId = approval.delegationId { approvalByDelegation[delegationId] = approval }
-            if let chatId = approval.chatId { approvalByChat[chatId] = approval }
+            if let chatId = approval.chatId.nilIfEmpty { approvalByChat[chatId] = approval }
         }
         let matchedInbox = (store.assistantState?.inbox ?? [])
             .filter { item in

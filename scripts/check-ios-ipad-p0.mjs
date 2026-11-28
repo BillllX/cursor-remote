@@ -24,7 +24,7 @@ function count(source, pattern) {
   return source.match(pattern)?.length ?? 0;
 }
 
-// PadRouter 状态与旧 homeMode 迁移。
+// PadRouter 状态与新窗口默认入口。
 for (const needle of [
   "@Observable",
   "@MainActor",
@@ -47,9 +47,14 @@ for (const needle of [
 if (router.includes("case tasks")) {
   throw new Error("PadRouter 状态契约：不得保留已拆分的旧 case tasks");
 }
-requireSource(router, "case HomeMode.workbench.rawValue: return .workbench", "旧工作台迁移");
-requireSource(router, "case HomeMode.chat.rawValue: return .messages", "旧聊天迁移");
-requireSource(router, "default: return .assistant", "新安装默认域");
+requireSource(router, "var domain: PadDomain = .assistant", "新窗口默认进入小驳");
+requireSource(assistant, 'Label("工作区", systemImage: "folder")', "小驳侧栏工作区入口");
+requireSource(assistant, "WorkspacePickerSheet(showWorkbench:", "从工作区选择器打开工作台");
+const phoneAssistant = read("ios/Jiebo/Jiebo/Views/Phone/AssistantHome.swift");
+requireSource(phoneAssistant, 'Label("工作区", systemImage: "folder")', "iPhone 侧栏工作区入口");
+requireSource(phoneAssistant, "WorkspacePickerSheet(showWorkbench:", "iPhone 从工作区选择器打开工作台");
+const workspacePicker = read("ios/Jiebo/Jiebo/Views/WorkspacePickerSheet.swift");
+requireSource(workspacePicker, 'Label("打开工作台", systemImage: "rectangle.3.group")', "项目详情工作台入口");
 
 // 推送必须覆盖三类域与五种助理通知。
 for (const kind of ["approval", "delegation", "inbox", "reminder", "brief"]) {
@@ -99,16 +104,15 @@ if (captureDrain.includes("store.openAssistantChat()")) {
   throw new Error("外部捕获不得绕过 PadRouter 改写工作台 activeId");
 }
 
-// HomeMode 仅作迁移/默认值；活动窗口使用直接环境动作，不观察或广播存储变化。
+// 工作台只在当前窗口打开，新窗口从小驳开始。
 if (
-  home.includes("@AppStorage(PadDomain.storageKey)") ||
+  home.includes("PadDomain.storageKey") ||
   home.includes(".onChange(of: mode)") ||
   home.includes("legacyHomeModePicked")
 ) {
   throw new Error("PadRouter 不得被全局 AppStorage/onChange/广播实时驱动");
 }
 requireSource(home, ".environment(\\.openPadDomain", "当前场景兼容入口");
-requireSource(home, "UserDefaults.standard.set(next.rawValue, forKey: PadDomain.storageKey)", "新场景默认偏好");
 
 // 全局语音只由唯一前台 scene 接收，Composer 只消费带 scene token 的内部投递。
 requireSource(presenter, "let active = candidates.filter(\\.active)", "前台 scene 选举");
@@ -167,7 +171,7 @@ if (sharePhase.includes("PADP001") || sharePhase.includes("PADP002")) {
   throw new Error("PadRouter / PadAssistantShell 不得进入 Share target");
 }
 
-console.log("iPad P0 静态契约：路由、迁移、推送、pbx、单 Composer 与 iPhone 路径通过");
+console.log("iPad P0 静态契约：路由、工作区入口、推送、pbx、单 Composer 与 iPhone 路径通过");
 
 const phoneHome = read("ios/Jiebo/Jiebo/Views/Phone/AssistantHome.swift");
 requireSource(phoneHome, "switchPhoneSpace?(.workspace)", "工作台使用统一空间入口");

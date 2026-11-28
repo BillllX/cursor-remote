@@ -134,13 +134,20 @@ extension ChatStore {
         scheduleSync()
     }
 
-    func createWorkspace() {
+    func createWorkspace(openChat: Bool = true) {
         let name = newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
+        let workspaceName = name.split { $0 == "/" || $0 == "\\" }.joined(separator: "/")
+        if openChat {
+            workspaceCreationsWithoutChat.remove(workspaceName)
+        } else {
+            workspaceCreationsWithoutChat.insert(workspaceName)
+        }
         if !client.isOpen {
+            let result = openChat ? "建好后直接进去。" : "建好后会出现在工作区列表。"
             flash(linkState == .offline
-                ? "已断开。新建文件夹会在连上后发出，建好后直接进去。"
-                : "正在连接。新建文件夹会在连上后发出，建好后直接进去。")
+                ? "已断开。新建文件夹会在连上后发出，\(result)"
+                : "正在连接。新建文件夹会在连上后发出，\(result)")
         }
         send(.createWorkspace(name: name))
         newWorkspaceName = ""

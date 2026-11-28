@@ -1,9 +1,9 @@
 import SwiftUI
 import UIKit
 
-/// 切换文件夹（iPad 侧栏与手机抽屉共用）。由 store.workspaceSheetOpen 驱动，系统表单样式：
-/// 当前项打勾，新建走右上角 + 和 alert，不夹带主题、退出这类账号操作。
+/// 从小驳浏览工作区，或在工作台里直接切换文件夹。
 struct WorkspacePickerSheet: View {
+    var showWorkbench: (() -> Void)? = nil
     @Environment(ChatStore.self) private var store
     @Environment(PhoneRouter.self) private var phoneRouter: PhoneRouter?
     @Environment(\.dismiss) private var dismiss
@@ -15,6 +15,9 @@ struct WorkspacePickerSheet: View {
     @State private var renameDraft = ""
     @State private var deleting: WorkspaceItem?
     @State private var clearing: WorkspaceItem?
+    @State private var selectedWorkspace: WorkspaceItem?
+
+    private var browsingWorkspaces: Bool { showWorkbench != nil }
 
     var body: some View {
         @Bindable var store = store
@@ -25,7 +28,7 @@ struct WorkspacePickerSheet: View {
         let countsUnder = snapshot.countsUnderByNormPath
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let currentPath = store.workspacePath(anchoredTo: sceneSession?.workbenchChatId)
-        let currentNormPath = normPath(currentPath)
+        let currentNormPath = browsingWorkspaces ? "" : normPath(currentPath)
         let items: [WorkspaceItem] = needle.isEmpty ? [] : all.filter {
             $0.name.range(of: needle, options: .caseInsensitive) != nil
                 || $0.path.range(of: needle, options: .caseInsensitive) != nil
@@ -74,7 +77,7 @@ struct WorkspacePickerSheet: View {
                                 .font(JieboFont.text(.body))
                                 .foregroundStyle(JieboColor.dim)
                         } else {
-                            Text("还没有子文件夹，点右上角 + 新建一个。")
+                            Text(browsingWorkspaces ? "还没有工作区，点右上角 + 新建一个。" : "还没有子文件夹，点右上角 + 新建一个。")
                                 .font(JieboFont.text(.body))
                                 .foregroundStyle(JieboColor.dim)
                         }
@@ -82,7 +85,7 @@ struct WorkspacePickerSheet: View {
                     .listRowBackground(JieboColor.white)
                 } else if !needle.isEmpty, items.isEmpty {
                     Section {
-                        Text("没有匹配的文件夹")
+                        Text(browsingWorkspaces ? "没有匹配的工作区" : "没有匹配的文件夹")
                             .font(JieboFont.text(.body))
                             .foregroundStyle(JieboColor.dim)
                     }
@@ -132,9 +135,11 @@ struct WorkspacePickerSheet: View {
                                 )
                             }
                         } header: {
-                            JieboListHeader("其他文件夹")
+                            JieboListHeader(browsingWorkspaces ? "其他工作区" : "其他文件夹")
                         } footer: {
-                            Text("切过去会打开那里最近的对话，没有就新建一个。长按或左滑可以重命名、清空对话、删除。")
+                            if !browsingWorkspaces {
+                                Text("切过去会打开那里最近的对话，没有就新建一个。长按或左滑可以重命名、清空对话、删除。")
+                            }
                         }
                         .listRowBackground(JieboColor.white)
                     }
@@ -162,16 +167,25 @@ struct WorkspacePickerSheet: View {
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(JieboColor.paper)
-            .navigationTitle("切换文件夹")
+            .navigationTitle(browsingWorkspaces ? "工作区" : "切换文件夹")
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(item: $selectedWorkspace) { item in
+                workspaceDetail(item)
+            }
+            .task {
+                if browsingWorkspaces { store.requestWorkspaces() }
+            }
+            .onChange(of: store.gatewayReady) { _, ready in
+                if browsingWorkspaces && ready { store.requestWorkspaces() }
+            }
             .sheet(item: $shareTarget) { item in ShareWorkspaceSheet(name: item.name, path: item.path).environment(store) }
             .task { if store.gatewayFeatures.contains("workspace_share_v1") { await store.workspaceSharing.refresh() } }
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: all.count > 6 ? "搜索 \(all.count) 个文件夹" : "搜索文件夹")
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: browsingWorkspaces ? "搜索工作区" : all.count > 6 ? "搜索 \(all.count) 个文件夹" : "搜索文件夹")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
                 }
-                if store.gatewayFeatures.contains("workspace_share_v1"),
+                if !browsingWorkspaces, store.gatewayFeatures.contains("workspace_share_v1"),
                    let item = all.first(where: { sameCwd($0.path, currentPath) && store.isTopLevelWorkspace($0.path) }) {
                     ToolbarItem(placement: .primaryAction) {
                         Button { shareTarget = item } label: {
@@ -187,20 +201,22 @@ struct WorkspacePickerSheet: View {
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .accessibilityLabel("新建文件夹")
+                    .accessibilityLabel(browsingWorkspaces ? "新建工作区" : "新建文件夹")
                 }
             }
-            .alert("新建文件夹", isPresented: $store.creatingWorkspace) {
+            .alert(browsingWorkspaces ? "新建工作区" : "新建文件夹", isPresented: $store.creatingWorkspace) {
                 TextField("名称", text: $store.newWorkspaceName)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 Button("取消", role: .cancel) { store.newWorkspaceName = "" }
-                Button("创建", action: store.createWorkspace)
+                Button("创建") { store.createWorkspace(openChat: !browsingWorkspaces) }
                     .disabled(store.newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             } message: {
-                Text(store.connected
-                    ? "会在你的根目录下建一个同名文件夹，建好后直接进去。"
-                    : "还没连上。会在连上后建到根目录下，建好后直接进去。")
+                if !browsingWorkspaces {
+                    Text(store.connected
+                        ? "会在你的根目录下建一个同名文件夹，建好后直接进去。"
+                        : "还没连上。会在连上后建到根目录下，建好后直接进去。")
+                }
             }
             .alert(
                 "重命名文件夹",
@@ -251,13 +267,40 @@ struct WorkspacePickerSheet: View {
                     : "还没连上。「\(item.name)」的删除会在连上后发出。空目录会删掉；里面有文件的只从列表里隐藏，文件不动。")
             }
             .onChange(of: store.activeId) { _, nextId in
-                if store.isWorkspaceChat(nextId) {
+                if !browsingWorkspaces, store.isWorkspaceChat(nextId) {
                     sceneSession?.workbenchChatId = nextId
                 }
             }
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+    }
+
+    private func selectWorkspace(_ item: WorkspaceItem) {
+        if browsingWorkspaces {
+            selectedWorkspace = item
+        } else {
+            openWorkspace(item)
+        }
+    }
+
+    private func workspaceDetail(_ item: WorkspaceItem) -> some View {
+        List {
+            if store.subWorkspaces.contains(where: { $0.path == item.path }) {
+                LabeledContent("目录", value: item.path)
+                Button {
+                    store.assistantOnly = false
+                    openWorkspace(item)
+                    showWorkbench?()
+                } label: {
+                    Label("打开工作台", systemImage: "rectangle.3.group")
+                }
+            } else {
+                Text("此工作区已移动或移除，请返回列表重新选择。")
+            }
+        }
+        .navigationTitle(item.name)
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private func openWorkspace(_ item: WorkspaceItem) {
@@ -284,7 +327,7 @@ struct WorkspacePickerSheet: View {
     private func row(_ item: WorkspaceItem, showPath: Bool, stat: WorkspaceStat?, current: Bool, chatCount: Int) -> some View {
         let manage = store.isTopLevelWorkspace(item.path)
         return Button {
-            openWorkspace(item)
+            selectWorkspace(item)
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "folder")
@@ -324,7 +367,7 @@ struct WorkspacePickerSheet: View {
             current ? "当前文件夹" : nil,
             detailLine(stat)
         ].compactMap { $0 }.joined(separator: "，"))
-        .accessibilityHint("切换到这个文件夹")
+        .accessibilityHint(browsingWorkspaces ? "查看工作区详情" : "切换到这个文件夹")
         .accessibilityAddTraits(current ? [.isButton, .isSelected] : .isButton)
         .contextMenu {
             if manage && store.gatewayFeatures.contains("workspace_share_v1") {
@@ -357,7 +400,7 @@ struct WorkspacePickerSheet: View {
         .contextMenu {
             Section {
                 Button {
-                    openWorkspace(item)
+                    selectWorkspace(item)
                 } label: {
                     Label("打开", systemImage: "folder")
                 }

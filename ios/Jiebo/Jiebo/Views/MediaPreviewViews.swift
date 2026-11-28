@@ -684,7 +684,7 @@ struct SandboxWebView: UIViewRepresentable {
 
         /// WebContent 进程崩溃（重页面 OOM）不走 didFail——不上报就是静默白屏
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-            loadedKey = ""
+            loadedHTML = nil
             onFail?("渲染进程崩溃了")
         }
 
@@ -693,9 +693,9 @@ struct SandboxWebView: UIViewRepresentable {
             // stopLoading 的 cancelled 与策略拦截（WebKitErrorDomain 102）都是沙箱在工作，不算渲染失败
             if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return }
             if ns.domain == "WebKitErrorDomain" && ns.code == 102 { return }
-            // 首屏已 commit 后的失败不清 key 不上报（被拒导航的伴随错误不打断已渲染页面）
+            // 首屏已 commit 后的失败不清缓存、不上报（被拒导航的伴随错误不打断已渲染页面）
             guard !committed else { return }
-            loadedKey = "" // 真失败才清 key，下次 updateUIView 可重试
+            loadedHTML = nil // 真失败才清缓存，下次 updateUIView 可重试
             // 这是本机页面渲染，不写成断线，也不把系统句子接上去。
             onFail?("点重试，或查看源码。")
         }
@@ -711,7 +711,7 @@ struct SandboxPreviewView: View {
     let source: String
     @State private var loadError: String?
     @State private var showSource = false
-    /// 重试计数：变化迫使 SandboxWebView 的 loadedKey 失配重新加载
+    /// 重试计数：变化迫使 SandboxWebView 重新加载
     @State private var retryCount = 0
 
     var body: some View {
@@ -744,7 +744,7 @@ struct SandboxPreviewView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 // 错误分支会销毁 WebView，重试走 makeUIView 全新加载；
-                // retryCount 拼注释只是防御性换 key（防 loadedKey 残留竞态）
+                // 拼接注释以确保重试时 HTML 内容发生变化。
                 SandboxWebView(html: retryCount == 0 ? html : html + "<!-- retry \(retryCount) -->") { message in
                     loadError = message
                 }

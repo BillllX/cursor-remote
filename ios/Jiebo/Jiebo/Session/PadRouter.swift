@@ -48,8 +48,6 @@ enum PadDomain: String, CaseIterable, Identifiable {
     case workbench
     case messages
 
-    static let storageKey = "jiebo.padDomain"
-
     var id: String { rawValue }
 
     var title: String {
@@ -385,18 +383,6 @@ final class PadRouter {
     #endif
     private(set) var sectionHistory: [PadAssistantSection] = [.today]
     private(set) var sectionHistoryIndex = 0
-
-    /// 新键优先；第一次升级时把旧双主页平滑映射。全新安装默认进入小驳。
-    static func migratedDomain(padRawValue: String?, legacyRawValue: String?) -> PadDomain {
-        if let padRawValue, let saved = PadDomain(rawValue: padRawValue) {
-            return saved
-        }
-        switch legacyRawValue {
-        case HomeMode.workbench.rawValue: return .workbench
-        case HomeMode.chat.rawValue: return .messages
-        default: return .assistant
-        }
-    }
 
     /// 推送 payload 到 iPad 业务域的纯映射，供壳消费前后共同使用。
     static func destination(for target: PushTarget) -> PadPushDestination {

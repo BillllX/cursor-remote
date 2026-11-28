@@ -899,7 +899,7 @@ private final class ThumbWebJob: NSObject, WKNavigationDelegate, WKScriptMessage
         finish(nil)
     }
 
-    private static var hostWindow: UIWindow? {
+    fileprivate static var hostWindow: UIWindow? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let windows = scenes.flatMap { $0.windows }
         return windows.first(where: { $0.isKeyWindow }) ?? windows.first

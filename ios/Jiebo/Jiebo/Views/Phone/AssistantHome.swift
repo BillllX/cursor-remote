@@ -10,6 +10,7 @@ struct AssistantHome: View {
     @State private var delayedSyncChat: String?
     @State private var skillsOpen = false
     @State private var modelPickerOpen = false
+    @State private var workspacesOpen = false
     @Environment(PhoneRouter.self) private var router
     @Environment(\.switchPhoneSpace) private var switchPhoneSpace
 
@@ -47,6 +48,9 @@ struct AssistantHome: View {
             )
         }
         .sheet(isPresented: $skillsOpen) { SkillsWorkspaceSheet() }
+        .sheet(isPresented: $workspacesOpen) {
+            WorkspacePickerSheet(showWorkbench: { switchPhoneSpace?(.workspace) })
+        }
         .sheet(isPresented: $modelPickerOpen) {
             if let chatId = store.assistantChatId {
                 AssistantModelPicker(models: store.models, selected: store.model(for: chatId)) {
@@ -64,7 +68,7 @@ struct AssistantHome: View {
                     closeSidebar: closeSidebar,
                     openSkills: { skillsOpen = true },
                     openModelPicker: { modelPickerOpen = true },
-                    openWorkspace: { switchPhoneSpace?(.workspace) }
+                    openWorkspaces: { workspacesOpen = true }
                 )
             }
         }
@@ -277,7 +281,7 @@ private struct AssistantHomeSidebar: View {
     let closeSidebar: (@escaping () -> Void) -> Void
     let openSkills: () -> Void
     let openModelPicker: () -> Void
-    let openWorkspace: () -> Void
+    let openWorkspaces: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -317,10 +321,10 @@ private struct AssistantHomeSidebar: View {
             sidebarRoute("设置", symbol: NavigationIconId.account.symbol, route: .settings)
                 .padding(.horizontal, 16)
             Button {
-                closeSidebar(openWorkspace)
+                closeSidebar(openWorkspaces)
             } label: {
                 HStack {
-                    Label("工作台", systemImage: "rectangle.3.group")
+                    Label("工作区", systemImage: "folder")
                     Spacer()
                     if store.workspaceUnreadCount > 0 {
                         PendingBadge(count: store.workspaceUnreadCount)

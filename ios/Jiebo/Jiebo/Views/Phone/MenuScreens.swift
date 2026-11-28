@@ -510,7 +510,7 @@ struct PhoneSettingsScreen: View {
                     }
                     .buttonStyle(.plain)
                     .listRowBackground(JieboColor.white)
-                    .accessibilityHint("再显示小驳、待处理和工作台的说明")
+                    .accessibilityHint("再显示小驳、收件箱和工作区的说明")
                 }
 
                 settingsRow(

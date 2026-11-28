@@ -328,7 +328,9 @@ extension ChatStore {
                 workspaces.insert(WorkspaceItem(path: path, name: name), at: index)
             }
             updateCachedWorkspaces(root: workspaceRoot, items: workspaces)
-            startChat(in: path)
+            if workspaceCreationsWithoutChat.remove(name) == nil {
+                startChat(in: path)
+            }
         case .workspaceRenamed(let from, let newPath, let name):
             // 网关已把会话的目录改到新路径；本地照改（不标脏，不用再传回去），再对账拿新的版本号
             let fromKey = normPath(from)

@@ -41,7 +41,7 @@ struct InboxHome: View {
         if !showHistory {
             for approval in sortedApprovals {
                 if let delegationId = approval.delegationId { approvalDelegationIds.insert(delegationId) }
-                if let chatId = approval.chatId { approvalChatIds.insert(chatId) }
+                if let chatId = approval.chatId.nilIfEmpty { approvalChatIds.insert(chatId) }
             }
         }
         let sortedItems = (state?.inbox ?? [])
