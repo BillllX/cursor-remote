@@ -197,14 +197,21 @@ enum AppBootstrapCache {
         guard workspaces.count == workspaceRows.count else { return .corrupt }
 
         var indexes: [String: AppBootstrapSnapshot.FileIndex] = [:]
+        indexes.reserveCapacity(fileRows.count)
         for (chatId, value) in fileRows {
-            guard !chatId.isEmpty, let row = value.object, let paths = row["paths"]?.array?.compactMap(\.string),
-                  paths.count == row["paths"]?.array?.count
+            guard !chatId.isEmpty,
+                  let row = value.object,
+                  let rawPaths = row["paths"]?.array
             else { return .corrupt }
+            let paths = rawPaths.compactMap(\.string)
+            guard paths.count == rawPaths.count else { return .corrupt }
             var status: [String: String] = [:]
-            for (path, letter) in row["status"]?.object ?? [:] {
-                guard let value = letter.string else { return .corrupt }
-                status[path] = value
+            if let statusObj = row["status"]?.object {
+                status.reserveCapacity(statusObj.count)
+                for (path, letter) in statusObj {
+                    guard let value = letter.string else { return .corrupt }
+                    status[path] = value
+                }
             }
             indexes[chatId] = .init(
                 paths: paths,

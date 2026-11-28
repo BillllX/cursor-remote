@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import WidgetKit
 
 /// 把业务状态收敛为最小 Widget 快照；不接触钥匙串、网络客户端或消息正文。
@@ -11,8 +12,26 @@ final class WidgetSnapshotBridge {
 
     private let fileQueue = DispatchQueue(label: "ai.jiebo.widget-snapshot", qos: .utility)
     private weak var store: ChatStore?
+    private var scheduledTask: Task<Void, Never>?
+    private var lastUnlocked: Bool?
+    private var backgroundObserver: NSObjectProtocol?
+    /// 只在 fileQueue 上访问：记录最近一次已落盘的指纹、写入时间与共享 UserDefaults，避免高频刷新反复读盘与建 suite IPC。
+    nonisolated(unsafe) private var lastFingerprint: String?
+    nonisolated(unsafe) private var lastWrittenAt: Date?
+    nonisolated(unsafe) private var cachedDefaults: UserDefaults?
 
-    private init() {}
+    private init() {
+        // App 即将切后台时立刻冲刷挂起的防抖快照，避免 250ms 窗口内被挂起导致 Widget 停留在旧状态
+        backgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.flushPendingIfNeeded()
+            }
+        }
+    }
 
     func attach(_ store: ChatStore) {
         guard self.store !== store else { return }
@@ -23,6 +42,13 @@ final class WidgetSnapshotBridge {
     func refreshAttachedStore() {
         guard let store else { return }
         refresh(from: store)
+    }
+
+    private func flushPendingIfNeeded() {
+        guard scheduledTask != nil, let store else { return }
+        scheduledTask?.cancel()
+        scheduledTask = nil
+        flushRefresh(from: store)
     }
 
     private struct SnapshotInput {
@@ -36,6 +62,24 @@ final class WidgetSnapshotBridge {
     }
 
     func refresh(from store: ChatStore) {
+        let shouldFlushImmediately = lastUnlocked == nil || lastUnlocked != store.unlocked
+        lastUnlocked = store.unlocked
+        scheduledTask?.cancel()
+        if shouldFlushImmediately {
+            scheduledTask = nil
+            flushRefresh(from: store)
+            return
+        }
+        // 合并冷启动/重连瞬间的连续状态刷新，避免 1 秒内多次全量解析 todos 与跨进程写 Widget 快照
+        scheduledTask = Task { @MainActor [weak self, weak store] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard let self, let store, !Task.isCancelled else { return }
+            self.scheduledTask = nil
+            self.flushRefresh(from: store)
+        }
+    }
+
+    private func flushRefresh(from store: ChatStore) {
         let input = SnapshotInput(
             unlocked: store.unlocked,
             connected: store.connected,
@@ -49,18 +93,36 @@ final class WidgetSnapshotBridge {
         let widgetKind = Self.widgetKind
         let privacyModeKey = Self.privacyModeKey
         // 串行后台队列构造快照并写盘，避免主线程触发 TodoDue 解析与 App Group UserDefaults 跨进程 IPC。
-        fileQueue.async {
-            let snapshot = Self.buildSnapshot(from: input, appGroup: appGroup, privacyModeKey: privacyModeKey)
+        fileQueue.async { [weak self] in
+            guard let self else { return }
+            if !input.unlocked {
+                self.lastFingerprint = nil
+                self.lastWrittenAt = nil
+            }
+            let defaults = self.cachedDefaults ?? {
+                let created = UserDefaults(suiteName: appGroup)
+                self.cachedDefaults = created
+                return created
+            }()
+            let snapshot = Self.buildSnapshot(from: input, defaults: defaults, privacyModeKey: privacyModeKey)
             guard let container = FileManager.default.containerURL(
                 forSecurityApplicationGroupIdentifier: appGroup
             ) else { return }
 
-            let previous = WidgetSnapshotStore.load(from: container)
-            let stillFresh = previous.map { Date().timeIntervalSince($0.updatedAt) < 15 * 60 } ?? false
-            guard previous?.contentFingerprint != snapshot.contentFingerprint || !stillFresh else { return }
+            let now = Date()
+            if self.lastFingerprint == nil {
+                if let previous = WidgetSnapshotStore.load(from: container) {
+                    self.lastFingerprint = previous.contentFingerprint
+                    self.lastWrittenAt = previous.updatedAt
+                }
+            }
+            let stillFresh = self.lastWrittenAt.map { now.timeIntervalSince($0) < 15 * 60 } ?? false
+            guard self.lastFingerprint != snapshot.contentFingerprint || !stillFresh else { return }
 
             do {
                 try WidgetSnapshotStore.save(snapshot, to: container)
+                self.lastFingerprint = snapshot.contentFingerprint
+                self.lastWrittenAt = snapshot.updatedAt
                 WidgetCenter.shared.reloadTimelines(ofKind: widgetKind)
             } catch {
                 print("[Widget] 快照写入失败：\(error.localizedDescription)")
@@ -70,7 +132,7 @@ final class WidgetSnapshotBridge {
 
     nonisolated private static func buildSnapshot(
         from input: SnapshotInput,
-        appGroup: String,
+        defaults: UserDefaults?,
         privacyModeKey: String
     ) -> WidgetSnapshot {
         let now = input.now
@@ -114,7 +176,6 @@ final class WidgetSnapshotBridge {
             highlight = nil
         }
 
-        let defaults = UserDefaults(suiteName: appGroup)
         return WidgetSnapshot(
             loginState: .loggedIn,
             assistantStatus: status,

@@ -29,6 +29,9 @@ enum ChatCache {
     static let segmentSize = 100
 
     private static let queue = DispatchQueue(label: "ai.jiebo.chat-cache", qos: .utility)
+    /// 只在 queue 上读写：记录每个租户上次全盘淘汰时间，避免短时间内连续写正文反复扫 60 个 manifest.json。
+    nonisolated(unsafe) private static var lastPruneAt: [String: Date] = [:]
+    private static let pruneInterval: TimeInterval = 30
 
     private struct Manifest: Codable {
         var v: Int
@@ -109,8 +112,12 @@ enum ChatCache {
     static func saveBody(tenant: String, chatId: String, rev: Int, turns: [Turn], serverSegs: [String]? = nil) {
         queue.async {
             let rows = turns.map { $0.json() }
-            writeBody(tenant: tenant, chatId: chatId, rev: rev, rows: rows, serverSegs: serverSegs)
-            prune(tenant: tenant, keep: chatId)
+            let createdDir = writeBody(tenant: tenant, chatId: chatId, rev: rev, rows: rows, serverSegs: serverSegs)
+            let now = Date()
+            if createdDir || lastPruneAt[tenant].map({ now.timeIntervalSince($0) >= pruneInterval }) ?? true {
+                lastPruneAt[tenant] = now
+                prune(tenant: tenant, keep: chatId)
+            }
         }
     }
 
@@ -151,7 +158,7 @@ enum ChatCache {
         }
     }
 
-    /// turns 是已经去掉正在生成的回合之后的纯值副本；Turn.json() 与写盘全在后台队列执行。
+    /// turns 是已经去掉正在生成的回合之后的纯值副本；先截断到 tailLimit 再在后台执行 Turn.json()，避免长会话白白序列化数百轮旧记录。
     static func saveTail(
         tenant: String,
         chatId: String,
@@ -159,8 +166,9 @@ enum ChatCache {
         chatRev: Int? = nil,
         nextFrom: Int? = nil
     ) {
+        let keptTurns = Array(turns.suffix(tailLimit))
         queue.async {
-            let rows = turns.map { $0.json() }
+            let rows = keptTurns.map { $0.json() }
             writeTail(tenant: tenant, chatId: chatId, rows: rows, chatRev: chatRev, nextFrom: nextFrom)
         }
     }
@@ -236,16 +244,18 @@ enum ChatCache {
     private static func pruneTails(_ dir: URL, keep: URL) {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
-        let extras = files.filter { $0.lastPathComponent.hasSuffix(".json") && $0.path != keep.path }
         guard files.count > tailFileLimit else { return }
-        let sorted = extras.sorted { lhs, rhs in
-            let left = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            let right = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            return left < right
+        // 预先一次性读取各文件修改时间，避免在 sort 比较器内 O(N log N) 次重复系统 stat 调用
+        var extras: [(file: URL, date: Date)] = []
+        extras.reserveCapacity(files.count)
+        for file in files where file.lastPathComponent.hasSuffix(".json") && file.path != keep.path {
+            let date = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            extras.append((file, date))
         }
+        extras.sort { $0.date < $1.date }
         let overflow = files.count - tailFileLimit
-        for file in sorted.prefix(overflow) {
-            try? fm.removeItem(at: file)
+        for entry in extras.prefix(overflow) {
+            try? fm.removeItem(at: entry.file)
         }
     }
 
@@ -297,6 +307,7 @@ enum ChatCache {
     /// 换账号/重置租户会话：清掉这个租户的全部缓存
     static func clear(tenant: String) {
         queue.async {
+            lastPruneAt.removeValue(forKey: tenant)
             guard let dir = tenantDir(tenant) else { return }
             try? FileManager.default.removeItem(at: dir)
             if let tails = tailDir(tenant) {
@@ -308,6 +319,7 @@ enum ChatCache {
     /// 退出登录：所有租户一起清
     static func clearAll() {
         queue.async {
+            lastPruneAt.removeAll()
             guard let root else { return }
             try? FileManager.default.removeItem(at: root)
             if let tails = tailRoot {
@@ -354,8 +366,18 @@ enum ChatCache {
 
     /// id 做目录名：只留字母数字和 -_，其余换成 _；改动过或太长的补一段原文哈希防撞名
     private static func safeName(_ raw: String) -> String {
-        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
-        let kept = String(raw.map { allowed.contains($0) ? $0 : "_" }.prefix(80))
+        var kept = String()
+        kept.reserveCapacity(min(raw.utf8.count, 80))
+        var count = 0
+        for ch in raw {
+            if count >= 80 { break }
+            if ch.isASCII, ch.isLetter || ch.isNumber || ch == "-" || ch == "_" {
+                kept.append(ch)
+            } else {
+                kept.append("_")
+            }
+            count += 1
+        }
         if kept == raw { return raw }
         return kept + "-" + fnv1a(Data(raw.utf8))
     }
@@ -410,14 +432,22 @@ enum ChatCache {
 
     private static func readRecentTurns(tenant: String, chatId: String, limit: Int) -> [Turn]? {
         guard limit > 0, let dir = bodyDir(tenant, chatId), var manifest = readManifest(dir), manifest.chatId == chatId else { return nil }
-        var turns: [Turn] = []
+        // 倒序收集各段，再一次性按正序合并，避免反复 insert(at: 0) 产生 O(N^2) 数组搬移
+        var chunks: [[Turn]] = []
+        var collected = 0
         for segment in manifest.segments.reversed() {
             guard let rows = readSegment(dir, segment) else {
                 try? FileManager.default.removeItem(at: dir)
                 return nil
             }
-            turns.insert(contentsOf: rows, at: 0)
-            if turns.count >= limit { break }
+            chunks.append(rows)
+            collected += rows.count
+            if collected >= limit { break }
+        }
+        var turns: [Turn] = []
+        turns.reserveCapacity(collected)
+        for chunk in chunks.reversed() {
+            turns.append(contentsOf: chunk)
         }
         let tail = Array(turns.suffix(limit))
         guard !tail.isEmpty, !Turn.hasDuplicateIds(tail) else {
@@ -481,13 +511,22 @@ enum ChatCache {
         return Body(rev: manifest.rev, turns: turns, serverSegs: manifest.serverSegs)
     }
 
-    private static func writeBody(tenant: String, chatId: String, rev: Int, rows: [JSONValue], serverSegs: [String]?) {
-        guard let dir = bodyDir(tenant, chatId) else { return }
+    @discardableResult
+    private static func writeBody(tenant: String, chatId: String, rev: Int, rows: [JSONValue], serverSegs: [String]?) -> Bool {
+        guard let dir = bodyDir(tenant, chatId) else { return false }
         let fm = FileManager.default
+        let isNewChat = !fm.fileExists(atPath: dir.appendingPathComponent("manifest.json").path)
         do {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
             let old = readManifest(dir)
+            // 容忍受损/旧版 manifest 含重复 file 名，避免 uniqueKeysWithValues 触发运行时 trap
+            let oldByFile = Dictionary(
+                (old?.segments ?? []).map { ($0.file, $0) },
+                uniquingKeysWith: { _, latest in latest }
+            )
             var segments: [Manifest.Segment] = []
+            segments.reserveCapacity((rows.count + segmentSize - 1) / segmentSize)
+            var keptFiles = Set<String>()
             var total = 0
             for (index, start) in stride(from: 0, to: rows.count, by: segmentSize).enumerated() {
                 let chunk = Array(rows[start ..< min(start + segmentSize, rows.count)])
@@ -495,16 +534,17 @@ enum ChatCache {
                 let hash = fnv1a(data)
                 let file = "seg-\(index).json"
                 let url = dir.appendingPathComponent(file)
-                let unchanged = old?.segments.contains(where: { $0.file == file && $0.hash == hash && $0.bytes == data.count }) == true
+                let unchanged = oldByFile[file].map { $0.hash == hash && $0.bytes == data.count } == true
                     && fm.fileExists(atPath: url.path)
                 if !unchanged {
                     try data.write(to: url, options: .atomic)
                 }
                 segments.append(Manifest.Segment(file: file, hash: hash, count: chunk.count, bytes: data.count))
+                keptFiles.insert(file)
                 total += data.count
             }
             // 段数变少（会话被截断）：删掉多出来的旧段
-            for prior in old?.segments ?? [] where !segments.contains(where: { $0.file == prior.file }) {
+            for prior in old?.segments ?? [] where !keptFiles.contains(prior.file) {
                 try? fm.removeItem(at: dir.appendingPathComponent(prior.file))
             }
             let manifest = Manifest(
@@ -520,8 +560,10 @@ enum ChatCache {
             )
             // 清单最后写：中途失败时旧清单的段哈希对不上新段，读的时候整条作废
             try JSONEncoder().encode(manifest).write(to: dir.appendingPathComponent("manifest.json"), options: .atomic)
+            return isNewChat
         } catch {
             try? fm.removeItem(at: dir)
+            return false
         }
     }
 
